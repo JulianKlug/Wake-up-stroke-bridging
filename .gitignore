@@ -1,3 +1,7 @@
+.claude/
+
+CLAUDE.md
+out/
 data/
 
 .DS_store
