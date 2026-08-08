@@ -1,0 +1,35 @@
+[project]
+name = "extended-bridging"
+version = "0.1.0"
+description = "IVT before thrombectomy vs thrombectomy alone in a late-window, CTP-selected 4-centre cohort"
+# Pinned to the pilot's interpreter so the two sets of outputs stay comparable.
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # spec §2 says `pandas>=2.2`; the `<3` is added for the reason §2 gives for the
+    # numpy bound. pandas 3.0 makes the `str` dtype the inference default (PDEP-14),
+    # which falsifies §4.1's premise that `CaseID` inference "yields mixed int/str"
+    # and changes read behaviour throughout. The pilot locked 2.3.3.
+    "pandas>=2.2,<3",
+    # The upper bound is not cosmetic. numpy 2.x changed scalar type promotion
+    # (NEP 50), which can move floating-point results at the last digits — enough
+    # to perturb a bootstrap percentile away from the pilot's.
+    "numpy>=1.26,<2.1",
+    "scipy>=1.13",
+    # Retained for unpenalised cross-checks in tests, not for any reported
+    # estimate. The Firth fit, the weighted proportional-odds fit and the
+    # augmented estimator are implemented directly, because no library on offer
+    # supports the observation weights the plan requires.
+    "statsmodels>=0.14.2",
+    "matplotlib>=3.9",
+    "openpyxl>=3.1",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+# No [build-system]: this is an analysis project, not a distributable package, so
+# uv treats it as a virtual project and `uv sync` installs dependencies without
+# trying to build anything.
+
+[tool.pytest.ini_options]
+testpaths = ["."]

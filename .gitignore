@@ -1,6 +1,7 @@
 .claude/
 
 CLAUDE.md
+pilots
 out/
 data/
 
@@ -9,3 +10,7 @@ data/
 .idea/
 
 .ipynb_checkpoints/
+
+.venv/
+__pycache__/
+.pytest_cache/
