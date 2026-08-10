@@ -22,6 +22,11 @@ dependencies = [
     "statsmodels>=0.14.2",
     "matplotlib>=3.9",
     "openpyxl>=3.1",
+    # Required by DataFrame.to_markdown(), which stage0_data_inventory.py calls in five places —
+    # without it that script raises ImportError and Stage 0's note cannot be regenerated. Stage 2's
+    # audit log deliberately does NOT use it: byte-identical reproduction is an acceptance criterion
+    # there, and a formatting library's padding and float repr are free to move between versions.
+    "tabulate>=0.9",
 ]
 
 [dependency-groups]

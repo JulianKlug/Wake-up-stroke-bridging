@@ -76,6 +76,8 @@ assertion. No silent passthrough.
 
 ## Stage 2 — Load and clean [§11]
 
+**Spec:** `specs/stage2_load_and_clean.md`.
+
 **Build.** Reader that treats `'N/A'` and empty strings as missing. All corrections content-driven —
 matched on values, never on row index — and each appended to an audit log carrying the affected case
 identifiers. Schema assertions that fail loudly on drift: row count, unique identifiers, treatment

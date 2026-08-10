@@ -247,7 +247,14 @@ FIXTURE_XLSX: Final[Path] = Path(__file__).resolve().parent / "tests" / "fixture
 
 N_RECORDS_EXPECTED: Final[int] = 126
 N_COLUMNS_EXPECTED: Final[int] = 42
-NA_VALUES: Final[tuple[str, ...]] = ("N/A", "")   # Stage 0 found no sentinels; this is a guard
+# Load-bearing, not a guard. The workbook holds the literal three-character string 'N/A' in
+# mRSscoreat90days (2 cells), TICI_2b_3 (3) and each of the six 24-hour NIHSS columns (1 each) — so
+# it is doing real work on the primary outcome and on a secondary one. The Stage 0 note reports
+# those cells as blanks because 'N/A' is already in pandas' default NA list, which is also why
+# `keep_default_na` must stay True: setting it False would leave 'N/A' as a string in an Int64
+# column and crash the read. The repair for that crash is to name the specific sentinel here, never
+# to widen this tuple blindly.
+NA_VALUES: Final[tuple[str, ...]] = ("N/A", "")
 
 # The column contract catches schema changes only. It catches nothing if the data owner returns a
 # corrected file with identical headers and two amended mRS values — and §10 records exactly two
@@ -402,6 +409,19 @@ POST_TIME_ZERO: Final[frozenset[str]] = frozenset(
 
 STRUCTURALLY_NON_APPLICABLE: Final[dict[str, str]] = {
     "onset_to_ivt_min": "control arm — no IVT was given, so the time does not exist [§11]",
+}
+
+# Absence that carries information rather than data loss. `contraindication_reason` is missing for 82
+# of 126 records, and that absence is exactly the bit [DECISION 1] reads: no reason was recorded,
+# which [§3] forbids reading as "no contraindication" and Stage 4 maps to `indeterminate`. Listing
+# those 82 beside genuine data loss misrepresents both. Stage 2 labels them; nothing imputes them.
+#
+# Disjoint from STRUCTURALLY_NON_APPLICABLE, which test_config.py asserts: Stage 2's missingness
+# table has one branch per constant, so an overlap would resolve by branch order rather than by
+# declaration — on the column that carries the [DECISION 1] bit.
+INFORMATIVE_ABSENCE: Final[dict[str, str]] = {
+    "contraindication_reason":
+        "no reason was recorded — the one bit [DECISION 1] reads [§3]",
 }
 
 # (low, high), inclusive; None as an upper bound means unbounded above. For Stage 2's assertions.

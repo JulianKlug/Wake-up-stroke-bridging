@@ -363,7 +363,7 @@ FIXTURE_XLSX = Path(__file__).resolve().parent / "tests" / "fixture_schema.xlsx"
 
 N_RECORDS_EXPECTED = 126
 N_COLUMNS_EXPECTED = 42
-NA_VALUES = ("N/A", "")     # roadmap Stage 2; Stage 0 found no sentinels, this is a guard
+NA_VALUES = ("N/A", "")     # roadmap Stage 2; load-bearing, not a guard — see below
 
 DATA_SHA256 = "54934fbb2ae22647a9c0a2cbaff7ac425ed8948bcaeabe36d69aca00df657371"
 ```
@@ -371,6 +371,16 @@ DATA_SHA256 = "54934fbb2ae22647a9c0a2cbaff7ac425ed8948bcaeabe36d69aca00df657371"
 **[REV] Paths were bare relative strings** (`data/…`, `../out/`) in the pre-review draft, which
 resolve against the working directory. Anchoring is not a style preference here: Stage 14 is a single
 entry point that a reader will plausibly invoke from the repository root.
+
+**[REV 2026-08-10] `NA_VALUES` is load-bearing, and this line's earlier comment — "Stage 0 found no
+sentinels, this is a guard" — was false.** `specs/stage2_load_and_clean.md` §4.2 read the workbook
+with `dtype=object, keep_default_na=False` and found the literal three-character string `N/A` in
+`mRSscoreat90days` (2 cells), `TICI_2b_3` (3) and each of the six 24-hour NIHSS columns (1 each). The
+Stage 0 note reports them as blanks because `'N/A'` is already in pandas' default NA list, and its
+"2 missing" for `mrs_90d` and "3 missing" for `tici_2b_3` *are* these strings. So this tuple is doing
+real work on the primary outcome. Two consequences carried into Stage 2: `keep_default_na` stays
+`True` and is passed explicitly, and §4.4's instruction stands — a conversion error is repaired by
+naming the specific sentinel, never by widening this tuple.
 
 **[REV] `DATA_SHA256`.** The Goal above says a change to the workbook must fail loudly in Stage 1.
 The column contract catches *schema* changes only. It catches nothing if the data owner returns a

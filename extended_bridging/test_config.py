@@ -36,8 +36,10 @@ MODULE_DIR = Path(config.__file__).resolve().parent
 # --- the fixture ------------------------------------------------------------------------------
 #
 # Two invented rows, no patient data. What makes the fixture worth committing is that it reproduces
-# the two structural hazards of the real workbook: three headers carry trailing whitespace, and the
-# final column is headerless, so a header-only read returns 41 columns while a full read returns 42.
+# the three structural hazards of the real workbook: three headers carry trailing whitespace; the
+# final column is headerless, so a header-only read returns 41 columns while a full read returns 42;
+# and one cell holds the literal three-character string 'N/A', which the workbook uses as a
+# missingness sentinel and NA_VALUES turns into <NA>.
 
 _HEADERLESS_PREFIX = "Unnamed: "
 
@@ -48,7 +50,10 @@ _FIXTURE_ROWS: list[dict[str, object]] = [
         "prestroke_mrs": 0, "wake_up": 1, "unwitnessed": 0, "nihss_baseline": 14,
         "ivt": 1, "onset_to_ivt_min": 180, "onset_to_groin_min": 250,
         "tmax6_ml": 88.0, "core_ml": 0.0, "penumbra_ml": 88.0,
-        "mrs_90d": 2, "sich": 0, "ph2": 0, "tici_2b_3": 1,
+        # The literal 'N/A' sentinel, in the column the workbook carries three of them in. It goes
+        # here and not in the mRS column because `test_the_fixture_reads_under_the_declared_dtypes`
+        # pins mRS at exactly one missing value, contributed by the second row.
+        "mrs_90d": 2, "sich": 0, "ph2": 0, "tici_2b_3": "N/A",
         "contraindication_reason": None, "ivt_contraindicated": 0,
     },
     {
@@ -420,6 +425,20 @@ def test_the_fixture_reads_under_the_declared_dtypes():
     assert df["mRSscoreat90days"].isna().sum() == 1
 
 
+def test_the_fixture_carries_a_literal_na_sentinel():
+    # The workbook holds the three-character string 'N/A' in mRSscoreat90days, TICI_2b_3 and the six
+    # 24-hour NIHSS columns. A default read cannot see them — 'N/A' is already in pandas' default NA
+    # list — so the fixture has to carry one for any test of NA_VALUES to mean anything.
+    raw = _read_fixture(dtype=object, keep_default_na=False)
+    assert raw["TICI_2b_3"].iloc[0] == "N/A"
+
+
+def test_the_literal_na_sentinel_reads_as_missing_under_the_contract():
+    df = _read_fixture(dtype=config.READ_DTYPES, na_values=list(config.NA_VALUES))
+    assert str(df["TICI_2b_3"].dtype) == "Int64"      # not coerced to object by the string
+    assert df["TICI_2b_3"].isna().sum() == 1
+
+
 # --- 9.10  factor declarations ------------------------------------------------------------------------
 
 def test_the_factor_declarations_agree_with_each_other():
@@ -499,11 +518,18 @@ _RESOLVABLE = config.ANALYSIS_NAMES | set(config.DERIVED_NAMES) | set(config.OUT
 @pytest.mark.parametrize("name", sorted(
     set(config.PS_COVARIATES_FULL) | set(config.BALANCE_ONLY) | set(config.BINARY_COLUMNS)
     | set(config.PLAUSIBLE_RANGES) | set(config.STRUCTURALLY_NON_APPLICABLE)
-    | set(config.POST_TIME_ZERO)))
+    | set(config.INFORMATIVE_ABSENCE) | set(config.POST_TIME_ZERO)))
 def test_every_named_variable_can_be_produced(name):
     # A constant naming a variable no stage can produce is a typo that would otherwise surface as a
     # KeyError deep in Stage 6 or Stage 9, hours into a bootstrap.
     assert name in _RESOLVABLE
+
+
+def test_the_two_kinds_of_absence_are_disjoint():
+    # Stage 2's missingness table has one branch per constant. A column in both would be classified
+    # by branch order rather than by declaration, and the one column at stake carries the
+    # [DECISION 1] bit that separates eligible from indeterminate.
+    assert set(config.STRUCTURALLY_NON_APPLICABLE) & set(config.INFORMATIVE_ABSENCE) == set()
 
 
 def test_plausible_ranges_are_ordered():
