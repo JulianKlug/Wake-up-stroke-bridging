@@ -64,7 +64,7 @@ no value that Stage 2 delivered.
   └────────────────────────────────────────────────────────────────────────┘
                        │
                        ▼
-              32 columns  →  Stage 6 propensity  →  Stage 10 bootstrap
+              33 columns  →  Stage 6 propensity  →  Stage 10 bootstrap
                                                     resamples this column,
                                                     never recomputes it
 ```
@@ -847,7 +847,7 @@ costs no test, only the comment named above.
 
   derive_cohort(df, audit) returns
    ├─ core_above_median Int64 0/1; <NA> where core_ml is; ties below the median
-   └─ 32 columns. Raises if called twice on the same frame.               [§6.4]
+   └─ 33 columns. Raises if called twice on the same frame.               [§6.4]
 
   audit
    └─ the same Audit object load() created, carrying Stage 2's seven entries and now

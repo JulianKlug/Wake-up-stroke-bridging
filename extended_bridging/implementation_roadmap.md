@@ -113,6 +113,8 @@ ordinal source, and that the three onset levels partition the cohort.
 
 ## Stage 4 — Eligibility classification [§3, §11]
 
+**Spec:** `specs/stage4_eligibility_classification.md`.
+
 **Build.** A function mapping each patient to `ineligible` / `eligible` / `indeterminate`, under
 DECISION 1: treated → eligible by revealed fact; `ivt_contraindicated` = 1 → ineligible; flag = 0
 with a reason recorded → eligible; flag = 0 with none recorded → indeterminate. The free text of
@@ -126,8 +128,18 @@ would otherwise silently absorb. This also retires the free-text normalisation p
 note records a `Clnician` typo and parenthetical annotations that would have made an exact-string
 classifier raise on four of five spellings of one reason.
 
-**Accept when.** A cross-tabulation of eligibility by centre and arm is produced, and a test confirms
-no blank is ever read as "no contraindication".
+**Retained means not ineligible** — one predicate, decided by the PI on 2026-08-10. [§3] retains the
+indeterminate group and [§14a]'s "all eligible patients" draws from the same rule, so only
+`ineligible` patients are ever dropped and no stage gets to pick. 43 of 126 records turn on it — 80%
+of the primary cohort's control arm — so two stages resolving it differently would not look like a
+bug in either. The code offers exactly one predicate, `eligibility.retained()`, over one declared
+tuple; [§14b] is the sole reader of the three-level column instead.
+
+**Accept when.** A cross-tabulation of eligibility by centre and arm is produced, every declared
+centre × arm cell rendered whether or not the data fills it; a test confirms no blank is ever read as
+"no contraindication"; and the retained predicate is asserted to be `!= ineligible` rather than
+`== eligible`, including under a patched registry, so the reading above is enforced rather than
+merely written down.
 
 ## Stage 5 — Cohort construction [§2, §3]
 

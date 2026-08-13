@@ -200,7 +200,7 @@ COLUMN_CONTRACT: Final[dict[str, Column]] = {
         "one bit is whether a reason was recorded at all, which separates eligible from "
         "indeterminate [§3]", "string"),
     "IVT_contraindicated_binary": Column(
-        "ivt_contraindicated", "the [§4] eligibility classifier [DECISION 1]; Stage 4 asserts it "
+        "ivt_contraindicated", "the [§3] eligibility classifier [DECISION 1]; Stage 4 asserts it "
         "is 0/1, never missing, and never 1 for a treated patient", "Int64"),
     "Unnamed: 38": Column(
         None, "empty in every record; carried by the sheet's dimensions, not by any data"),
@@ -409,14 +409,33 @@ def outcome_model_covariates(outcome: str) -> tuple[str, ...]:
     return OUTCOME_MODEL_OVERRIDES.get(outcome, OUTCOME_COVARIATES)
 
 
-# --- eligibility [§3, §4, DECISION 1] ---------------------------------------------------------
+# --- eligibility [§3, DECISION 1] ---------------------------------------------------------------
 #
 # There is deliberately no list of contraindication reason strings. Under DECISION 1 the classifier
 # is `ivt_contraindicated` plus whether `contraindication_reason` is present, so no string is ever
-# matched and there is nothing to enumerate. What Stage 4 asserts instead — the [§4] "assert every
-# reason is classified" requirement having nothing left to range over — is that `ivt_contraindicated`
-# is 0/1 and never missing, and that no treated patient carries a 1.
-ELIGIBILITY_ORDER: Final[tuple[str, ...]] = ("eligible", "indeterminate", "ineligible")
+# matched and there is nothing to enumerate. What Stage 4 asserts instead is that the flag is 0/1,
+# never missing, and never 1 for a treated patient [Stage 4 §4.2].
+#
+# The three classes are declared individually because eligibility.py writes them by name. Indexing
+# into ELIGIBILITY_ORDER would couple the classification rule to a display order, so reordering a
+# table's columns would rewrite the rule; a literal in eligibility.py would give each class a second
+# declaration. test_config.py asserts the order below holds exactly these three.
+ELIGIBLE: Final[str] = "eligible"
+INDETERMINATE: Final[str] = "indeterminate"
+INELIGIBLE: Final[str] = "ineligible"
+
+# Display and table order [Stage 4 §7], computed so the three above are declared once.
+ELIGIBILITY_ORDER: Final[tuple[str, ...]] = (ELIGIBLE, INDETERMINATE, INELIGIBLE)
+
+# The classes a patient is RETAINED on [§3]. Decided by the PI on 2026-08-10: [§3] and [§14a] use
+# one rule, and only ineligible patients are ever dropped. This is 43 of 126 records — 80% of the
+# primary cohort's control arm — so `== ELIGIBLE` and `!= INELIGIBLE` meaning different things in
+# two stages would not look like a bug in either. eligibility.retained() is the only reader.
+ELIGIBILITY_RETAINED: Final[tuple[str, ...]] = (ELIGIBLE, INDETERMINATE)
+
+# The column Stage 4 produces. Named here for the reason TREATMENT is: every consumer refers to the
+# column through this constant, and it is deliberately NOT in DERIVED_NAMES [Stage 4 §8].
+ELIGIBILITY: Final[str] = "eligibility"
 
 
 # --- post-time-zero denylist [invariant 4] ----------------------------------------------------
@@ -461,7 +480,7 @@ PLAUSIBLE_RANGES: Final[dict[str, tuple[int, int | None]]] = {
 
 # Stage 2 asserts every value in these columns is in {0, 1} or missing. Two matter more than the
 # rest: `ivt` is the exposure, and a 2 or a -1 there would flow into every weight, every estimate
-# and every arm label without a single error; `ivt_contraindicated` is the [§4] classifier.
+# and every arm label without a single error; `ivt_contraindicated` is the [§3] classifier.
 BINARY_COLUMNS: Final[tuple[str, ...]] = (
     "sex", "hypertension", "hyperlipidemia", "diabetes", "smoking", "atrial_fib",
     "wake_up", "unwitnessed", "ivt", "sich", "ph2", "tici_2b_3", "ivt_contraindicated")

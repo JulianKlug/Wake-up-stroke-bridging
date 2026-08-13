@@ -336,6 +336,55 @@ def test_the_subgroup_registry_is_exactly_the_two_that_survived_the_amendment():
     assert set(config.SUBGROUPS) == {"unknown_onset", "core_above_median"}
 
 
+# --- 9.3c  the Stage 4 eligibility registry [Stage 4 §12.12] ----------------------------------------
+#
+# Nothing covered these constants before Stage 4: ELIGIBILITY_ORDER existed but was read only by 9.8's
+# immutability list, which asserts its type and not its contents.
+
+def test_the_order_is_exactly_the_three_declared_classes():
+    # Computed from the three, so this is the assertion that the computation was not rewritten as a
+    # literal — and that a fourth class cannot appear in the display order alone.
+    assert config.ELIGIBILITY_ORDER == (
+        config.ELIGIBLE, config.INDETERMINATE, config.INELIGIBLE)
+    assert len(set(config.ELIGIBILITY_ORDER)) == len(config.ELIGIBILITY_ORDER) == 3
+
+
+def test_the_retained_set_partitions_the_order_with_ineligible_alone_outside_it():
+    # [§3]'s partition, and the whole of the `!= ineligible` versus `== eligible` reading: 43 of 126
+    # records sit in the difference, so a fourth class added to the retained tuple without a decision
+    # behind it must fail here rather than move a cohort quietly.
+    assert set(config.ELIGIBILITY_RETAINED) < set(config.ELIGIBILITY_ORDER)
+    assert set(config.ELIGIBILITY_ORDER) - set(config.ELIGIBILITY_RETAINED) == {config.INELIGIBLE}
+
+
+def test_the_eligibility_column_shadows_no_name_any_other_stage_produces():
+    assert config.ELIGIBILITY not in config.ANALYSIS_NAMES
+    assert config.ELIGIBILITY not in config.DERIVED_NAMES
+
+
+def test_eligibility_is_not_a_covariate():
+    # [§14a] states it plainly: "contraindication status is not a covariate, the cohort being already
+    # restricted to eligible patients". A patient's eligibility decides who is in the population and
+    # nothing else, so it must never adjust anything.
+    #
+    # This is also why the column stays out of DERIVED_NAMES [Stage 4 §8]: 9.3's resolution check
+    # accepts any covariate that is in ANALYSIS_NAMES *or* DERIVED_NAMES, so widening the latter would
+    # widen what may legally appear in a covariate list, and this assertion is what covers the gap.
+    everywhere = (
+        set(config.PS_COVARIATES) | set(config.PS_COVARIATES_FULL)
+        | set(config.STANDARDISATION_COVARIATES) | set(config.BALANCE_ONLY)
+        | {c for outcome in config.OUTCOMES for c in config.outcome_model_covariates(outcome)}
+        | {c for override in config.OUTCOME_MODEL_OVERRIDES.values() for c in override})
+    assert config.ELIGIBILITY not in everywhere
+
+
+def test_eligibility_is_not_post_time_zero():
+    # [§3] classifies "using only information available at time zero", so it is a baseline attribute.
+    # Invariant 4's denylist is about variables that would be adjusted for; this one is barred from
+    # adjustment by the assertion above instead, which names the property rather than the timing.
+    assert config.ELIGIBILITY not in config.POST_TIME_ZERO
+
+
 # --- 9.4  no raw names outside config.py ---------------------------------------------------------
 
 def _raw_names_in_source(source: str) -> list[tuple[int, str]]:
@@ -465,7 +514,9 @@ def test_the_full_covariate_set_is_a_prefix_plus_exactly_four():
     # outside it until it is added by hand — which is the point, but it means adding it is part of
     # declaring one.
     "ONSET_TYPE_FROM_FLAG", "COHORT_DEPENDENT_SUBGROUPS", "DERIVED_DICHOTOMIES",
-    "ROW_WISE_DERIVED"])
+    "ROW_WISE_DERIVED",
+    # Stage 4's one. ELIGIBILITY_ORDER is already above, from Stage 1.
+    "ELIGIBILITY_RETAINED"])
 def test_declared_sequences_are_tuples(name):
     # A later module doing `covs = config.PS_COVARIATES; covs.append(...)` would rewrite the
     # specification for every importer thereafter, including all 2000 refits in Stage 10, and no
@@ -602,7 +653,10 @@ def test_balance_only_variables_are_not_adjusted_for():
 
 # --- 9.13  names resolve ------------------------------------------------------------------------------
 
-_RESOLVABLE = config.ANALYSIS_NAMES | set(config.DERIVED_NAMES) | set(config.OUTCOMES)
+# Stage 4's column is in the union although it is deliberately not a derived name [Stage 4 §8], so a
+# future column-keyed constant naming it still resolves here rather than being read as a typo.
+_RESOLVABLE = (config.ANALYSIS_NAMES | set(config.DERIVED_NAMES) | set(config.OUTCOMES)
+               | {config.ELIGIBILITY})
 
 
 @pytest.mark.parametrize("name", sorted(

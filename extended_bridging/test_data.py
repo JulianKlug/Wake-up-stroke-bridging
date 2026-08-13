@@ -664,19 +664,10 @@ def test_exactly_one_record_carries_the_999_groin_time(workbook):
     assert len(entry.case_ids) == 1
 
 
-@DATA_GATED
-def test_no_treated_patient_is_flagged_as_contraindicated(workbook):
-    # Stage 4 owns the assertion, because that is where the classifier lives. Recorded here as a
-    # data-gated fact so that updating the hash re-checks the premise Stage 4 will rest on.
-    df, _ = workbook
-    flagged = df[(df[config.TREATMENT] == 1) & (df["ivt_contraindicated"] == 1)]
-    assert len(flagged) == 0
-
-
-@DATA_GATED
-def test_the_eligibility_classifier_is_never_missing(workbook):
-    df, _ = workbook
-    assert int(df["ivt_contraindicated"].isna().sum()) == 0
+# The two eligibility premises that used to sit here — no treated patient carries the flag, and the
+# flag is never missing — moved to `test_eligibility.py` §12.13 when Stage 4 landed. They assert the
+# classifier's preconditions, and one of them is Stage 4's headline assertion (E3); leaving them here
+# would have meant the property was tested against one workbook and not against the classifier.
 
 
 @DATA_GATED

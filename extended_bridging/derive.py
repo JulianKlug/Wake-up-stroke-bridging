@@ -38,7 +38,7 @@ builds are not all the same kind of thing::
     └──────────────────────────────────────────────────────────────────────┘
                          │
                          ▼
-                32 columns  →  Stage 6 propensity  →  Stage 10 bootstrap
+                33 columns  →  Stage 6 propensity  →  Stage 10 bootstrap
                                                       resamples core_above_median,
                                                       never recomputes it
 
@@ -122,8 +122,12 @@ def _assert_onset_flags(df: pd.DataFrame) -> None:
     # <NA>, and summing a BooleanDtype skips <NA> — the count below would be the same number. It
     # stays for two things it does buy: it makes each mask total, so the expression means the same
     # if a flag ever loses its Int64 declaration and starts absorbing; and it keeps `conflicting`
-    # free of <NA>, which `.loc` refuses to mask with. A record with one missing flag is not
-    # evidence that two are positive — that record is handled in _onset_type, which gives it <NA>.
+    # free of <NA>, which `.loc` would otherwise treat as False and silently pass over — verified on
+    # pandas 2.3.3, and the opposite of `.mask`, which treats <NA> as True and applies the
+    # replacement. `conflicting` carries no <NA> by construction, so the fill is belt-and-braces
+    # here; Stage 4 §3.1 is where that asymmetry is load-bearing rather than tidy. A record with one
+    # missing flag is not evidence that two are positive — that record is handled in _onset_type,
+    # which gives it <NA>.
     #
     # The accumulator must stay `Int64` and not `int64`: `astype("int64")` on a BooleanDtype
     # carrying <NA> raises, which would turn the fill from a guard into a load-bearing call and make
@@ -384,7 +388,7 @@ def derive(df: pd.DataFrame, audit: Audit) -> pd.DataFrame:
 def derive_cohort(df: pd.DataFrame, audit: Audit) -> pd.DataFrame:
     """The cohort-wise derivations. **Stage 5 is the only caller**, after both [§3] restrictions.
 
-    Returns a new frame of 32 columns and appends two `derivation` entries to `audit`. Raises
+    Returns a new frame of 33 columns and appends two `derivation` entries to `audit`. Raises
     SchemaError if called twice on the same frame — see below.
     """
     # Structural, not documentary. The natural shape of a bootstrap replicate is "resample, then
