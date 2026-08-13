@@ -317,7 +317,7 @@ this branch** — an implementation that omitted the mask would be green on v7 a
 reaches it on a hand-built frame.
 
 The pilot gets this wrong, and it is worth naming because it is the obvious implementation:
-`pilots/data.py:141` builds the factor with `np.select([...], [...], "witnessed")`, whose default
+`pilots/pilot_data.py:141` builds the factor with `np.select([...], [...], "witnessed")`, whose default
 absorbs a missing flag into the baseline. §16 records it as **do not lift**.
 
 ### 4.4 `onset_type` is a `string`, not a `Categorical`
@@ -326,7 +326,7 @@ Stage 2 §6's argument for `center`, unchanged: Stage 5 restricts the cohort, an
 keeps a dead level makes every subsequent `groupby(observed=False)` resurrect it as an all-missing
 row — in the balance table, the within-centre overlap table [§9] and every subgroup table. Stage 1
 §5.4 assigns categorical construction to Stage 6, which builds it from `FACTOR_LEVELS` at the point
-of use where the level set is chosen deliberately. `pilots/data.py:141` wraps the factor in
+of use where the level set is chosen deliberately. `pilots/pilot_data.py:141` wraps the factor in
 `pd.Categorical` at derivation time; that half is not lifted either.
 
 ## 5. The outcome dichotomies [§5]
@@ -1252,18 +1252,18 @@ Recorded so a later stage does not look here for an answer that was never placed
 
 ## 16. What already exists, and what to lift
 
-`pilots/data.py` is gitignored but present and is the closest prior art. `stage0_data_inventory.py`
+`pilots/pilot_data.py` is gitignored but present and is the closest prior art. `stage0_data_inventory.py`
 is in the repository and its `derive` helper is already correct.
 
 | From the pilot / Stage 0 | Status |
 |---|---|
 | `stage0_data_inventory.py:97`'s `derive(source, is_event)` — `is_event.astype("Int64").mask(source.isna())`, with the docstring explaining why | **lift the idiom.** It is what Stage 1 §3.2 pins and what §5.1 writes as a loop over the registry |
-| `pilots/data.py:31`'s `_rebuild(df, col, truth, source, audit, rule)` | lift the shape — a derivation that logs — but drive it from `OUTCOMES` rather than from eight hand-written call sites, four of which build columns the [§5] registry does not contain |
-| `pilots/data.py:140`'s `assert not (wake_up & unwitnessed).any()` | lift the **check**; not the statement form (Stage 2 §8.3), and not the message. §4.1 raises `SchemaError` and names the cases |
-| `pilots/data.py:141`'s `np.select([...], [...], "witnessed")` | **do not lift.** The default absorbs a missing flag into the baseline, which is exactly §4.3 |
-| `pilots/data.py:141`'s `pd.Categorical(...)` at derivation time | **do not lift.** §4.4 |
-| `pilots/data.py:144`'s `unknown_onset = (onset_type != "witnessed").astype(int)` | lift the definition; not the `astype(int)`, which cannot hold `<NA>`, nor the literal level name (§6.2) |
-| `pilots/data.py:150-154`'s `target_mismatch` | **do not lift.** Withdrawn (§6.1) |
+| `pilots/pilot_data.py:31`'s `_rebuild(df, col, truth, source, audit, rule)` | lift the shape — a derivation that logs — but drive it from `OUTCOMES` rather than from eight hand-written call sites, four of which build columns the [§5] registry does not contain |
+| `pilots/pilot_data.py:140`'s `assert not (wake_up & unwitnessed).any()` | lift the **check**; not the statement form (Stage 2 §8.3), and not the message. §4.1 raises `SchemaError` and names the cases |
+| `pilots/pilot_data.py:141`'s `np.select([...], [...], "witnessed")` | **do not lift.** The default absorbs a missing flag into the baseline, which is exactly §4.3 |
+| `pilots/pilot_data.py:141`'s `pd.Categorical(...)` at derivation time | **do not lift.** §4.4 |
+| `pilots/pilot_data.py:144`'s `unknown_onset = (onset_type != "witnessed").astype(int)` | lift the definition; not the `astype(int)`, which cannot hold `<NA>`, nor the literal level name (§6.2) |
+| `pilots/pilot_data.py:150-154`'s `target_mismatch` | **do not lift.** Withdrawn (§6.1) |
 | `mrs_shift_90d`, `center_hug`, the 24-hour NIHSS dichotomies | **do not lift.** Not in the [§5] registry (§15) |
 | the pilot's habit of writing thresholds and level names at the call site | **do not lift.** §4.2, §5.1 |
 
@@ -1418,7 +1418,7 @@ of them decide whether a mask is redundant or load-bearing.
 | **[REV]** `constant_covariates` on `hand_frame()` returns **10 of 13** names, not `()`: everything in `PS_COVARIATES_FULL` except `core_ml`, `tmax6_ml` and `center`, because `_HAND_CONSTANT` single-values the rest. `onset_type` is among the ten, so the one-level-factor case needs no construction | §12.11 | yes, run |
 | `constant_covariates` on the fixture returns `()` — each of its 13 covariates has 2 distinct values over its 2 records — which is what makes 12.12's "present with `n = 0` and no table" true of that frame | §12.12, §9.3 | yes, run |
 | `tests/fixture_schema.xlsx` passes `derive` and `derive_cohort`: 2 records, `wake_up` 1 and 0, `mrs_90d` `<NA>` on one, `core_ml` `int64` 0 and 12, median 6.0, neither onset flag missing | §12.12 | yes, run |
-| `pilots/data.py:141` builds `onset_type` with `np.select(..., "witnessed")` and wraps it in `pd.Categorical`; `:144` uses `.astype(int)` | §4.3, §4.4, §16 | yes, read |
+| `pilots/pilot_data.py:141` builds `onset_type` with `np.select(..., "witnessed")` and wraps it in `pd.Categorical`; `:144` uses `.astype(int)` | §4.3, §4.4, §16 | yes, read |
 | `stage0_data_inventory.py:97`'s `derive` already carries the `.mask(source.isna())` idiom and its justification | §5.1, §16 | yes, read |
 | `test_config.py` 9.4 walks `extended_bridging/**/*.py` minus three exemptions and pins that set, so `derive.py` is scanned from the moment it exists | §3, §12.13, DoD 3 | yes, read |
 

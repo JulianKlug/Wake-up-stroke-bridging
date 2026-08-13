@@ -339,7 +339,7 @@ in a scored column raises at read time rather than being absorbed as `NaN`.
 `NA_VALUES = ("N/A", "")` (§5.1) covers the two sentinels roadmap Stage 2 anticipates, and pandas
 applies `na_values` before dtype conversion, so those convert cleanly. Anything else — a stray
 comment in a score cell, a `?`, a date — raises. That is the intended behaviour under this stage's
-Goal, but it is a stricter reader than `pilots/data.py`, and the first symptom of a hand-edited
+Goal, but it is a stricter reader than `pilots/pilot_data.py`, and the first symptom of a hand-edited
 workbook will be a pandas conversion error rather than a missing value. Do not respond to that by
 widening `NA_VALUES`: add the specific sentinel, or fix the workbook.
 
@@ -474,7 +474,7 @@ Declaring the levels fixes both. Stage 6 builds each factor as a categorical wit
 set, so an absent level yields an all-zero column that the "constant columns dropped" rule then
 removes — deterministically, in every replicate, with the drop recorded. The marginal estimates are
 invariant to coding either way; the model-parameter outputs and the [§14a] conditional odds ratio are
-not. `pilots/config.py:70` already carried `ONSET_ORDER`; the pre-review draft dropped it.
+not. `pilots/pilot_config.py:70` already carried `ONSET_ORDER`; the pre-review draft dropped it.
 
 ### 5.5 Covariates [§6]
 
@@ -672,7 +672,7 @@ cut-point.
 rather than left as a convention.
 
 **Where the rule comes from, and what it actually buys.** It began as a docstring aspiration in
-`pilots/config.py`, became a build requirement in roadmap Stage 1, and is a tested criterion here.
+`pilots/pilot_config.py`, became a build requirement in roadmap Stage 1, and is a tested criterion here.
 Two things justify it, and the second is the load-bearing one:
 
 - *Blast radius.* The raw headers are hostile: three carry trailing whitespace, two carry interior
@@ -920,7 +920,7 @@ Recorded so a later stage does not look here for an answer that was never placed
 
 ## 13. What already exists, and what to lift
 
-`pilots/config.py` is gitignored but present, and already carries correct versions of much of this.
+`pilots/pilot_config.py` is gitignored but present, and already carries correct versions of much of this.
 Lift these rather than re-deriving them, checking each against §4 and §5 above:
 
 | From the pilot | Status |

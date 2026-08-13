@@ -262,7 +262,7 @@ help if Stage 2 never triggers it deliberately.
 `READ_DTYPES` types 20 of the 42 columns — `string` where inference yields mixed types, `Int64`
 wherever a column is a count, a score or a 0/1 flag, so that missingness survives as `<NA>` instead
 of forcing the column to float. The volumes and times are left to inference. This reader is stricter
-than `pilots/data.py`: a non-numeric value in a scored column raises at read time rather than being
+than `pilots/pilot_data.py`: a non-numeric value in a scored column raises at read time rather than being
 absorbed as `NaN` (Stage 1 §4.4). That is intended. Do not widen `NA_VALUES` in response — add the
 specific sentinel, or fix the workbook.
 
@@ -443,7 +443,7 @@ The audit entry names the case and states the stored and recomputed values.
 
 ### 7.3 `onset_to_groin_min = 999` is flagged, not corrected  **[REV]**
 
-`pilots/data.py:103` sets `onset_to_groin_min == 999` to missing, on the reasoning that 999 is a
+`pilots/pilot_data.py:103` sets `onset_to_groin_min == 999` to missing, on the reasoning that 999 is a
 placeholder. **Stage 2 does not carry that correction.** The value stands; the record is logged as an
 `observation` naming the case, and it goes to the data owner as a standing query.
 
@@ -474,7 +474,7 @@ this section, and it changes one cell of one descriptive table.
 
 ### 7.4 Pilot corrections deliberately not carried
 
-| `pilots/data.py` | Why not |
+| `pilots/pilot_data.py` | Why not |
 |---|---|
 | `nihss_change_24h` recomputed from `nihss_24h − nihss_baseline` | all six 24-hour NIHSS columns are dropped by the contract; they are not in the [§5] registry, and restoring them requires amending [§5] first |
 | `contraindication_ivt` regex normalisation | DECISION 1 — the free text is never read (§6) |
@@ -558,7 +558,7 @@ the dependency, so updating the hash also re-checks the premises.
 
 ### 8.3 No bare `assert`  **[REV]**
 
-`pilots/data.py:177-193` states every one of its checks as `assert`. Python strips `assert` under
+`pilots/pilot_data.py:177-193` states every one of its checks as `assert`. Python strips `assert` under
 `-O`, so under a flag nobody remembers setting, a module whose entire purpose is to fail loudly
 succeeds silently. Stage 2 raises `SchemaError` explicitly, everywhere, and §12.10 scans `data.py`
 for `ast.Assert` and fails if it finds one.
@@ -1243,7 +1243,7 @@ Recorded so a later stage does not look here for an answer that was never placed
 
 ## 16. What already exists, and what to lift
 
-`pilots/data.py` is gitignored but present, and is the closest prior art. Lift these, checking each
+`pilots/pilot_data.py` is gitignored but present, and is the closest prior art. Lift these, checking each
 against §7 and §8:
 
 | From the pilot | Status |

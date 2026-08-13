@@ -166,7 +166,7 @@ def _onset_type(df: pd.DataFrame) -> pd.Series:
     fabricated value. `<NA>` drops it by complete-case [§11] instead, which is what [§11] prescribes
     and what the reported denominator will then say. Nothing upstream forbids a missing flag —
     Stage 2's A5 allows missing throughout BINARY_COLUMNS — and v7 has none, so **no test running
-    against the real workbook can reach this branch**. `pilots/data.py` gets it wrong, with an
+    against the real workbook can reach this branch**. `pilots/pilot_data.py` gets it wrong, with an
     `np.select(..., "witnessed")` whose default absorbs a missing flag into the baseline.
 
     No level name is written here. FACTOR_LEVELS declares the level set and REFERENCE_LEVELS declares

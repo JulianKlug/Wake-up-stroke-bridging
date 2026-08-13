@@ -499,7 +499,7 @@ def _observe_groin_sentinel(df: pd.DataFrame, audit: Audit) -> None:
     """Log the 999 groin times as a standing query. The value stands; setting it missing would delete
     real data on the strength of a digit pattern.
 
-    `pilots/data.py` sets these to missing, on the reasoning that 999 is a placeholder. Stage 2 does
+    `pilots/pilot_data.py` sets these to missing, on the reasoning that 999 is a placeholder. Stage 2 does
     not carry that correction: the value is inside the observed range, its implied IVT-to-groin
     interval is unremarkable, and neighbouring observed values are equally round. This is the same
     posture DECISION 2 took toward the shipped death flags — a derivation rule where one is
