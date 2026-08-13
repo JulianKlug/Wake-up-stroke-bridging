@@ -409,29 +409,37 @@ def outcome_model_covariates(outcome: str) -> tuple[str, ...]:
     return OUTCOME_MODEL_OVERRIDES.get(outcome, OUTCOME_COVARIATES)
 
 
-# --- eligibility [§3, DECISION 1] ---------------------------------------------------------------
+# --- eligibility [§3, DECISION 1a] --------------------------------------------------------------
 #
-# There is deliberately no list of contraindication reason strings. Under DECISION 1 the classifier
-# is `ivt_contraindicated` plus whether `contraindication_reason` is present, so no string is ever
-# matched and there is nothing to enumerate. What Stage 4 asserts instead is that the flag is 0/1,
-# never missing, and never 1 for a treated patient [Stage 4 §4.2].
+# There is deliberately no list of contraindication reason strings. Under DECISION 1a (PI,
+# 2026-08-13) the classifier is `ivt_contraindicated` ALONE: flag = 1 -> ineligible, flag = 0 ->
+# eligible. No string is ever matched and — unlike under DECISION 1 — neither is the presence of one,
+# so `contraindication_reason` feeds no class at all and there is nothing to enumerate.
 #
-# The three classes are declared individually because eligibility.py writes them by name. Indexing
-# into ELIGIBILITY_ORDER would couple the classification rule to a display order, so reordering a
-# table's columns would rewrite the rule; a literal in eligibility.py would give each class a second
-# declaration. test_config.py asserts the order below holds exactly these three.
+# What Stage 4 asserts instead is that the flag is 0/1, never missing, and never 1 for a treated
+# patient [Stage 4 §4.2]. That third assertion is **load-bearing** under DECISION 1a where it was
+# belt-and-braces under DECISION 1: it is what makes the revealed-fact rule redundant, and with that
+# rule deleted it is the only thing standing between a treated-and-flagged record and a contradiction
+# absorbed without a trace.
+#
+# The two classes are declared individually because eligibility.py writes them by name. Indexing into
+# ELIGIBILITY_ORDER would couple the classification rule to a display order, so reordering a table's
+# columns would rewrite the rule; a literal in eligibility.py would give each class a second
+# declaration. test_config.py asserts the order below holds exactly these two.
 ELIGIBLE: Final[str] = "eligible"
-INDETERMINATE: Final[str] = "indeterminate"
 INELIGIBLE: Final[str] = "ineligible"
 
-# Display and table order [Stage 4 §7], computed so the three above are declared once.
-ELIGIBILITY_ORDER: Final[tuple[str, ...]] = (ELIGIBLE, INDETERMINATE, INELIGIBLE)
+# Display and table order [Stage 4 §7], computed so the two above are declared once.
+ELIGIBILITY_ORDER: Final[tuple[str, ...]] = (ELIGIBLE, INELIGIBLE)
 
-# The classes a patient is RETAINED on [§3]. Decided by the PI on 2026-08-10: [§3] and [§14a] use
-# one rule, and only ineligible patients are ever dropped. This is 43 of 126 records — 80% of the
-# primary cohort's control arm — so `== ELIGIBLE` and `!= INELIGIBLE` meaning different things in
-# two stages would not look like a bug in either. eligibility.retained() is the only reader.
-ELIGIBILITY_RETAINED: Final[tuple[str, ...]] = (ELIGIBLE, INDETERMINATE)
+# The classes a patient is RETAINED on [§3]. Under DECISION 1a eligibility is two-valued, so
+# `== ELIGIBLE` and `!= INELIGIBLE` coincide and the 43-record gap DECISION 1's third class opened is
+# closed — the PI's decision of 2026-08-10 turns out to have chosen the same population by a longer
+# route. The tuple stays for two reasons that survive the amendment: it is the one seam a third class
+# would come back through (a [§13] sensitivity arm over the undocumented controls would reopen
+# exactly that gap), and a predicate reading a registry rather than writing a comparison costs
+# nothing. eligibility.retained() is the only reader.
+ELIGIBILITY_RETAINED: Final[tuple[str, ...]] = (ELIGIBLE,)
 
 # The column Stage 4 produces. Named here for the reason TREATMENT is: every consumer refers to the
 # column through this constant, and it is deliberately NOT in DERIVED_NAMES [Stage 4 §8].

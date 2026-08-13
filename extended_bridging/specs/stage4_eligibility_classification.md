@@ -22,6 +22,13 @@ code is rather than how it is written, and both are recorded where the code will
    (§9.1), so `data.py` is untouched by this stage and Stage 5 keeps a free hand for its cohort-flow
    table.
 
+**AMENDED 2026-08-13 by DECISION 1a — eligibility is two-valued and the reason column is read by
+nothing. §21 is the ledger and it supersedes this document wherever the two disagree.** The rule
+blocks, the code blocks and the registry below are rewritten in place, because an implementer builds
+from those. The surrounding *prose* about the three-class rule is left standing as the dated record of
+how the module was specified and built, with a supersession pointer at each affected section — the
+treatment [§3] and [§13] give their own amendments. Where a section is marked superseded, read §21.
+
 **Nothing about Stage 4 is settled anywhere but here.** If a decision was made about this stage and
 is not in this file, it is not a decision.
 
@@ -227,6 +234,16 @@ stage depends on, stated backwards, in the file an implementer will read for pre
 
 DECISION 1, restated once so the code has something to be checked against:
 
+**Superseded by DECISION 1a (§21).** The rule is now two cases:
+
+```
+  ivt_contraindicated == 1                       →  ineligible     [§3] restriction 2
+  ivt_contraindicated == 0                       →  eligible       including every patient whose
+                                                                   reason was never documented
+```
+
+The three-class rule DECISION 1 specified, kept as the record of what was built and amended:
+
 ```
   treated                                        →  eligible       by revealed fact
   ivt_contraindicated == 1                       →  ineligible     [§3] restriction 2
@@ -345,6 +362,22 @@ not arrived yet. §12.3 and §12.4 reach them on hand-built frames.
 
 ### 4.3 The build, with the labels declared rather than written
 
+**Superseded by DECISION 1a (§21).** The shipped classifier is now one mask:
+
+```python
+def _classify(df: pd.DataFrame) -> pd.Series:
+    flag = df["ivt_contraindicated"]
+    out = pd.Series(C.ELIGIBLE, index=df.index, dtype="string")
+    out = out.mask((flag == 1).fillna(False), C.INELIGIBLE)
+    return out
+```
+
+Of the five properties below, four survive verbatim — the default is the class a record falls to when
+no rule fires, no label is written in this module, `.fillna(False)` is load-bearing, and the column is
+a `string` and total. The fifth, the revealed-fact mask, is deleted: see §21.
+
+What DECISION 1 specified, kept as the record of what was built:
+
 ```python
 def _classify(df: pd.DataFrame) -> pd.Series:
     flag, reason = df["ivt_contraindicated"], df["contraindication_reason"]
@@ -398,6 +431,11 @@ class that [§3] retains anyway — so the primary cohort would be unchanged in 
 [§3] demands describing a group twice its true size. §12.13 asserts the 39 directly.
 
 ### 4.5 `.notna()` is the whole of the reason column, and stripping it would be reading it
+
+> **Superseded in full by DECISION 1a (§21).** The reason column contributes no bit at all: the
+> classifier does not read it, so there is nothing to strip and A9 is no longer load-bearing here.
+> The section is kept because its final paragraph — the A9 dependency — is the one a reader would
+> otherwise still believe.
 
 The bit DECISION 1 reads is presence. `.notna()` is presence. Nothing else in this stage touches
 `contraindication_reason` — no strip, no case fold, no comparison, no membership test.
@@ -458,6 +496,10 @@ which is what proves it is registry-driven rather than a coincidence of the curr
 
 Replaces the current `ELIGIBILITY_ORDER` block, in the same file position — after
 `outcome_model_covariates` and before `POST_TIME_ZERO`:
+
+**Superseded by DECISION 1a (§21).** `INDETERMINATE` is removed, `ELIGIBILITY_ORDER` is
+`(ELIGIBLE, INELIGIBLE)` and `ELIGIBILITY_RETAINED` is `(ELIGIBLE,)`; the shipped block is in
+`config.py`. What DECISION 1 specified:
 
 ```python
 # --- eligibility [§3, DECISION 1] ---------------------------------------------------------------
@@ -608,19 +650,30 @@ computed from the frame rather than from the cells, so a vanished patient leaves
 is precisely why the reconciliation is a check inside `_crosstab` and not merely a property a reader
 could notice.
 
-Verified rendering, on v7 (§18):
+Verified rendering, on v7 under **DECISION 1a** (§18, re-run 2026-08-13). Every `n` and the
+restriction-1 row are unchanged from the three-class table; the `indeterminate` column is gone and its
+counts have moved into `eligible`, which is the table-level evidence that the amendment relabelled
+records rather than moving them:
 
 ```
-  | centre | arm       | eligible | indeterminate | ineligible | n   |
-  | HUG    | EVT alone | 11       | 0             | 11         | 22  |
-  | HUG    | bridging  | 30       | 0             | 0          | 30  |
-  | CHUV   | EVT alone | 0        | 14            | 0          | 14  |
-  | CHUV   | bridging  | 7        | 0             | 0          | 7   |
-  | Lugano | EVT alone | 0        | 29            | 0          | 29  |
-  | Lugano | bridging  | 2        | 0             | 0          | 2   |
-  | USZ    | EVT alone | 14       | 0             | 8          | 22  |
-  | USZ    | bridging  | 0        | 0             | 0          | 0   |   ← [§3] restriction 1
-  | all    | both      | 64       | 43            | 19         | 126 |
+  | centre | arm       | eligible | ineligible | n   |
+  | HUG    | EVT alone | 11       | 11         | 22  |
+  | HUG    | bridging  | 30       | 0          | 30  |
+  | CHUV   | EVT alone | 14       | 0          | 14  |
+  | CHUV   | bridging  | 7        | 0          | 7   |
+  | Lugano | EVT alone | 29       | 0          | 29  |
+  | Lugano | bridging  | 2        | 0          | 2   |
+  | USZ    | EVT alone | 14       | 8          | 22  |
+  | USZ    | bridging  | 0        | 0          | 0   |   ← [§3] restriction 1
+  | all    | both      | 107      | 19         | 126 |
+```
+
+Under DECISION 1 the same table read `64 / 43 / 19` across three class columns:
+
+```
+  | HUG EVT alone 11 0 11 22 · HUG bridging 30 0 0 30 · CHUV EVT alone 0 14 0 14
+  | CHUV bridging 7 0 0 7 · Lugano EVT alone 0 29 0 29 · Lugano bridging 2 0 0 2
+  | USZ EVT alone 14 0 8 22 · USZ bridging 0 0 0 0 · all both 64 43 19 126
 ```
 
 ### 7.2 What the table is not
@@ -1002,7 +1055,8 @@ bare frame rather than building a new one.
 13. **Structural facts from the workbook.** Data-gated, against v7 and the §18 record:
     - the flag is 0/1 on all 126 records, never missing, and **never 1 on a treated patient** — the
       two assertions moved here from `test_data.py` §12.14 (§10);
-    - the classification is **64 eligible, 43 indeterminate, 19 ineligible**;
+    - the classification is **107 eligible, 19 ineligible** [DECISION 1a; was 64 / 43 / 19 under
+      DECISION 1, and 107 = 64 + 43 — see §21.5];
     - the cross-tab reproduces §7.1's nine rows exactly, including the all-zero `USZ / bridging` row;
     - all **19** ineligible records carry a recorded reason, and **no treated patient** carries one;
     - and the one that pins §4.4: dropping the revealed-fact mask — a locally reimplemented chain,
@@ -1100,7 +1154,7 @@ config.py amendments                               test_config.py
 ├── RETAINED in 9.8's immutability list            ├── 12.12  the list is explicit
 └── _RESOLVABLE contains ELIGIBILITY               └── 12.12
 
-Data-gated (skipif not DATA_XLSX.exists()):        └── 12.13  64/43/19, the 9-row table,
+Data-gated (skipif not DATA_XLSX.exists()):        └── 12.13  107/19 [1a], the 9-row table,
   own module-scoped `workbook` fixture                       19 reasons, 0 treated flagged,
   (load → derive → classify)                                 the 39-record mask, and E4's
                                                              and E5's premises on v7
@@ -1344,12 +1398,12 @@ The probe is the §12.9 driver with the classification chain of §4.3 pasted in,
 |---|---|---|
 | `ivt_contraindicated` is 0/1 on all 126 records and never missing | §4.2, §6.1, §12.13 | yes, run |
 | **No treated patient carries the flag** — 0 of 39 | §4.2, §4.4, §12.13 | yes, run |
-| Classification over 126 records: **64 eligible, 43 indeterminate, 19 ineligible** | §7.1, §12.13 | yes, run |
+| Classification over 126 records: **64 eligible, 43 indeterminate, 19 ineligible** — DECISION 1's. Re-run under DECISION 1a as **107 / 19**, the 43 having moved to `eligible` (§21.5) | §7.1, §12.13 | yes, run, both rules |
 | The nine-row cross-tab of §7.1, cell for cell, including the all-zero `USZ / bridging` row | §7.1, §12.8, §12.13 | yes, run |
 | It reproduces `../out/stage0_data_inventory.md`'s eligibility table exactly | §7.1 | yes, compared |
 | A reason is recorded on 44 of 126 records; **all 19** ineligible carry one; **no treated patient** does | §4.4, §12.13 | yes, run |
 | Therefore, without the revealed-fact mask, **39** records move — every one from `eligible` to `indeterminate`, none in the other direction | §4.4, §12.13 | yes, run |
-| All 43 indeterminate records are controls, at CHUV and Lugano only | §7.2, §13 | yes, run |
+| All 43 indeterminate records are controls, at CHUV and Lugano only — under DECISION 1a the same 43 are the control-arm records with no documented reason (§21.4) | §7.2, §13 | yes, run, both rules |
 | The 43 are 80% of the primary cohort's 54 retained controls | §5.1, §13 | carried from Stage 0's flow table |
 | `classify` on `derive`'s frame takes it from 31 to 32 columns | §10, §11 | yes, run |
 | `retained` returns numpy `bool`, total, and `df[retained(df)]` selects 107 of 126 on v7 | §5.1, §12.7 | yes, run |
@@ -1472,3 +1526,101 @@ there.
 **Where a second reader should start.** §9.3's `classify`, which is new and therefore the least
 reviewed code in this document; and the E4/E5 fill discipline of §4.2, where the module now contains
 two masks that must never carry `.fillna(False)` sitting four lines from three that must.
+
+## 21. Amendment, 2026-08-13 — DECISION 1a: eligibility is two-valued
+
+**The decision.** `ivt_contraindicated` is the classifier and `Contraindications_to_IVT` is read by
+nothing — neither its text, which DECISION 1 already excluded, nor its presence, which DECISION 1 used
+as one bit. Flag = 1 is `ineligible`; flag = 0 is `eligible`, including every patient whose
+contraindication reason was never documented. The `indeterminate` class is withdrawn.
+
+Recorded in `../out/stage0_data_inventory.md` as DECISION 1a and in [§3] as the amendment of the same
+date. This section is the Stage 4 ledger and **supersedes every section above wherever the two
+disagree**.
+
+### 21.1 What did not change
+
+**The population, and every count that describes it.** Verified by running both rules and comparing
+identifier for identifier: the retained set is the same **107** records and the primary cohort the same
+**93** patients — 39 bridging, 54 thrombectomy alone, HUG 30/11, CHUV 7/14, Lugano 2/29. The 43
+formerly `indeterminate` records were already retained by [§3], so the amendment relabels them and
+moves none. §7.1's `n` column and its all-zero `USZ / bridging` row are unchanged.
+
+Also unchanged: all five preconditions E1–E5 and their messages; `_crosstab`'s every-cell-rendered rule
+and its reconciliation raise; the `derivation` audit kind and the single entry; the `df.copy()` promise
+of §0.2; the pandas facts of §3.1; and §8's rule that `eligibility` is not a derived name and reaches
+no covariate list.
+
+### 21.2 What changed, section by section
+
+| Section | Change |
+|---|---|
+| §4.1 | Four cases become two. The rule blocks are rewritten in place with the superseded one kept beneath |
+| §4.3 | One mask, not three. Rewritten in place. Four of its five properties survive verbatim |
+| §4.4 | **Void.** The ordering argument, the precedence discussion and the 39-record claim all concern masks that no longer exist. There is one mask, so there is no order |
+| §4.5 | **Void**, and it is the section most worth reading anyway: its last paragraph made A9 load-bearing for Stage 4, and that dependency is gone |
+| §5.1 | The retained predicate survives; its *argument* does not. With two classes `== ELIGIBLE` and `!= INELIGIBLE` coincide, so the 43-record gap is closed. `retained()` stays because `ELIGIBILITY_RETAINED` is the seam a third class would return through |
+| §5.2 | `INDETERMINATE` removed; `ELIGIBILITY_ORDER` is two-valued; `ELIGIBILITY_RETAINED` is `(ELIGIBLE,)` |
+| §6.1 | Unchanged, except that **E3 moves from belt-and-braces to load-bearing** — see §21.3 |
+| §7.1 | One fewer class column; the rendering is re-run and both versions are shown |
+| §7.2 | Unchanged, and now more pointed: the per-centre completeness table in Stage 2's `absence_by_column` is the **only** place the reason column's collection pattern is recorded, since no class encodes it any more |
+| §12.1 | "The four cases" becomes two. `test_the_flag_overrides_a_recorded_reason` survives unchanged — the flag still decides — but for a different reason: there is no competing rule left to override |
+| §12.2 | Rewritten. "A blank is never read as no contraindication" is no longer the criterion; the criterion is that **blanking the reason column on every record leaves the classification unmoved**, which is the assertion that catches a partial revert |
+| §12.4 | The fabrication square survives with one cell relabelled: without the fill a missing flag is still `ineligible` and still deleted at Stage 5; with the fill it is now `eligible` rather than `indeterminate`. Two cells, still failing differently |
+| §12.6 | Both AST scans survive unchanged |
+| §12.7 | The patched-registry test had to be inverted: it patched `ELIGIBILITY_RETAINED` to `(ELIGIBLE,)`, which is now the shipped value. It patches to `(INELIGIBLE,)` instead |
+| §12.13 | 64/43/19 becomes 107/19. The 39-record revealed-fact test becomes its converse — that restoring the deleted mask changes nothing. The 43-record test becomes a count of retained **control-arm** records with no documented reason |
+| §18 | Re-run; §21.5 records the new rows |
+
+### 21.3 E3 is now load-bearing, and that is the one thing to carry forward
+
+Under DECISION 1 the revealed-fact mask forced every treated patient to `eligible`, so a
+treated-and-flagged record would have been classified `eligible` and E3's job was to stop that
+contradiction being *absorbed silently* — a labelling error in a patient who stayed in the cohort.
+
+Under DECISION 1a there is no such mask. A treated patient carrying the flag classifies **`ineligible`**
+and Stage 5 deletes them. So E3 has stopped being a guard against a mislabelled retained patient and
+become the guard against a **silently removed** one. It is the only check standing there, and it is
+what makes deleting the mask safe rather than merely equivalent. §12.13 asserts the redundancy against
+the workbook; E3 asserts it against every frame.
+
+The corresponding sentence in §4.2 — "E3 is the assertion this stage exists to add" — was true when
+written and is more true now.
+
+### 21.4 What is quietly worse, and where it is recorded
+
+Under DECISION 1 the 43 undocumented controls carried a label. Every table in the pipeline showed
+them, and [§3] required a limitation about them. They now carry the same label as a patient who was
+assessed and documented, and **nothing in the frame distinguishes them**.
+
+The assumption did not go away; it moved. Eligibility now rests on `flag = 0` meaning the same thing at
+the two centres that never collected a reason as at the two that collected one for every control. The
+flag is 0/1 and never missing on all 126 records, which is equally consistent with its having been
+assessed for everyone and with 0 being an uncompleted default; nothing in the data separates them. It
+governs **43 of the 54** controls in the primary cohort.
+
+Three things count the group, and they are the whole of the mitigation:
+
+- the audit `detail` this stage writes, which names the arm-restricted count;
+- Stage 5's cohort-flow table, whose `of which EVT alone, no reason on file` row exists for this;
+- [§3]'s amended limitation paragraph.
+
+If any of the three is lost in a later edit, a stated assumption becomes an unstated one. Over all arms
+the same count is **82**, because no treated patient carries a reason either — so any count of this
+group that is not arm-restricted is measuring nothing.
+
+### 21.5 Verification record for the amendment
+
+Run 2026-08-13, on v7, by driving both rules over the same frame and comparing.
+
+| Claim | Verified |
+|---|---|
+| DECISION 1a classifies **107 eligible / 19 ineligible**; DECISION 1 classified 64 / 43 / 19; the 43 move to `eligible` and nothing else moves | yes, run |
+| The retained set and the primary cohort are **identical** under both rules, compared identifier for identifier | yes, run |
+| No treated patient carries the flag, so restoring the revealed-fact mask changes **no** record — the deletion is a no-op on this workbook | yes, run |
+| §7.1's table under DECISION 1a, cell for cell, with every `n` unchanged | yes, run |
+| **43** control-arm records carry no documented reason, at CHUV and Lugano only; over all arms it is **82** at 3 centres | yes, run |
+| A reason is recorded on **44** records — exactly the HUG and USZ controls — and is now read by no classifier | yes, run |
+| Restricting the comparator arm to documented controls leaves **11**, all at HUG, and a single-centre cohort of 41 | yes, run |
+| The audit log reproduces byte-identically under `PYTHONHASHSEED=0` and `=1` after the amendment | yes, run |
+| The suite is green with `data/` present (490 tests) and with `data/` absent (455 passed, 35 skipped, no collection error) | yes, run |

@@ -38,10 +38,57 @@ Two restrictions define the primary cohort, both applied **by design, before any
    bridging; retaining them makes "no IVT" a marker of contraindications and their prognosis.
 
 Eligibility is classified using only information available at time zero, applied symmetrically across
-arms, and fixed before outcomes are examined. Where the reason a patient did not receive IVT was never
-recorded, eligibility is *indeterminate*; those patients are retained. A blank is never read as "no
-contraindication", but retaining them does assume they were eligible, and no analysis brackets that
-assumption — state it as a limitation. Cohort flow is reported.
+arms, and fixed before outcomes are examined. **The classifier is the recorded absolute-contraindication
+flag, and it takes two values.** A patient carrying it is ineligible and is removed by restriction 2;
+a patient not carrying it is eligible. The free-text reason field is not used — neither its content nor
+whether it was completed. No patient who received IVT carries the flag; this is asserted rather than
+assumed, since a patient recorded as both having received IVT and having an absolute contraindication
+to it is a contradiction to resolve with the data owner, not a class to assign.
+
+Restriction 1 is **one-directional by design**: it names centres with no bridging patient, which is the
+violation this dataset presents. A retained centre left with no thrombectomy-alone patient by
+restriction 2 would be the mirror violation, `P(IVT = 0 | centre, X) = 0`. It does not arise here; should
+it arise, it is a protocol amendment and not a choice made in analysis code.
+
+Cohort flow is reported, including the number of retained thrombectomy-alone patients for whom no
+contraindication reason was recorded.
+
+**Amendment, 2026-08-13 — eligibility is classified from the recorded contraindication flag alone, and
+the *indeterminate* category is withdrawn.** The original text made eligibility three-valued: where the
+reason a patient did not receive IVT was never recorded, eligibility was *indeterminate*, those patients
+were retained, and a blank was never read as "no contraindication". The reason field does not support
+that role. It was completed for every thrombectomy-alone patient at two of the four centres and for none
+at the other two, so a category keyed on its presence classifies **documentation practice at the centre**
+rather than eligibility, and yields an indicator that is a near-perfect function of `center` — itself a
+§6 covariate. The contraindication flag is recorded for all 126 patients and is the field in which the
+question was actually asked.
+
+**The population does not change.** The indeterminate group was already retained, so the primary cohort
+is the same 93 patients — 39 bridging, 54 thrombectomy alone — at the same centres. Forty-three patients
+change label; none changes arm, centre or cohort. Established before any outcome was examined by arm, as
+was this decision.
+
+**The assumption is not removed by this amendment. It is relocated, and in its new form it is less
+visible, so it is stated here in full.** Eligibility now rests on `flag = 0` meaning the same thing at the
+two centres that never recorded a reason as at the two that recorded one for every thrombectomy-alone
+patient. The flag is 0 or 1 on all 126 records and never missing, which is equally consistent with its
+having been assessed for every patient and with 0 being an uncompleted default; nothing in the data
+distinguishes the two. This governs **43 of the 54 thrombectomy-alone patients in the primary cohort**.
+If any of those 43 in fact had an absolute contraindication, they were never candidates for bridging and
+their prognosis is worse on exactly the grounds restriction 2 gives, so retaining them depresses the
+comparator arm and **biases in favour of bridging** — the opposite direction from §2's known limitation,
+which biases against it. Both are stated in the manuscript.
+
+**It is stated rather than bracketed, and the reason is quantitative.** The obvious sensitivity analysis
+— restrict the comparator arm to patients with a documented reason — leaves 11 of them, all at one
+centre, and turns the primary comparison into a single-centre contrast of 30 against 11. That is a
+different study, not a sensitivity analysis of this one. The cohort-flow table therefore reports the
+group's size by centre so that a reader can size the assumption directly. No analysis brackets it; it is
+stated as a limitation, exactly as the category it replaces was.
+
+One deferred decision closes with this amendment. §14b's active regime assigns treatment as a function of
+eligibility, which under the original text was a binary decision over a three-valued column with no
+assignment defined for the third value. It is now binary over a binary column.
 
 ## 4. Exposure
 

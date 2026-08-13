@@ -10,15 +10,17 @@ The hand-built frame is `test_data.py`'s, imported rather than re-declared, for 
 It needs no extending: it already carries both arms, both reason states and all four centres. Its
 classification falls out of the records as they stand and is not hand-tuned::
 
-    HAND-1  HUG     treated  flag 0  no reason        → eligible        revealed fact
-    HAND-2  CHUV    treated  flag 0  no reason        → eligible        revealed fact
-    HAND-3  Lugano  control  flag 0  "Anticoagul…"    → eligible        documented
-    HAND-4  USZ     control  flag 0  "Clinician d…"   → eligible        documented
-    HAND-5  HUG     treated  flag 0  no reason        → eligible        revealed fact
-    HAND-6  Lugano  control  flag 0  no reason        → indeterminate   the [§3] blank
+    HAND-1  HUG     treated  flag 0  no reason        → eligible
+    HAND-2  CHUV    treated  flag 0  no reason        → eligible
+    HAND-3  Lugano  control  flag 0  "Anticoagul…"    → eligible
+    HAND-4  USZ     control  flag 0  "Clinician d…"   → eligible
+    HAND-5  HUG     treated  flag 0  no reason        → eligible
+    HAND-6  Lugano  control  flag 0  no reason        → eligible   ← DECISION 1a: no reason on
+                                                                    file is ELIGIBLE, not a class
 
-    5 eligible, 1 indeterminate, 0 ineligible — so every ineligible case below is made by
-    corrupt("ivt_contraindicated", 1, where=…), which is also the only way to reach E3.
+    6 eligible, 0 ineligible — so every ineligible case below is made by
+    corrupt("ivt_contraindicated", 1, where=…), which is also the only way to reach E3. Under
+    DECISION 1 this frame gave 5 eligible and 1 indeterminate; only HAND-6's label moved.
 
 **But it carries `center` as a raw code, not as a label**, and every per-centre assertion here turns
 on that. `CENTER_CODES = tuple(config.CENTER_RECODE)` is `("1", "Lausanne", "Lugano", "USZ")`, and
@@ -111,27 +113,29 @@ def set_cell(df: pd.DataFrame, case_id: str, column: str, value: object) -> pd.D
     return df
 
 
-# The §4.3 chain, reimplemented locally in two lines each — `eligibility.py` is never monkey-patched,
-# per Stage 3 §12.3. A patched module would test the patch; these test what the shipped masks buy.
+# The §4.3 mask, reimplemented locally — `eligibility.py` is never monkey-patched, per Stage 3 §12.3.
+# A patched module would test the patch; these test what the shipped mask buys.
 
-def _chain_without_the_fills(df: pd.DataFrame) -> pd.Series:
-    flag, reason = df["ivt_contraindicated"], df["contraindication_reason"]
-    out = pd.Series(config.INDETERMINATE, index=df.index, dtype="string")
-    out = out.mask((flag == 0) & reason.notna(), config.ELIGIBLE)
-    out = out.mask(flag == 1, config.INELIGIBLE)
-    return out.mask(df[config.TREATMENT] == 1, config.ELIGIBLE)
+def _chain_without_the_fill(df: pd.DataFrame) -> pd.Series:
+    flag = df["ivt_contraindicated"]
+    out = pd.Series(config.ELIGIBLE, index=df.index, dtype="string")
+    return out.mask(flag == 1, config.INELIGIBLE)
 
 
-def _chain_without_the_revealed_fact_mask(df: pd.DataFrame) -> pd.Series:
-    flag, reason = df["ivt_contraindicated"], df["contraindication_reason"]
-    out = pd.Series(config.INDETERMINATE, index=df.index, dtype="string")
-    out = out.mask(((flag == 0) & reason.notna()).fillna(False), config.ELIGIBLE)
-    return out.mask((flag == 1).fillna(False), config.INELIGIBLE)
+def _chain_with_the_deleted_revealed_fact_mask(df: pd.DataFrame) -> pd.Series:
+    """DECISION 1's last mask, kept here only to prove its deletion changed nothing.
+
+    Under DECISION 1 it forced every treated patient to `eligible` and moved 39 of 126 records,
+    because no reason is recorded for any of them. Under DECISION 1a `flag == 0` already classifies
+    all 39, so the mask is a no-op — and E3 is what keeps it one.
+    """
+    return eligibility._classify(df).mask(
+        (df[config.TREATMENT] == 1).fillna(False), config.ELIGIBLE)
 
 
-# --- 12.1  the four cases of the rule ------------------------------------------------------------
+# --- 12.1  the two cases of the rule -------------------------------------------------------------
 
-def test_every_treated_record_is_eligible_by_revealed_fact():
+def test_every_treated_record_is_eligible_from_the_flag_alone():
     out, _ = classified()
     for case_id in ("HAND-1", "HAND-2", "HAND-5"):
         assert eligibility_of(out, case_id) == config.ELIGIBLE, case_id
@@ -152,27 +156,32 @@ def test_the_flag_overrides_a_recorded_reason():
     assert eligibility_of(out, "HAND-4") == config.ELIGIBLE      # only the corrupted record moved
 
 
-def test_the_hand_frame_classifies_five_eligible_and_one_indeterminate():
+def test_the_hand_frame_classifies_six_eligible_and_none_ineligible():
     out, _ = classified()
-    assert out[config.ELIGIBILITY].value_counts().to_dict() == {
-        config.ELIGIBLE: 5, config.INDETERMINATE: 1}
+    assert out[config.ELIGIBILITY].value_counts().to_dict() == {config.ELIGIBLE: 6}
 
 
-# --- 12.2  a blank is never read as "no contraindication" [roadmap Stage 4] ------------------------
+# --- 12.2  no documented reason is ELIGIBLE, and the reason column is not read [DECISION 1a] -------
 
-def test_a_blank_reason_is_indeterminate_and_giving_it_a_reason_moves_it():
-    """Both halves, because either alone passes against a different broken classifier.
+def test_a_record_with_no_documented_reason_is_eligible():
+    # HAND-6 has flag 0 and no reason. Under DECISION 1 it was `indeterminate`; under DECISION 1a it
+    # is eligible, and [§3]'s amendment of 2026-08-13 is the protocol change that says so.
+    out, _ = classified()
+    assert eligibility_of(out, "HAND-6") == config.ELIGIBLE
 
-    The first half alone passes against a classifier that defaults everything to `indeterminate` and
-    ignores the reason column entirely; the second alone passes against one that reads a blank as
-    "no contraindication", which is the one thing [§3] forbids.
+
+def test_the_reason_column_feeds_no_class_at_all():
+    """The whole of DECISION 1a in one assertion: blank the reason column on EVERY record and the
+    classification does not move.
+
+    Under DECISION 1 this moved three records into `indeterminate`. It is the test that fails if an
+    implementer half-remembers "a blank is never read as no contraindication" and puts `.notna()`
+    back into the classifier — an edit that would silently relabel 43 of 126 records on v7.
     """
-    out, _ = classified()
-    assert eligibility_of(out, "HAND-6") == config.INDETERMINATE
-    assert eligibility_of(out, "HAND-6") != config.ELIGIBLE
-
-    with_reason, _ = classified(corrupt("contraindication_reason", "Recent surgery", where="HAND-6"))
-    assert eligibility_of(with_reason, "HAND-6") == config.ELIGIBLE
+    baseline, _ = classified()
+    blanked, _ = classified(hand_frame(contraindication_reason=None))
+    pd.testing.assert_series_equal(
+        baseline[config.ELIGIBILITY], blanked[config.ELIGIBILITY], check_dtype=False)
 
 
 # --- 12.3  E2, E3, E4 and E5 fire, naming their cases ----------------------------------------------
@@ -305,22 +314,24 @@ def test_without_the_assertion_and_without_the_fills_a_missing_flag_is_fabricate
     every downstream denominator reconciling.
     """
     df = _missing_flag_frame()
-    fabricated = _chain_without_the_fills(df)
+    fabricated = _chain_without_the_fill(df)
     assert fabricated[df["case_id"] == "HAND-6"].iloc[0] == config.INELIGIBLE
 
 
-def test_without_the_assertion_but_with_the_fills_it_is_indeterminate_and_therefore_retained():
+def test_without_the_assertion_but_with_the_fill_it_is_eligible_and_therefore_retained():
     # The square's third cell. Still fabricated, but retained rather than deleted — so the two cells
-    # fail differently, and the shipped code guards both ways: E1 raises, and the fills make the
+    # fail differently, and the shipped code guards both ways: E1 raises, and the fill makes the
     # `ineligible` outcome unreachable a second time, independently of whether E1 is ever weakened.
+    # Under DECISION 1 this cell read `indeterminate`; the fabricated label changed with the class
+    # set, the *shape* of the square did not.
     df = _missing_flag_frame()
-    with_fills = eligibility._classify(df)
-    assert with_fills[df["case_id"] == "HAND-6"].iloc[0] == config.INDETERMINATE
+    with_fill = eligibility._classify(df)
+    assert with_fill[df["case_id"] == "HAND-6"].iloc[0] == config.ELIGIBLE
 
 
 def test_only_the_record_with_the_missing_flag_differs_between_the_two_chains():
     df = _missing_flag_frame()
-    differ = eligibility._classify(df) != _chain_without_the_fills(df)
+    differ = eligibility._classify(df) != _chain_without_the_fill(df)
     assert list(df.loc[differ, "case_id"]) == ["HAND-6"]
 
 
@@ -394,8 +405,8 @@ def test_eligibility_py_writes_no_class_label():
 
 def test_the_label_scan_actually_fires():
     # A scan that silently matches nothing would otherwise pass as a green test.
-    snippet = f'out = pd.Series({config.INDETERMINATE!r}, index=df.index)\n'
-    assert _label_literals_in_source(snippet) == [(1, config.INDETERMINATE)]
+    snippet = f'out = pd.Series({config.ELIGIBLE!r}, index=df.index)\n'
+    assert _label_literals_in_source(snippet) == [(1, config.ELIGIBLE)]
 
 
 def test_eligibility_py_never_indexes_the_display_order():
@@ -413,7 +424,7 @@ def test_the_subscript_scan_actually_fires():
 # --- 12.7  `retained` is the declared set ---------------------------------------------------------
 
 def _mixed_frame() -> pd.DataFrame:
-    """All three classes present: HAND-3 flagged, HAND-6 blank, the rest eligible."""
+    """Both classes present: HAND-3 flagged and therefore ineligible, the other five eligible."""
     return classified(corrupt("ivt_contraindicated", 1, where="HAND-3"))[0]
 
 
@@ -422,19 +433,28 @@ def test_retained_equals_not_ineligible():
     pd.testing.assert_series_equal(
         eligibility.retained(df), df[config.ELIGIBILITY] != config.INELIGIBLE,
         check_names=False, check_dtype=False)
-    assert int(eligibility.retained(df).sum()) == 5      # the indeterminate record is retained
+    # Under DECISION 1a the two readings coincide, so this asserts an identity rather than a
+    # decision. It stays because it is the identity a third class would break, and because
+    # `retained` is what Stages 5, 12 and 13 all call.
+    assert int(eligibility.retained(df).sum()) == 5      # every record but the flagged one
 
 
 def test_retained_moves_under_a_patched_registry(monkeypatch):
-    """Where `!= ineligible` and `isin(RETAINED)` stop agreeing — which is what proves the predicate
-    is registry-driven rather than a coincidence of the current three classes."""
+    """What proves the predicate is registry-driven rather than a comparison that happens to agree.
+
+    Under DECISION 1 the patch was `(ELIGIBLE,)` — the point where `!= ineligible` and
+    `isin(RETAINED)` stopped agreeing. That IS the shipped tuple now, so the patch has to invert the
+    registry instead: retained becomes `(INELIGIBLE,)` and the predicate must follow it exactly.
+    """
     df = _mixed_frame()
-    monkeypatch.setattr(config, "ELIGIBILITY_RETAINED", (config.ELIGIBLE,))
+    monkeypatch.setattr(config, "ELIGIBILITY_RETAINED", (config.INELIGIBLE,))
     patched = eligibility.retained(df)
-    assert int(patched.sum()) == 4                       # the indeterminate record drops out
+    assert int(patched.sum()) == 1                       # only the flagged record, inverted
+    assert patched[df["case_id"] == "HAND-3"].iloc[0]
     assert not patched[df["case_id"] == "HAND-6"].iloc[0]
 
     monkeypatch.undo()
+    assert int(eligibility.retained(df).sum()) == 5
     assert eligibility.retained(df)[df["case_id"] == "HAND-6"].iloc[0]
 
 
@@ -496,15 +516,15 @@ def test_the_nine_rows_are_the_hand_frames_own_counts():
     # render three of six records.
     table = eligibility._crosstab(classified()[0])
     assert table[1:] == (
-        ("HUG",    config.TREATMENT_LABELS[0], "0", "0", "0", "0"),
-        ("HUG",    config.TREATMENT_LABELS[1], "2", "0", "0", "2"),
-        ("CHUV",   config.TREATMENT_LABELS[0], "0", "0", "0", "0"),
-        ("CHUV",   config.TREATMENT_LABELS[1], "1", "0", "0", "1"),
-        ("Lugano", config.TREATMENT_LABELS[0], "1", "1", "0", "2"),
-        ("Lugano", config.TREATMENT_LABELS[1], "0", "0", "0", "0"),
-        ("USZ",    config.TREATMENT_LABELS[0], "1", "0", "0", "1"),
-        ("USZ",    config.TREATMENT_LABELS[1], "0", "0", "0", "0"),
-        ("all",    "both",                     "5", "1", "0", "6"))
+        ("HUG",    config.TREATMENT_LABELS[0], "0", "0", "0"),
+        ("HUG",    config.TREATMENT_LABELS[1], "2", "0", "2"),
+        ("CHUV",   config.TREATMENT_LABELS[0], "0", "0", "0"),
+        ("CHUV",   config.TREATMENT_LABELS[1], "1", "0", "1"),
+        ("Lugano", config.TREATMENT_LABELS[0], "2", "0", "2"),
+        ("Lugano", config.TREATMENT_LABELS[1], "0", "0", "0"),
+        ("USZ",    config.TREATMENT_LABELS[0], "1", "0", "1"),
+        ("USZ",    config.TREATMENT_LABELS[1], "0", "0", "0"),
+        ("all",    "both",                     "6", "0", "6"))
 
 
 def test_the_bare_hand_frame_renders_three_of_six_and_refuses_to_produce_the_table():
@@ -587,12 +607,17 @@ def test_a_frame_with_no_ineligible_patient_does_not_raise():
     assert f"0 {config.INELIGIBLE}" in audit.entry("derivation", config.ELIGIBILITY).detail
 
 
-def test_the_detail_names_the_three_classes_and_the_counts():
+def test_the_detail_names_both_classes_the_counts_and_the_undocumented_group():
     _, audit = _pipeline()
     detail = audit.entry("derivation", config.ELIGIBILITY).detail
     for cls in CLASSES:
         assert cls in detail
-    assert 'A blank is never read as "no contraindication"' in detail
+    assert "DECISION 1a" in detail
+    assert "neither its text nor its presence" in detail
+    # The log must carry the group whose eligibility rests on the flag alone. It is the only thing
+    # the amendment leaves saying so at this stage [§3] amendment, 2026-08-13].
+    assert "carry no documented reason" in detail
+    assert config.TREATMENT_LABELS[0] in detail
 
 
 def test_it_renders_under_the_existing_derivations_heading():
@@ -695,16 +720,19 @@ def test_classify_runs_on_a_stage_2_frame_and_produces_the_identical_column():
 # preconditions, and leaving them there would mean the property was tested against one workbook and
 # not against the classifier.
 
+# Under DECISION 1a. The `indeterminate` column is gone and its counts have moved into `eligible`;
+# every `n` and the [§3] restriction-1 row are unchanged, which is the table-level evidence that the
+# amendment relabelled records rather than moving them.
 _V7_CROSSTAB: tuple[tuple[str, ...], ...] = (
-    ("HUG",    config.TREATMENT_LABELS[0], "11", "0",  "11", "22"),
-    ("HUG",    config.TREATMENT_LABELS[1], "30", "0",  "0",  "30"),
-    ("CHUV",   config.TREATMENT_LABELS[0], "0",  "14", "0",  "14"),
-    ("CHUV",   config.TREATMENT_LABELS[1], "7",  "0",  "0",  "7"),
-    ("Lugano", config.TREATMENT_LABELS[0], "0",  "29", "0",  "29"),
-    ("Lugano", config.TREATMENT_LABELS[1], "2",  "0",  "0",  "2"),
-    ("USZ",    config.TREATMENT_LABELS[0], "14", "0",  "8",  "22"),
-    ("USZ",    config.TREATMENT_LABELS[1], "0",  "0",  "0",  "0"),   # ← [§3] restriction 1
-    ("all",    "both",                     "64", "43", "19", "126"))
+    ("HUG",    config.TREATMENT_LABELS[0], "11",  "11", "22"),
+    ("HUG",    config.TREATMENT_LABELS[1], "30",  "0",  "30"),
+    ("CHUV",   config.TREATMENT_LABELS[0], "14",  "0",  "14"),
+    ("CHUV",   config.TREATMENT_LABELS[1], "7",   "0",  "7"),
+    ("Lugano", config.TREATMENT_LABELS[0], "29",  "0",  "29"),
+    ("Lugano", config.TREATMENT_LABELS[1], "2",   "0",  "2"),
+    ("USZ",    config.TREATMENT_LABELS[0], "14",  "8",  "22"),
+    ("USZ",    config.TREATMENT_LABELS[1], "0",   "0",  "0"),   # ← [§3] restriction 1
+    ("all",    "both",                     "107", "19", "126"))
 
 
 @pytest.fixture(scope="module")
@@ -746,10 +774,12 @@ def test_the_exposure_is_zero_one_and_never_missing(workbook):
 
 
 @DATA_GATED
-def test_the_classification_is_64_eligible_43_indeterminate_and_19_ineligible(workbook):
+def test_the_classification_is_107_eligible_and_19_ineligible(workbook):
     df, _ = workbook
     assert df[config.ELIGIBILITY].value_counts().to_dict() == {
-        config.ELIGIBLE: 64, config.INDETERMINATE: 43, config.INELIGIBLE: 19}
+        config.ELIGIBLE: 107, config.INELIGIBLE: 19}
+    # 107 = DECISION 1's 64 eligible + 43 indeterminate. The retained set is what the amendment
+    # leaves untouched, and it is the number Stage 5 restricts from.
     assert int(eligibility.retained(df).sum()) == 107
 
 
@@ -772,32 +802,39 @@ def test_all_nineteen_ineligible_records_carry_a_reason_and_no_treated_patient_d
 
 
 @DATA_GATED
-def test_dropping_the_revealed_fact_mask_moves_39_records(workbook):
-    """The one data-gated test that would catch a plausible-looking rewrite of §4.4's order.
+def test_the_deleted_revealed_fact_mask_would_change_nothing(workbook):
+    """DECISION 1a deletes the revealed-fact mask, and this is the test that it was safe to delete.
 
-    One line moves 39 of 126 records, and it moves them into the class [§3] retains anyway — so the
-    primary cohort would be unchanged in *size* and wrong in *composition*, with the indeterminate
-    count rising from 43 to 82 and the limitation paragraph [§3] demands describing a group twice its
-    true size.
+    Under DECISION 1 that one line moved 39 of 126 records. Under DECISION 1a `flag == 0` already
+    classifies all 39 treated patients as eligible, so putting the mask back changes nothing — and
+    **E3 is what keeps that true**. A workbook in which one treated patient carried the flag would
+    make the deletion consequential, and E3 raises on it rather than letting this test discover it.
     """
     df, _ = workbook
-    without = _chain_without_the_revealed_fact_mask(df)
-    moved = df[config.ELIGIBILITY] != without
-    assert int(moved.sum()) == 39
-    assert set(df.loc[moved, config.ELIGIBILITY]) == {config.ELIGIBLE}
-    assert set(without[moved]) == {config.INDETERMINATE}
-    assert int((without == config.INDETERMINATE).sum()) == 82
+    with_mask = _chain_with_the_deleted_revealed_fact_mask(df)
+    pd.testing.assert_series_equal(
+        df[config.ELIGIBILITY], with_mask, check_names=False, check_dtype=False)
+    assert int((df[config.TREATMENT] == 1).sum()) == 39
+    assert set(df.loc[df[config.TREATMENT] == 1, config.ELIGIBILITY]) == {config.ELIGIBLE}
 
 
 @DATA_GATED
-def test_all_43_indeterminate_records_are_controls(workbook):
-    # §13's first known gap, made countable: the group is centre-driven rather than patient-driven,
-    # and no analysis brackets it. Stage 4 does not make it smaller.
+def test_43_retained_controls_carry_no_documented_reason(workbook):
+    """[§3]'s amendment of 2026-08-13 makes this group indistinguishable in the frame, so it is
+    counted here and in Stage 5's cohort-flow table or nowhere.
+
+    It is the same 43 records DECISION 1 labelled `indeterminate`: every one a control, at the two
+    centres that never collected a reason. Their eligibility now rests on `ivt_contraindicated = 0`
+    alone, and nothing in the data can test whether that 0 was an assessment or an unfilled default.
+    """
     df, _ = workbook
-    indeterminate = df[config.ELIGIBILITY] == config.INDETERMINATE
-    assert int(indeterminate.sum()) == 43
-    assert set(df.loc[indeterminate, config.TREATMENT]) == {0}
-    assert set(df.loc[indeterminate, "center"]) == {"CHUV", "Lugano"}
+    undocumented = df["contraindication_reason"].isna() & (df[config.TREATMENT] == 0)
+    assert int(undocumented.sum()) == 43
+    assert set(df.loc[undocumented, "center"]) == {"CHUV", "Lugano"}
+    assert set(df.loc[undocumented, config.ELIGIBILITY]) == {config.ELIGIBLE}
+    # Over all arms it is 82, because no treated patient carries a reason either — which is why the
+    # count that matters is arm-restricted [Stage 5 §7.3].
+    assert int(df["contraindication_reason"].isna().sum()) == 82
 
 
 @DATA_GATED

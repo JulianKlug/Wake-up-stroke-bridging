@@ -341,18 +341,19 @@ def test_the_subgroup_registry_is_exactly_the_two_that_survived_the_amendment():
 # Nothing covered these constants before Stage 4: ELIGIBILITY_ORDER existed but was read only by 9.8's
 # immutability list, which asserts its type and not its contents.
 
-def test_the_order_is_exactly_the_three_declared_classes():
-    # Computed from the three, so this is the assertion that the computation was not rewritten as a
-    # literal — and that a fourth class cannot appear in the display order alone.
-    assert config.ELIGIBILITY_ORDER == (
-        config.ELIGIBLE, config.INDETERMINATE, config.INELIGIBLE)
-    assert len(set(config.ELIGIBILITY_ORDER)) == len(config.ELIGIBILITY_ORDER) == 3
+def test_the_order_is_exactly_the_two_declared_classes():
+    # Computed from the two, so this is the assertion that the computation was not rewritten as a
+    # literal — and that a third class cannot appear in the display order alone. DECISION 1a
+    # (2026-08-13) withdrew `indeterminate`; [§3]'s amendment of the same date is the protocol change.
+    assert config.ELIGIBILITY_ORDER == (config.ELIGIBLE, config.INELIGIBLE)
+    assert len(set(config.ELIGIBILITY_ORDER)) == len(config.ELIGIBILITY_ORDER) == 2
 
 
 def test_the_retained_set_partitions_the_order_with_ineligible_alone_outside_it():
-    # [§3]'s partition, and the whole of the `!= ineligible` versus `== eligible` reading: 43 of 126
-    # records sit in the difference, so a fourth class added to the retained tuple without a decision
-    # behind it must fail here rather than move a cohort quietly.
+    # [§3]'s partition. Under DECISION 1a nothing sits in the difference between `!= ineligible` and
+    # `== eligible` — the two coincide — so this now asserts the partition itself: a third class
+    # added to either tuple without a decision behind it must fail here rather than move a cohort
+    # quietly. It is the seam a [§13] arm over the undocumented controls would come back through.
     assert set(config.ELIGIBILITY_RETAINED) < set(config.ELIGIBILITY_ORDER)
     assert set(config.ELIGIBILITY_ORDER) - set(config.ELIGIBILITY_RETAINED) == {config.INELIGIBLE}
 

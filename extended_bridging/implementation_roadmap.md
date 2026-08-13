@@ -16,9 +16,11 @@ These instantiate the plan; the code cannot be written against guesses.
 
 - [x] Which centres contributed zero bridging patients [§3]. Determines the primary cohort.
 - [x] Whether a contraindication-reason field exists, and the full set of distinct values it takes
-      [§3, §11]. Determines whether three-category eligibility is possible at all.
-- [x] Per-centre completeness of that field. Any centre where it was never collected produces the
-      *indeterminate* group.
+      [§3, §11]. Determined that three-category eligibility was possible; DECISION 1a has since
+      withdrawn it, and the field is now read by nothing.
+- [x] Per-centre completeness of that field. Under DECISION 1 any centre where it was never collected
+      produced the *indeterminate* group; under DECISION 1a it identifies the 43 retained controls
+      whose eligibility rests on the flag alone, which Stage 5's cohort-flow table counts.
 - [x] Event counts for each binary outcome, to know which fall under the <10-event rule [§8].
 - [x] Treated-arm size, to confirm the ~3.5-per-parameter degrees-of-freedom budget in [§6].
 
@@ -43,6 +45,16 @@ the note carries the consequences in full.
    never missing, and that **no treated patient carries a 1** — the case the revealed-fact rule would
    otherwise silently absorb. And the free-text normalisation problem disappears: the `Clnician` typo
    and the parenthetical annotations can no longer break anything.
+
+   **Amended by DECISION 1a (PI, 2026-08-13): the reason column contributes no bit either, and
+   eligibility is two-valued.** Flag = 1 → ineligible; flag = 0 → eligible, including every patient
+   whose reason was never documented. `Contraindications_to_IVT` is read by nothing. [§3]'s amendment
+   of the same date is the protocol record and `../out/stage0_data_inventory.md` carries DECISION 1a
+   in full. It **does not change the population** — the 43 `indeterminate` records were already
+   retained, so the primary cohort is the same 93 patients — and it makes the no-treated-patient
+   assertion load-bearing rather than belt-and-braces, because the revealed-fact rule it guarded is
+   deleted. The substantive calls in the two bullets above stand: they follow from taking the flag as
+   the classifier, which DECISION 1a does more strictly than DECISION 1 did.
 
 2. **The 90-day mRS is ground truth for vital status; death is `mRS == 6`.** `Deathat90days` and
    `mRS56at90days` are dropped in the Stage 1 mapping rather than left available. Death in the primary
@@ -115,43 +127,73 @@ ordinal source, and that the three onset levels partition the cohort.
 
 **Spec:** `specs/stage4_eligibility_classification.md`.
 
-**Build.** A function mapping each patient to `ineligible` / `eligible` / `indeterminate`, under
-DECISION 1: treated → eligible by revealed fact; `ivt_contraindicated` = 1 → ineligible; flag = 0
-with a reason recorded → eligible; flag = 0 with none recorded → indeterminate. The free text of
-`Contraindications_to_IVT` contributes one bit — whether a reason was recorded — and is never read.
+**Build.** A function mapping each patient to `eligible` / `ineligible`, under **DECISION 1a**:
+`ivt_contraindicated` = 1 → ineligible; flag = 0 → eligible, including every patient whose
+contraindication reason was never documented. `Contraindications_to_IVT` is read by nothing — neither
+its text nor its presence.
 
-**Assert the flag, not the text** [DECISION 1]. No string is matched, so there is no set of
-recognised reasons to check a new value against, and the earlier "every observed reason string is
-classified" requirement has nothing to range over. Assert instead that `ivt_contraindicated` is 0/1
-and never missing, and that **no treated patient carries a 1** — the case the revealed-fact rule
-would otherwise silently absorb. This also retires the free-text normalisation problem: the Stage 0
-note records a `Clnician` typo and parenthetical annotations that would have made an exact-string
-classifier raise on four of five spellings of one reason.
+*Built and landed under DECISION 1, which made eligibility three-valued; the module and its tests were
+amended on 2026-08-13. The spec's §21 records what moved.*
 
-**Retained means not ineligible** — one predicate, decided by the PI on 2026-08-10. [§3] retains the
-indeterminate group and [§14a]'s "all eligible patients" draws from the same rule, so only
-`ineligible` patients are ever dropped and no stage gets to pick. 43 of 126 records turn on it — 80%
-of the primary cohort's control arm — so two stages resolving it differently would not look like a
-bug in either. The code offers exactly one predicate, `eligibility.retained()`, over one declared
-tuple; [§14b] is the sole reader of the three-level column instead.
+**Assert the flag, not the text** [DECISION 1a]. No string is matched and no presence is tested, so
+there is no set of recognised reasons to check a new value against. Assert instead that
+`ivt_contraindicated` is 0/1 and never missing, and that **no treated patient carries a 1**. That last
+assertion is **load-bearing** under DECISION 1a: it is what makes the deleted revealed-fact rule
+redundant, so without it a treated-and-flagged record is classified ineligible and silently leaves the
+cohort. The free-text normalisation problem is retired twice over — the Stage 0 note records a
+`Clnician` typo and parenthetical annotations that would have made an exact-string classifier raise on
+four of five spellings of one reason.
+
+**Retained means not ineligible, and under two classes that is the same as `== eligible`.** The PI's
+predicate decision of 2026-08-10 chose the same population DECISION 1a reaches directly. The code
+still offers exactly one predicate, `eligibility.retained()`, over one declared tuple — not because
+the two readings can diverge today, but because that tuple is the one seam a third class would come
+back through, and a [§13] arm over the undocumented controls would reopen it.
 
 **Accept when.** A cross-tabulation of eligibility by centre and arm is produced, every declared
-centre × arm cell rendered whether or not the data fills it; a test confirms no blank is ever read as
-"no contraindication"; and the retained predicate is asserted to be `!= ineligible` rather than
-`== eligible`, including under a patched registry, so the reading above is enforced rather than
-merely written down.
+centre × arm cell rendered whether or not the data fills it; a test confirms that **blanking the
+reason column on every record leaves the classification unmoved**, which is what catches a partial
+revert of DECISION 1a; and the retained predicate is asserted to follow a patched registry rather than
+a comparison, so it stays registry-driven rather than a coincidence of the current two classes.
 
 ## Stage 5 — Cohort construction [§2, §3]
 
-**Build.** Two restrictions applied in order, each recording what it removed:
-1. Drop centres with zero treated patients.
-2. Drop ineligible patients.
+**Spec:** `specs/stage5_cohort_construction.md`.
 
-Patients of indeterminate eligibility are retained [§3]. Emit a cohort-flow table that reports their
-count separately, so the size of the retained-but-undocumented group is visible.
+**Build.** Two restrictions applied in order, each recording what it removed **by naming the cases**:
+1. Drop centres with zero treated patients. The predicate is **computed from the frame**, never
+   declared as a list of centre names — a centre's treatment availability is a property of the data.
+2. Drop ineligible patients, through `eligibility.retained` and never through a comparison of this
+   stage's own.
 
-**Accept when.** Every centre in the resulting cohort contains both arms; no ineligible patient
-remains; the cohort-flow table shows the indeterminate count as its own line.
+**Written against DECISION 1a (PI, 2026-08-13): eligibility is two classes, from
+`ivt_contraindicated` alone, and a patient whose reason was never documented is `eligible`.** That
+amendment **landed the same day**, across nine files; `specs/stage5_cohort_construction.md` §20 is
+the record of where each item went. It does not change the cohort: the same 93 patients either way,
+verified identifier for identifier.
+
+Emit a cohort-flow table with a line reporting the retained **control-arm** patients who carry no
+documented contraindication reason — the 43 whose eligibility rests on the flag alone — so the group
+DECISION 1a makes indistinguishable stays countable.
+
+Then call `derive_cohort` — **here and nowhere else** — so the [§13] median is frozen on the cohort.
+
+**Accept when.** No ineligible patient remains; the cohort-flow table carries the no-reason-on-file
+count as its own line, arm-restricted; and:
+
+- **Every centre in the resulting cohort contains both arms, enforced as a runtime raise rather than
+  confirmed by a test.** It can only fail through restriction 2 removing a centre's whole control arm
+  — the mirror of the [§3] restriction-1 violation, in the direction [§3] does not name. It is
+  unreachable on v7, so a test-time reading would ship an unenforced criterion. Dropping such a centre
+  would extend [§3] and keeping it puts a structurally non-positive stratum in the propensity model:
+  raise, and amend [§3] with the PI.
+- **`derive_cohort` is called by the cohort builder, after both restrictions, and the builder is its
+  only caller.** A call placed early produces a full, plausible `core_above_median` describing a
+  different subgroup, with nothing failing [Stage 3 §6.4]. Enforced on the **row count**, not only on
+  the median: the entry's `records` cell must equal the cohort's size. The median is 6.0 mL over the
+  full frame but 5.0 over *both* the post-restriction-1 frame and the cohort, so a call misplaced
+  between the two restrictions is invisible to a median assertion on this workbook
+  [Stage 5 §4.5, §21 R1].
 
 ## Stage 6 — Propensity score and weights [§7]
 

@@ -145,3 +145,46 @@ is robust either way.
 sign-off rather than a unilateral edit: **§4.2's mechanism sentence and DoD 9 both go, replaced by a
 pointer to §3.1's third fact and to the test named above.** Nothing else in the spec moves — §3.1,
 §18, §12.3 and the shipped code are all already correct.
+
+---
+
+## Commit a `tests/fixture_cohort.xlsx` that reads into a both-armed cohort
+
+**Surfaced by:** the engineering review of `specs/stage5_cohort_construction.md`, 2026-08-13 (§12.0
+and §13 there).
+
+**What.** A second committed fixture workbook whose read produces a cohort with both arms at at least
+one centre, plus the **generator script** that builds it — `tests/fixture_schema.xlsx` has none, which
+is why extending it was declined. It gets its own `data.Source` declaration and its own spec section
+when it arrives.
+
+**Why.** Neither existing test input can reach the end of Stage 5, and this is measured rather than
+anticipated:
+
+```
+                        records   after restriction 1   per retained centre (treated, control)
+  fixture_schema.xlsx      2        keeps HUG only      HUG (1, 0)   → Stage 5's P2 RAISES
+  hand_frame()             6        keeps HUG, CHUV     HUG (2, 0)   → P2 RAISES
+                                                        CHUV (1, 0)
+```
+
+Both were built for stages that never removed a row, so both collapse to a cohort with no control arm
+and Stage 5's both-arms postcondition stops them. That is the guard working, not a defect. Stage 5
+works around it with `test_cohort.cohort_frame()` — a nine-record **frame** built in Python — which is
+enough for every test Stage 5 writes. It is not enough for a test that needs a **file**: Stages 6-13
+fit models, resample, and will want the whole pipeline runnable from a checkout with no `data/`
+directory, which means from a `data.Source`.
+
+**Pros.** Makes the full pipeline reproducible end to end with no patient data present — useful for
+CI, for a fresh machine, and for anyone reproducing the analysis. A generator script makes the fixture
+reviewable in a diff, which the current binary is not. Removes the need for each later stage to
+rediscover why the schema fixture stops at Stage 5.
+
+**Cons.** A new binary artifact plus a new `data.Source`, and `test_data.py` pins `data.SOURCES`
+against a literal of exactly two (`test_sources_are_exactly_the_workbook_and_the_fixture`), so it is a
+Stage 1/Stage 2 amendment as well as a new file. No test written before Stage 6 needs it.
+
+**Depends on / blocked by.** Nothing technical. Build it when a stage first needs a `data.Source`
+rather than a DataFrame — do **not** build it speculatively with Stage 5, whose acceptance tests are
+all frame-driven. When it is built, give it a control at a treating centre (the property `cohort_frame`
+adds as `COHORT-1`) or it will hit P2 exactly as the schema fixture does.
