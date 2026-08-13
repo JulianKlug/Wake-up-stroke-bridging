@@ -36,12 +36,15 @@ decisions recorded in ``../out/stage0_data_inventory.md``. The specification for
     │            ├─ _assert_schema(df, source) A1…A9 + A4b, every          │
     │            │            ▼                violation collected         │
     │            └─ _missingness(df, audit)    structural / not recorded / │
-    │                         ▼                missing / complete          │
+    │                         ▼                missing / complete, through │
+    │                                          absence_by_column, which    │
+    │                                          Stage 3 calls again on its  │
+    │                                          derived columns             │
     └──────────────────────────────────────────────────────────────────────┘
          │
          ▼
     (df, Audit)          load() writes NOTHING. The caller decides:
-         │                   audit.write()  →  out/logs/stage2_audit_<label>.md
+         │                   audit.write()  →  out/logs/audit_<label>.md
          │                                     (gitignored: names patients)
          ├──────────────┬──────────────┬──────────────┐
          ▼              ▼              ▼              ▼
@@ -123,17 +126,27 @@ SOURCES: Final[tuple[Source, ...]] = (WORKBOOK, FIXTURE)
 #   - identifiers sorted, not in frame order — which is what makes the log invariant to input row
 #     order, and so what lets the shuffle test detect a correction written by row position
 
+# In pipeline order, which is also the order the document reads in: what was read, what the contract
+# did, what was corrected, what was observed, what was derived, what is structurally absent, what is
+# missing. `derivation` is Stage 3's and is inserted here rather than appended, because appending it
+# would print the derivations *after* the missingness table that describes them.
+#
+# A test that treats two of these headings as adjacent takes the neighbour from this tuple, never by
+# naming it: a kind inserted between them must be a one-line change here.
 KINDS: Final[tuple[str, ...]] = (
-    "provenance", "contract", "correction", "observation", "structural", "missingness")
+    "provenance", "contract", "correction", "observation",
+    "derivation",
+    "structural", "missingness")
 
-# The six section headings of the rendered document, in KINDS order. A section with no entries
-# still prints its heading and the single line `_none_`, so a clean workbook's log reads "nothing
-# was observed" rather than looking truncated, and the skeleton is fixed for the eye to scan.
+# The section headings of the rendered document, in KINDS order. A section with no entries still
+# prints its heading and the single line `_none_`, so a clean workbook's log reads "nothing was
+# observed" rather than looking truncated, and the skeleton is fixed for the eye to scan.
 _HEADINGS: Final[dict[str, str]] = {
     "provenance":  "Provenance",
     "contract":    "Contract",
     "correction":  "Corrections",
     "observation": "Observations",
+    "derivation":  "Derivations",
     "structural":  "Structural non-applicability",
     "missingness": "Missingness and denominators",
 }
@@ -141,8 +154,10 @@ _HEADINGS: Final[dict[str, str]] = {
 # Roadmap Stage 2 demands the names-its-cases rule of corrections. `observation` is held to it too:
 # the one observation this stage defines is a standing query with the data owner (§7.3), and a query
 # that names no patient cannot be answered, which makes it exactly as useless as an unattributed
-# correction. The other four kinds legitimately name none — provenance, contract and missingness
-# describe columns rather than patients, and structural describes a whole arm.
+# correction. The other five kinds legitimately name none — provenance, contract, derivation and
+# missingness describe columns rather than patients, and structural describes a whole arm. Stage 3
+# leaves this unchanged for that reason: a derivation describes a column. The one place it names
+# patients is its both-onset-flags assertion, which raises, so such a frame never reaches a log.
 _MUST_NAME_CASES: Final[frozenset[str]] = frozenset({"correction", "observation"})
 
 
@@ -196,8 +211,14 @@ def _md_table(rows: Sequence[Sequence[str]]) -> str:
 
 
 def _audit_path(source: Source) -> Path:
-    """Derived from the label, so the fixture's log can never overwrite the workbook's."""
-    return C.LOGS / f"stage2_audit_{source.label}.md"
+    """Derived from the label, so the fixture's log can never overwrite the workbook's.
+
+    Not `stage2_audit_`: the Audit this module creates is threaded through the whole pipeline, and
+    Stage 3 appends its derivations to the same object rather than opening a second one. The shape
+    and the label are unchanged, so §9.5's guarantee — two declared sources, two distinct paths —
+    holds exactly as before.
+    """
+    return C.LOGS / f"audit_{source.label}.md"
 
 
 class Audit:
@@ -235,12 +256,12 @@ class Audit:
         version = (f"`{self.source.sha256[:8]}…{self.source.sha256[-7:]}`"
                    if self.source.sha256 is not None else f"not pinned ({self.source.label})")
         return [
-            "# Stage 2 — data audit",
+            "# Analysis audit",
             "",
             f"Source: `{self.source.path.name}`, sheet `{C.SHEET}`",
             f"Version: {version}",
             f"Read: {self._read_line()}",
-            "Generated by `extended_bridging/data.py`. Regenerate rather than edit.",
+            "Generated by the `extended_bridging` pipeline. Regenerate rather than edit.",
         ]
 
     def _read_line(self) -> str:
@@ -437,8 +458,12 @@ def _correct(df: pd.DataFrame, audit: Audit) -> pd.DataFrame:
     # false, not missing, so those records fall out without a guard. That is the behaviour we want,
     # and it is what `n` below means — a reader who assumed missing rows counted as disagreements
     # would read v7's n = 1 as evidence of a bug rather than as the answer.
-    threshold = C.TARGET_MISMATCH["min_penumbra_ml"]
-    crossing = disagree & ((df["penumbra_ml"] > threshold) != (computed > threshold))
+    #
+    # This entry used to also count the records whose recomputed penumbra crossed the volume
+    # threshold of the third [§13] subgroup, and report that the record's membership of it changed.
+    # The [§13] amendment of 2026-08-10 withdrew that subgroup, so the sentence reported a
+    # consequence that no longer exists. The recomputation itself is untouched: it rests on [§6]
+    # defining penumbra as tmax6_ml - core_ml, which no subgroup was ever part of.
 
     # Applied to *every* record, not only the disagreeing ones. A patch of the disagreeing rows
     # leaves the stored column authoritative wherever it happens to agree, and a second copy-paste
@@ -455,9 +480,6 @@ def _correct(df: pd.DataFrame, audit: Audit) -> pd.DataFrame:
         f"{_fmt(_TOL)}.")
     table = None
     if n:
-        detail += (
-            f" {int(crossing.sum())} record(s) cross TARGET_MISMATCH['min_penumbra_ml'] = "
-            f"{_fmt(threshold)}, so [§13] target-mismatch membership changes for them.")
         # The per-record values go in the table, not in the sentence: a sentence naming "stored X vs
         # recomputed Y" reads correctly for the one record v7 has and becomes ambiguous for the
         # second one a corrected workbook brings.
@@ -622,13 +644,21 @@ def _assert_schema(df: pd.DataFrame, source: Source) -> None:
 # control arm.
 
 
-def _missingness(df: pd.DataFrame, audit: Audit) -> None:
-    """One structural entry per declared column, then one row per analysis column."""
-    for column, reason in C.STRUCTURALLY_NON_APPLICABLE.items():
-        n = int(df[column].isna().sum())
-        audit.record("structural", column, n,
-                     f"absent on {n} of {len(df)} records — structural, not data loss: {reason}")
+def absence_by_column(df: pd.DataFrame, audit: Audit, columns: Sequence[str],
+                      step: str, detail: str) -> None:
+    """One `missingness` entry, with one table row per name in `columns`, in that order.
 
+    Public because Stage 3 calls it too, on its derived columns, and the four-way classification is
+    a rule about *columns* rather than about a stage. A second implementation over there would drift
+    on the branch that matters — `structural` versus `missing` — which is the exact misreading §10.2
+    exists to prevent. So there is one classifier, called twice with different column lists.
+
+    `columns` is a sequence and is never a set: the log's row order is the caller's, and Stage 2
+    passes `sorted(ANALYSIS_NAMES)` because iterating a frozenset renders a different table in every
+    interpreter. Each caller supplies its own `detail`, because what the table is *of* differs — the
+    contract's columns for Stage 2, the derived ones for Stage 3 — and any label a column carries
+    from STRUCTURALLY_NON_APPLICABLE or INFORMATIVE_ABSENCE is appended to it here.
+    """
     # The four centre columns come from CENTER_ORDER, never from the data and never from a literal.
     # From the data, a run in which one centre contributes no rows — the fixture, every future
     # subset, Stage 5's restricted cohort — silently renders a narrower table that still reconciles,
@@ -637,7 +667,7 @@ def _missingness(df: pd.DataFrame, audit: Audit) -> None:
     header = ("column", "kind", "n", "n_absent", "pct", *C.CENTER_ORDER)
     rows: list[tuple[str, ...]] = []
     labelled: list[str] = []
-    for column in sorted(C.ANALYSIS_NAMES):
+    for column in columns:
         absent = df[column].isna()
         n_absent = int(absent.sum())
         if column in C.STRUCTURALLY_NON_APPLICABLE:
@@ -653,12 +683,26 @@ def _missingness(df: pd.DataFrame, audit: Audit) -> None:
             _fmt(100 * n_absent / len(df)) if len(df) else _fmt(0),
             *(str(int((absent & (df["center"] == centre)).sum())) for centre in C.CENTER_ORDER)))
 
-    detail = "\n".join([
-        "one row per analysis column; kind is structural, not recorded, missing or complete. "
-        "Nothing here is imputed.",
-        *labelled])
-    audit.record("missingness", "absence_by_column", len(df), detail,
+    audit.record("missingness", step, len(df), "\n".join([detail, *labelled]),
                  table=(header, *rows))
+
+
+def _missingness(df: pd.DataFrame, audit: Audit) -> None:
+    """One structural entry per declared column, then the absence table over the analysis columns.
+
+    The structural loop stays here rather than moving into `absence_by_column`: it ranges over
+    STRUCTURALLY_NON_APPLICABLE, which is a declaration about the columns the *contract* delivers,
+    and Stage 3's derived columns are all inherited absence with nothing structural among them.
+    """
+    for column, reason in C.STRUCTURALLY_NON_APPLICABLE.items():
+        n = int(df[column].isna().sum())
+        audit.record("structural", column, n,
+                     f"absent on {n} of {len(df)} records — structural, not data loss: {reason}")
+
+    absence_by_column(
+        df, audit, sorted(C.ANALYSIS_NAMES), "absence_by_column",
+        "one row per analysis column; kind is structural, not recorded, missing or complete. "
+        "Nothing here is imputed.")
 
 
 # --- the pipeline -------------------------------------------------------------------------------
@@ -684,7 +728,7 @@ def load(source: Source = WORKBOOK) -> tuple[pd.DataFrame, Audit]:
     Writes nothing. The caller decides whether the log is written, and where:
 
         df, audit = load()
-        audit.write()          # → out/logs/stage2_audit_<label>.md, gitignored
+        audit.write()          # → out/logs/audit_<label>.md, gitignored
 
     Raises DataVersionError if the file's bytes are not the pinned ones, and SchemaError if its
     columns, row count or values do not meet the contract.

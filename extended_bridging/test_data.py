@@ -47,8 +47,9 @@ ANALYSIS_DTYPES = {c.name: c.dtype for c in config.COLUMN_CONTRACT.values()
 # A1-A9 — so any SchemaError a test sees comes from the corruption that test applied.
 
 _HAND_RECORDS: list[dict[str, object]] = [
-    # the copy-paste: the core volume sits in the penumbra cell, and 109 - 13 = 96 crosses
-    # TARGET_MISMATCH["min_penumbra_ml"], so the correction moves this record between subgroups
+    # the copy-paste: the core volume sits in the penumbra cell, so the stored 13 is 83 mL short of
+    # the 109 - 13 = 96 that [§6]'s definition gives. The gap is deliberately large — the correction
+    # has to be visible in the balance table, not lost inside _TOL
     dict(case_id="HAND-1", center=CENTER_CODES[0], ivt=1, onset_to_ivt_min=180.0,
          onset_to_groin_min=250.0, core_ml=13.0, tmax6_ml=109.0, penumbra_ml=13.0,
          contraindication_reason=None),
@@ -356,6 +357,18 @@ def test_every_kind_has_a_section_heading():
     assert tuple(data._HEADINGS) == data.KINDS
 
 
+def test_the_headings_are_the_declared_seven_in_pipeline_order():
+    # Pinned against the literal, like SOURCES and _MUST_NAME_CASES: `derivation` is Stage 3's and
+    # sits between `observation` and `structural`, because a document that printed the derivations
+    # after the missingness table describing them would read backwards.
+    assert data.KINDS == (
+        "provenance", "contract", "correction", "observation",
+        "derivation", "structural", "missingness")
+    assert list(data._HEADINGS.values()) == [
+        "Provenance", "Contract", "Corrections", "Observations",
+        "Derivations", "Structural non-applicability", "Missingness and denominators"]
+
+
 # --- 12.8  byte-identical reproduction -------------------------------------------------------------
 
 def test_two_loads_render_identical_markdown():
@@ -422,7 +435,9 @@ def test_write_creates_the_log_directory_and_returns_the_path(tmp_path, monkeypa
     monkeypatch.setattr(config, "LOGS", logs)
     _, audit = data.load(data.FIXTURE)
     written = audit.write()
-    assert written == logs / f"stage2_audit_{data.FIXTURE.label}.md"
+    # `audit_`, not `stage2_audit_`: the Audit spans the pipeline, and Stage 3 appends to this same
+    # object rather than opening a second log.
+    assert written == logs / f"audit_{data.FIXTURE.label}.md"
     assert written.read_text(encoding="utf-8") == audit.to_markdown()
 
 
@@ -709,12 +724,21 @@ def test_penumbra_is_recorded_even_when_nothing_disagreed():
     assert entry is not None and entry.n == 0 and entry.case_ids == ()
 
 
-def test_all_six_headings_appear_and_an_empty_section_says_none():
+def test_every_heading_appears_and_an_empty_section_says_none():
+    """The empty section is `observation`, and its *successor* comes from KINDS rather than a name.
+
+    This test used to split on `structural` by name, which made it the one test in the repository
+    that any new `kind` breaks: Stage 3 inserted `derivation` between the two, so the slice became
+    `_none_ ## Derivations _none_` and the assertion failed. Re-pointing it at `derivation` would
+    have been the same defect one position along — it rots on the next kind inserted between them.
+    Taking the neighbour from KINDS is the repair that cannot recur.
+    """
     rendered = data.load(data.FIXTURE)[1].to_markdown()
     for kind in data.KINDS:
         assert f"## {data._HEADINGS[kind]}" in rendered
+    successor = data.KINDS[data.KINDS.index("observation") + 1]
     observations = rendered.split(f"## {data._HEADINGS['observation']}")[1]
-    assert observations.split(f"## {data._HEADINGS['structural']}")[0].strip() == "_none_"
+    assert observations.split(f"## {data._HEADINGS[successor]}")[0].strip() == "_none_"
 
 
 def test_the_header_agrees_with_the_entries_it_is_rendered_from():

@@ -248,7 +248,92 @@ def test_outcome_rule_round_trips():
 
 @pytest.mark.parametrize("covariate", config.PS_COVARIATES)
 def test_every_ps_covariate_resolves(covariate):
+    # Weaker than it was, and deliberately not repaired here. DERIVED_NAMES used to be the single
+    # name `onset_type`; Stage 3 widened it to carry the two [§13] subgroup keys, so a subgroup
+    # wrongly added to PS_COVARIATES would now pass this test. What restores the guarantee is
+    # `test_no_subgroup_is_a_covariate` below — not a second opinion on the same property.
     assert covariate in config.ANALYSIS_NAMES or covariate in config.DERIVED_NAMES
+
+
+# --- 9.3b  the Stage 3 registries [Stage 3 §12.13] --------------------------------------------------
+
+def test_the_onset_flags_and_the_reference_level_are_exactly_the_declared_levels():
+    # The one assertion that stops a level being renamed in ONSET_TYPE_FROM_FLAG alone. Stage 3
+    # writes no level name at all, so if these two declarations drift, the factor silently gains a
+    # level that FACTOR_LEVELS does not know about and Stage 6's categorical drops to <NA>.
+    from_flags = tuple(level for _, level in config.ONSET_TYPE_FROM_FLAG)
+    assert set(from_flags) | {config.REFERENCE_LEVELS["onset_type"]} == set(
+        config.FACTOR_LEVELS["onset_type"])
+    assert len(from_flags) == len(set(from_flags)) == len(config.FACTOR_LEVELS["onset_type"]) - 1
+
+
+@pytest.mark.parametrize("flag, _level", config.ONSET_TYPE_FROM_FLAG)
+def test_every_onset_flag_is_a_mapped_analysis_name(flag, _level):
+    assert flag in config.ANALYSIS_NAMES
+    assert flag in config.BINARY_COLUMNS      # so Stage 2's A5 covers its domain
+
+
+def test_the_reference_level_is_not_produced_by_a_flag():
+    # The baseline is what a record with no positive flag gets. A flag producing it too would make
+    # the loop's last entry decide, silently.
+    assert config.REFERENCE_LEVELS["onset_type"] not in {
+        level for _, level in config.ONSET_TYPE_FROM_FLAG}
+
+
+def test_derived_names_cannot_shadow_an_analysis_column():
+    assert set(config.DERIVED_NAMES) & config.ANALYSIS_NAMES == set()
+    assert len(config.DERIVED_NAMES) == len(set(config.DERIVED_NAMES))
+
+
+def test_the_derived_dichotomies_are_exactly_the_outcomes_with_a_source():
+    assert config.DERIVED_DICHOTOMIES == tuple(
+        key for key, o in config.OUTCOMES.items() if o.source is not None)
+    assert set(config.DERIVED_DICHOTOMIES) == {
+        "mrs_0_2_90d", "mrs_0_1_90d", "death_90d", "mrs_5_6_90d"}
+
+
+def test_the_cohort_dependent_subgroups_are_declared_subgroups():
+    assert set(config.COHORT_DEPENDENT_SUBGROUPS) <= set(config.SUBGROUPS)
+
+
+def test_row_wise_derived_is_derived_names_minus_the_cohort_dependent_ones():
+    assert set(config.ROW_WISE_DERIVED) == set(config.DERIVED_NAMES) - set(
+        config.COHORT_DEPENDENT_SUBGROUPS)
+    assert config.ROW_WISE_DERIVED == tuple(
+        n for n in config.DERIVED_NAMES if n in config.ROW_WISE_DERIVED)      # order preserved
+
+
+def test_every_subgroup_is_a_derived_name():
+    assert set(config.SUBGROUPS) <= set(config.DERIVED_NAMES)
+
+
+@pytest.mark.parametrize("subgroup", sorted(config.SUBGROUPS))
+def test_no_subgroup_is_a_covariate(subgroup):
+    # A subgroup is a variable the analysis is *split* on, never one it adjusts for. Adjusting for
+    # it inside its own subgroup analysis conditions on the split. This is also what restores the
+    # guarantee 9.3 gave before DERIVED_NAMES widened to carry these two keys.
+    everywhere = (
+        set(config.PS_COVARIATES) | set(config.PS_COVARIATES_FULL)
+        | set(config.STANDARDISATION_COVARIATES) | set(config.BALANCE_ONLY)
+        | {c for override in config.OUTCOME_MODEL_OVERRIDES.values() for c in override})
+    assert subgroup not in everywhere
+
+
+@pytest.mark.parametrize("subgroup", sorted(config.SUBGROUPS))
+def test_every_subgroup_carries_a_substantial_description(subgroup):
+    assert len(config.SUBGROUPS[subgroup]) >= 20
+
+
+def test_no_subgroup_is_post_time_zero():
+    # Both are baseline attributes. A post-time-zero subgroup would condition on the future.
+    assert set(config.SUBGROUPS) & config.POST_TIME_ZERO == set()
+
+
+def test_the_subgroup_registry_is_exactly_the_two_that_survived_the_amendment():
+    # Asserted against the literal, in the way this file pins OUTCOME_MODEL_OVERRIDES and data.py
+    # pins SOURCES: the [§13] amendment of 2026-08-10 withdrew the third subgroup, and a third key
+    # reappearing here is a statistical decision that must fail a test rather than pass quietly.
+    assert set(config.SUBGROUPS) == {"unknown_onset", "core_above_median"}
 
 
 # --- 9.4  no raw names outside config.py ---------------------------------------------------------
@@ -375,7 +460,12 @@ def test_the_full_covariate_set_is_a_prefix_plus_exactly_four():
 @pytest.mark.parametrize("name", [
     "PS_COVARIATES", "BALANCE_ONLY", "CENTER_ORDER", "ELIGIBILITY_ORDER", "MRS_THRESHOLDS",
     "PS_COVARIATES_FULL", "STANDARDISATION_COVARIATES", "BINARY_COLUMNS", "DERIVED_NAMES",
-    "CATEGORICAL", "EXPECTED_NEVER_IVT", "NA_VALUES"])
+    "CATEGORICAL", "EXPECTED_NEVER_IVT", "NA_VALUES",
+    # Stage 3's four. This list is explicit rather than discovered, so a new declared sequence is
+    # outside it until it is added by hand — which is the point, but it means adding it is part of
+    # declaring one.
+    "ONSET_TYPE_FROM_FLAG", "COHORT_DEPENDENT_SUBGROUPS", "DERIVED_DICHOTOMIES",
+    "ROW_WISE_DERIVED"])
 def test_declared_sequences_are_tuples(name):
     # A later module doing `covs = config.PS_COVARIATES; covs.append(...)` would rewrite the
     # specification for every importer thereafter, including all 2000 refits in Stage 10, and no
@@ -518,7 +608,11 @@ _RESOLVABLE = config.ANALYSIS_NAMES | set(config.DERIVED_NAMES) | set(config.OUT
 @pytest.mark.parametrize("name", sorted(
     set(config.PS_COVARIATES_FULL) | set(config.BALANCE_ONLY) | set(config.BINARY_COLUMNS)
     | set(config.PLAUSIBLE_RANGES) | set(config.STRUCTURALLY_NON_APPLICABLE)
-    | set(config.INFORMATIVE_ABSENCE) | set(config.POST_TIME_ZERO)))
+    | set(config.INFORMATIVE_ABSENCE) | set(config.POST_TIME_ZERO)
+    # Stage 3's four. Like 9.8's list this union is explicit, so a typo in a new column-keyed
+    # constant would otherwise surface as a KeyError inside derive() — or, worse, inside Stage 6.
+    | set(config.SUBGROUPS) | set(config.COHORT_DEPENDENT_SUBGROUPS)
+    | set(config.DERIVED_DICHOTOMIES) | set(config.ROW_WISE_DERIVED)))
 def test_every_named_variable_can_be_produced(name):
     # A constant naming a variable no stage can produce is a typo that would otherwise surface as a
     # KeyError deep in Stage 6 or Stage 9, hours into a bootstrap.

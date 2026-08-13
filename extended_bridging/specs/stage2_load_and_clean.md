@@ -65,7 +65,7 @@ except by recomputing one that [§6] already defines as a function of two others
        │
        ▼
   (df, Audit)          load() writes NOTHING. The caller decides:
-       │                   audit.write()  →  out/logs/stage2_audit_<label>.md
+       │                   audit.write()  →  out/logs/audit_<label>.md
        │                                     (gitignored: names patients)
        ├──────────────┬──────────────┬──────────────┐
        ▼              ▼              ▼              ▼
@@ -135,7 +135,7 @@ proves a comment in `config.py` false and §12 requires a fixture behaviour the 
 not have, so the 2026-08-08 draft was under-counting its own deliverables rather than proposing less
 work. §19 records why each was added.
 
-`out/logs/stage2_audit_<label>.md` is an **output, not a deliverable**. It is written when a caller
+`out/logs/audit_<label>.md` is an **output, not a deliverable**. It is written when a caller
 asks for it, it is gitignored, and it must stay that way: it names patients by case identifier, which
 is exactly what roadmap Stage 2's acceptance criterion demands of it. This is the same reason
 `../out/stage0_data_inventory.md` is gitignored. Nothing under `specs/` may quote a case identifier.
@@ -427,15 +427,19 @@ the volumes are millilitres in the tens and hundreds, recorded to at most one de
 83 mL. The pilot found the same defect and its audit entry read "one row had the core volume
 copy-pasted into the penumbra cell."
 
-**The consequence, stated because it is not cosmetic.** `penumbra_ml` feeds two things: the balance
-table as a `BALANCE_ONLY` variable [§6, §9], and the `target_mismatch` subgroup [§13], whose
-criterion requires `penumbra > TARGET_MISMATCH["min_penumbra_ml"] = 15`. For this patient the stored
-13 fails that test and the recomputed 96 passes it, so the correction moves them into the
-target-mismatch subgroup. The other two criteria are already met (core 13 < 70; ratio 109/13 = 8.4 >
-1.8). One patient's subgroup membership is a small thing; a subgroup membership that depends on
-whether the reader trusted a copy-pasted cell is not.
+**The consequence, stated because it is not cosmetic.** `penumbra_ml` feeds the balance table as a
+`BALANCE_ONLY` variable [§6, §9], and an 83 mL error on one arm of a 126-record cohort is visible
+there. A reader comparing the arms on penumbra volume would otherwise be comparing one number that
+came from the definition against 125 that came from a copy-paste.
 
-The audit entry names the case, states the stored and recomputed values, and states this consequence.
+**[AMENDED 2026-08-10]** This section used to state a second consequence: that the correction moved
+this patient across the `target_mismatch` subgroup's volume threshold. That subgroup is withdrawn by
+the [§13] amendment, so the consequence no longer exists — and the two constants the sentence named
+are deleted from `config.py`. The recomputation itself is untouched and its justification is
+unchanged: it rests on [§6] defining penumbra as `tmax6_ml - core_ml`, which was never part of any
+subgroup. See `stage3_derived_variables.md` §6.1.
+
+The audit entry names the case and states the stored and recomputed values.
 
 ### 7.3 `onset_to_groin_min = 999` is flagged, not corrected  **[REV]**
 
@@ -476,7 +480,7 @@ this section, and it changes one cell of one descriptive table.
 | `contraindication_ivt` regex normalisation | DECISION 1 — the free text is never read (§6) |
 | `_rebuild` of the four dichotomies | Stage 3 owns them; Stage 1 §3.2 already gives the loop, driven by `OUTCOMES` and `OPS` |
 | `_eligibility` | Stage 4, and it is built on `IVT_INELIGIBLE_REASONS` / `IVT_ELIGIBLE_REASONS`, which DECISION 1 retires |
-| `center_hug`, `unknown_onset`, `mrs_shift_90d`, `target_mismatch`, `onset_type` | Stage 3 |
+| `center_hug`, `unknown_onset`, `mrs_shift_90d`, `onset_type` | Stage 3 — except `center_hug` and `mrs_shift_90d`, which are not in the [§5] registry, and `target_mismatch`, whose subgroup the [§13] amendment of 2026-08-10 withdrew |
 | `hir` missingness entry | `HIR` has no analysis name in the contract at all, precisely so that no covariate list can name it [§6] |
 | the `assert` statements in `_check` | the checks are lifted; the statement form is not (§8.3) |
 
@@ -576,7 +580,9 @@ are specified here rather than left to the implementation.
 
 ```python
 KINDS: Final[tuple[str, ...]] = (
-    "provenance", "contract", "correction", "observation", "structural", "missingness")
+    "provenance", "contract", "correction", "observation",
+    "derivation",                   # [AMENDED 2026-08-10] Stage 3's, inserted rather than appended
+    "structural", "missingness")
 
 @dataclass(frozen=True)
 class AuditEntry:
@@ -658,18 +664,25 @@ the separator row is `---` per column. Roughly fifteen lines, no dependency, no 
 
 Sections in `KINDS` order, entries within a section in the order recorded:
 
+**[AMENDED 2026-08-10]** The title and footer below name the pipeline rather than this stage, for the
+same reason the path did: Stage 3 appends its `Derivations` section to this document. `KINDS` gains
+`derivation` between `observation` and `structural`, so the section list below is seven rather than
+six. Everything else about the header is unchanged — in particular its numbers are still read back
+from the entries, never recomputed. See `stage3_derived_variables.md` §9.1 and §9.2.
+
 ```
-# Stage 2 — data audit
+# Analysis audit
 
 Source: `Excel_bridging_…_v7_july26_with_abs_contra_indication.xlsx`, sheet `Feuil1`
 Version: `54934fbb…f657371`            (or `not pinned (fixture_schema)`)
 Read: 126 rows x 42 columns; 25 mapped, 17 dropped
-Generated by `extended_bridging/data.py`. Regenerate rather than edit.
+Generated by the `extended_bridging` pipeline. Regenerate rather than edit.
 
 ## Provenance
 ## Contract
 ## Corrections
 ## Observations
+## Derivations                      ← Stage 3's, inserted here rather than appended
 ## Structural non-applicability
 ## Missingness and denominators
 ```
@@ -684,7 +697,9 @@ Each entry renders as the pilot's shape, which reads well and is worth keeping:
 with the `Affected:` line omitted when there are no identifiers, and any table indented beneath. A
 section whose entries are all absent still prints its heading, followed by the single line `_none_` —
 so `Observations` on a clean workbook says "nothing was observed" rather than looking truncated, and
-the six headings are a fixed skeleton the eye can scan for.
+the headings are a fixed skeleton the eye can scan for. **[AMENDED 2026-08-10]** There are seven of
+them since `KINDS` gained `derivation`; a test that treats two headings as adjacent must take the
+neighbour from `KINDS` rather than naming it, or the next inserted kind breaks it.
 
 **The header's numbers come from the entries, not from a second traversal. [ENG]** `Source` and
 `Version` come from `self.source`; `Read: {n_raw} rows x {n_cols} columns` comes from the
@@ -697,7 +712,11 @@ created at the top of `load()` and threaded through the read (§0).
 
 ```python
 def _audit_path(source: Source) -> Path:
-    return C.LOGS / f"stage2_audit_{source.label}.md"
+    # [AMENDED 2026-08-10] `audit_`, not `stage2_audit_`. The Audit this module creates is threaded
+    # through the whole pipeline and Stage 3 appends to it, so the artefact is the analysis's rather
+    # than this stage's [stage3_derived_variables.md §9.1]. The shape and the label are unchanged,
+    # so the guarantee below holds exactly as before.
+    return C.LOGS / f"audit_{source.label}.md"
 
 # Audit.write(path=None) → path or _audit_path(self.source)
 ```
@@ -718,7 +737,7 @@ f-string. §12.8 asserts the two paths differ; §12.8 also asserts `load()` crea
 Byte-identical reproduction is roadmap Stage 2's acceptance criterion, and §12.8 tests it by
 comparing a run against itself. That is necessary and not sufficient: it holds for *any* log,
 including one whose contents an implementer chose freely. The 2026-08-08 draft specified four entries
-across six declared `KINDS`, leaving the `Contract` and `Structural` headings of §9.5 with nothing to
+across the declared `KINDS`, leaving the `Contract` and `Structural` headings of §9.5 with nothing to
 put under them, and pinned no `step` string, no `detail` wording and no meaning for `n`. Two
 implementers would have produced two different logs and both would have passed §12.
 
@@ -732,7 +751,7 @@ This is the log. Seven entries, in this order. `step` strings are exact.
 | `correction` | `penumbra_recomputed` | `_correct` | records whose stored value disagreed | `n` rows + header, only when `n > 0` | those records |
 | `observation` | `onset_to_groin_999` | `_correct` | records matching | — | those records |
 | `structural` | one per `STRUCTURALLY_NON_APPLICABLE` key, `step` = the column name | `_missingness` | records where the column is absent | — | — |
-| `missingness` | `absence_by_column` | `_missingness` | rows in the frame | 25 rows + header | — |
+| `missingness` | `absence_by_column` | `_missingness`, through `absence_by_column` | rows in the frame | 25 rows + header | — |
 
 `detail` templates, with `{}` filled from the data and every number through §9.3's one formatter:
 
@@ -747,12 +766,14 @@ This is the log. Seven entries, in this order. `step` strings are exact.
   means by "makes every difference between the two visible".
 - `penumbra_recomputed` — `[§6] defines penumbra as tmax6_ml - core_ml, so the definition is
   authoritative and the stored column is a copy of it. Recomputed on all {n_rows} records; {n}
-  disagreed beyond {tol}. {n_crossing} record(s) cross TARGET_MISMATCH['min_penumbra_ml'] =
-  {threshold}, so [§13] target-mismatch membership changes for them.` The per-record values go in the
-  table, not in the sentence: `case_id | stored | recomputed | difference`, rows sorted by `case_id`,
-  present only when `n > 0`. A sentence naming "stored X vs recomputed Y" reads correctly for the one
-  record v7 has and becomes ambiguous for the second one a corrected workbook brings. With `n = 0`
-  the second sentence and the table are both omitted, and `case_ids` is empty.
+  disagreed beyond {tol}.` The per-record values go in the table, not in the sentence:
+  `case_id | stored | recomputed | difference`, rows sorted by `case_id`, present only when `n > 0`.
+  A sentence naming "stored X vs recomputed Y" reads correctly for the one record v7 has and becomes
+  ambiguous for the second one a corrected workbook brings. With `n = 0` the table is omitted and
+  `case_ids` is empty. **[AMENDED 2026-08-10]** A second sentence used to follow, counting the
+  records whose recomputed penumbra crossed the withdrawn [§13] subgroup's volume threshold; it is
+  deleted with the subgroup (§7.2). The table already carried stored, recomputed and difference per
+  case, so the entry loses no information and no test asserted the sentence.
 - `onset_to_groin_999` — `onset_to_groin_min == 999 on {n} record(s). Not corrected (§7.3): the value
   is inside the observed range {lo}-{hi}, the implied IVT-to-groin interval is {gap} min against a
   treated-arm median of {median}, and neighbouring observed values are equally round. Standing query
@@ -1032,8 +1053,10 @@ hand-built frame.
     `n = 0` and no identifiers. Asserted against the §9.6 table's `(kind, step)` pairs, so an entry
     cannot be dropped, renamed or reordered without this test failing.
 
-    Three properties of the rendering go with it: all six `KINDS` headings appear, the `Observations`
-    section renders the single line `_none_` because the fixture triggers no observation (§9.5); the
+    Three properties of the rendering go with it: every `KINDS` heading appears, the `Observations`
+    section renders the single line `_none_` because the fixture triggers no observation (§9.5) —
+    **[AMENDED 2026-08-10]** its extent runs to the heading of whichever kind follows `observation`
+    in `KINDS`, which is now `derivation`, and the test reads that neighbour from `KINDS`; the
     header's `Read:` line agrees digit for digit with the `provenance/read` entry's `n` and the
     frame's raw column count; and the header's `mapped, dropped` counts agree with
     `contract/rename_and_drop`. A header recomputed independently of the entries is the one way these
@@ -1087,9 +1110,11 @@ data.py                                            test_data.py
 │   │   └── no ast.Assert anywhere in data.py      └── 12.10 [REV] §8.3
 │   │
 │   └── _missingness(df, audit)
-│       ├── kind: structural / not recorded / …    ├── 12.11
-│       ├── centre columns from CENTER_ORDER [ENG] ├── 12.13
-│       └── per-centre columns reconcile           └── 12.13
+│       ├── structural entry per declared column   ├── 12.11
+│       └── absence_by_column(…, ANALYSIS_NAMES)   │        [AMENDED 2026-08-10] public;
+│           ├── kind: structural / not recorded /… ├── 12.11  Stage 3 calls it again on
+│           ├── centre columns from CENTER_ORDER   ├── 12.13  its derived columns, so the
+│           └── per-centre columns reconcile       └── 12.13  classification has one home
 │
 └── Audit
     ├── created before _read, threaded      [ENG]  ├── 12.16 header counts match entries
@@ -1190,8 +1215,11 @@ Recorded so a later stage does not look here for an answer that was never placed
 - **How dichotomies are built.** Stage 3, from `OUTCOMES` and `OPS`, with missingness reimposed.
 - **How `onset_type` is built**, and the assertion that wake-up and unwitnessed never coincide.
   Stage 3 (§8.2).
-- **Whether `target_mismatch` is met.** Stage 3. Stage 2 only guarantees the `penumbra_ml` the
-  criterion reads is the one [§6] defines (§7.2).
+- **How the [§13] subgroups are built.** Stage 3 — `unknown_onset` from `onset_type`, and
+  `core_above_median` from a median that is a property of the *cohort* and so is computed only after
+  Stage 5's restrictions. Stage 2 guarantees the `penumbra_ml` the balance table reads is the one
+  [§6] defines (§7.2), and nothing more. **[AMENDED 2026-08-10]** This line used to read "whether
+  `target_mismatch` is met"; that subgroup is withdrawn.
 - **Which patients are eligible.** Stage 4. Stage 2 guarantees `ivt_contraindicated` is 0/1 (A5) and
   never missing (**A4b [ENG]**), and that no reason cell is blank-but-present (A9); the
   classification, and the check that no treated patient is flagged, are Stage 4's (§8.2). The
@@ -1295,7 +1323,10 @@ believed:
   `STRUCTURALLY_NON_APPLICABLE`), `not recorded` (a key of `INFORMATIVE_ABSENCE`), `missing`
   (anything else), `complete` (none). A reader who does not see the split reads 82/126 on
   `contraindication_reason` as two-thirds unusable, which is exactly the misreading §10.2 exists to
-  stop.
+  stop. **[AMENDED 2026-08-10]** The classification now lives in the public `absence_by_column`,
+  which Stage 3 calls a second time over its derived columns; the comment belongs with it, because a
+  second implementation over there would drift on precisely the `structural`-versus-`missing` branch
+  this note exists to protect.
 
 **Keeping them true is part of any change that touches them.** If a later stage edits `_correct` or
 `_missingness`, the diagram above it is edited in the same commit or the change is not finished. This
@@ -1317,11 +1348,11 @@ Stage 2 is complete when all of the following hold, and not before:
    ```bash
    cd extended_bridging
    PYTHONHASHSEED=0 uv run python -c \
-     "import data; _, a = data.load(); print(a.write())"          # out/logs/stage2_audit_v7_…md
+     "import data; _, a = data.load(); print(a.write())"          # out/logs/audit_v7_…md
    PYTHONHASHSEED=1 uv run python -c \
      "import data; _, a = data.load(); a.write(Path('/tmp/b.md'))"
-   diff out/logs/stage2_audit_v7_july26_with_abs_contra_indication.md /tmp/b.md
-   git check-ignore -v out/logs/stage2_audit_v7_july26_with_abs_contra_indication.md
+   diff out/logs/audit_v7_july26_with_abs_contra_indication.md /tmp/b.md
+   git check-ignore -v out/logs/audit_v7_july26_with_abs_contra_indication.md
    ```
 
    `diff` reports nothing and `check-ignore` reports a match — the log names patients and must never
@@ -1337,7 +1368,7 @@ Stage 2 is complete when all of the following hold, and not before:
    if they are never watched failing.
 8. The audit log has been read end to end by a human, and every correction in it names its cases.
 9. **[ENG]** `uv run pytest -v` was run once with `data/` present *after* a run with `data/` renamed
-   away, and `out/logs/` contains no `stage2_audit_fixture_schema.md` — confirming the fixture path
+   away, and `out/logs/` contains no `audit_fixture_schema.md` — confirming the fixture path
    is derived and that no test wrote through `load()`.
 
 ## 18. Verification record
@@ -1355,7 +1386,7 @@ update. Acceptance 12.14 re-checks the structural subset in code.
 | `Center` takes exactly the four keys of `CENTER_RECODE` under `dtype="string"`; recode is total | §6, A3 | yes |
 | `case_id` unique, non-missing, no surrounding whitespace, `string` dtype | §6, A2 | yes |
 | `penumbra_ml` disagrees with `tmax6_ml − core_ml` on exactly 1 record; discrepancy 83 mL; the stored penumbra equals the stored core exactly | §7.2 | yes |
-| That record's criteria: core 13 < 70; ratio 109/13 = 8.4 > 1.8; penumbra 13 → 96 crosses `min_penumbra_ml` = 15 | §7.2 | yes |
+| ~~That record's criteria: core 13 < 70; ratio 109/13 = 8.4 > 1.8; penumbra 13 → 96 crosses `min_penumbra_ml` = 15~~ | ~~§7.2~~ | **[WITHDRAWN 2026-08-10]** — verified when checked, but the [§13] subgroup whose criteria these are no longer exists, so the row states a fact about nothing. §7.2's surviving claim is the row above it |
 | `core_ml`, `tmax6_ml` and `penumbra_ml` are missing on the same single record | §7.2, §10.1 | yes |
 | `onset_to_groin_min == 999` on exactly 1 record; its `onset_to_ivt_min` is 955, so the interval is 44 min | §7.3 | yes |
 | IVT-to-groin interval across the 39 treated: min 29, median 70, max 310 | §7.3 | yes |
@@ -1424,7 +1455,7 @@ differently, and with no record of why.
 | 14 | Why three new types, and what collapsing each would cost | §0.1 | A reviewer counts `Source`, `AuditEntry`, `Audit` and asks. The answer was given once, in conversation, and would have been asked again at every future review |
 | 15 | What Stage 2 costs to run, and the standing instruction not to cache | §2.3 | §15 rejects a parsed-frame cache on principle. The number behind the principle — 126 rows, two file reads, sub-second — was nowhere, so the rejection read as taste |
 | 16 | A record with a missing volume is never counted as disagreeing; `_TOL` is absolute and why | §7.2 | `n` in the penumbra correction entry depends on it, and a reader who assumed missing counted as disagreement would read v7's `n = 1` as a bug |
-| 17 | An empty section prints its heading and `_none_` | §9.5 | The six headings are a fixed skeleton; without the rule, a clean workbook's log looks truncated and an implementer may drop the heading instead |
+| 17 | An empty section prints its heading and `_none_` | §9.5 | The headings are a fixed skeleton; without the rule, a clean workbook's log looks truncated and an implementer may drop the heading instead |
 | 18 | Why the Stage 0 note fix is not folded into T1, and why there is no `TODOS.md` | §13 | The option was raised and declined at review. Without the record, the next reader sees a known-false note, an obviously adjacent task, and no reason not to |
 | 19 | Which three ASCII diagrams go into `data.py`, and that keeping them true is part of any change touching them | §17 | `config.py` carries its reasoning beside its declarations; without saying so, `data.py`'s would live only in this file, which nobody has open while editing `_correct` |
 

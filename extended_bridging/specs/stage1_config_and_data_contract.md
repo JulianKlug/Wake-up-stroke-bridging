@@ -626,34 +626,45 @@ SEX_LABELS: dict[int, str] | None = None    # see §10; must stay None until the
 will guess when it builds the baseline table. Stage 14 must print the levels as `sex = 0` / `sex = 1`
 while this is `None`, and must never invent labels.
 
-## 6. Subgroups and target mismatch [§13]
+## 6. Subgroups [§13]
 
 ```python
-TARGET_MISMATCH = {"max_core_ml": 70, "min_ratio": 1.8, "min_penumbra_ml": 15}
 MRS_THRESHOLDS = (0, 1, 2, 3, 4, 5)                   # cumulative RD_k [§8]
-MISMATCH_RATIO_UNDEFINED_COUNTS_AS_MET = True
+
+SUBGROUPS = {                                         # added by Stage 3
+    "unknown_onset":     "unwitnessed or wake-up onset versus witnessed [§13]",
+    "core_above_median": "core volume above the cohort median [§13]",
+}
+COHORT_DEPENDENT_SUBGROUPS = ("core_above_median",)
 ```
 
-Core volume is exactly 0 in 50 of 125 non-missing records, so the mismatch *ratio* is undefined for
-40% of the cohort. `MISMATCH_RATIO_UNDEFINED_COUNTS_AS_MET = True` means core = 0 with
-penumbra > `min_penumbra_ml` satisfies the ratio criterion, so the choice appears in the
-configuration rather than as an inline comparison in Stage 3.
+**[AMENDED 2026-08-10] The target-mismatch subgroup is withdrawn, and with it the two constants this
+section used to declare.** `TARGET_MISMATCH` and `MISMATCH_RATIO_UNDEFINED_COUNTS_AS_MET` are deleted
+from `config.py`; the SAP §13 amendment carries the decision and its reasoning, and
+`stage3_derived_variables.md` §6.1 records what it removes from the code. In short: the cohort is
+CTP-selected by construction, so target mismatch is close to the criterion that *admitted* these
+patients rather than a contrast within them, and with core volume exactly 0 in 50 of 125 records the
+flag turned almost entirely on one volume threshold. A near-constant subgroup does not generate
+hypotheses; it produces a table row that reads as a finding.
 
-**[REV] Missing core is not the same case as zero core.** One record has no core volume at all, and
-one has no Tmax>6 s volume. The constant above covers `core == 0`; it does not cover `core is NA`.
-Stage 3 must return **missing**, not "met" and not "not met", when any input to the criterion is
-missing. A subgroup flag of `<NA>` drops that patient from the subgroup analysis by complete-case
-[§11], which is correct; treating `<NA>` as 0 would silently sweep it into the mismatch-present group.
+Two things this section used to specify are therefore gone rather than moved, and are recorded here
+so a reader looking for them knows they were withdrawn and not mislaid: the `core == 0` ratio
+convention, and the instruction that Stage 3 branch on the constant rather than on a literal. The
+boundary question the criterion needed — DEFUSE-3 uses core **<** 70 mL, ratio **≥** 1.8, mismatch
+volume **≥** 15 mL, while the prose wrote all three strictly — is retired rather than answered, and
+`stage3_derived_variables.md` §6.1 records it so that any future amendment restoring the subgroup
+answers it *before* writing the code.
 
-**[REV] Stage 3 must branch on the constant, not on a literal.** The whole reason
-`MISMATCH_RATIO_UNDEFINED_COUNTS_AS_MET` exists is so the convention is visible in the configuration
-rather than buried as an inline comparison. An implementation that reads
-`if core == 0 and penumbra > 15:` has reproduced the convention while defeating its purpose, and the
-constant becomes decorative. Stage 3 reads the constant and `TARGET_MISMATCH["min_penumbra_ml"]`.
+`penumbra_ml` is untouched by the withdrawal. It keeps its [§6] exclusion from every model, keeps its
+`BALANCE_ONLY` role, and keeps Stage 2's recomputation, which rests on [§6] defining penumbra as
+`tmax6_ml - core_ml` and was never part of any subgroup.
 
-The third subgroup, core volume above/below median [§13], has no constant here on purpose: the median
-is a property of the cohort, computed by Stage 3 after the [§3] restrictions, and freezing it as a
-number in the configuration would silently decouple it from the cohort it describes.
+**The median subgroup has no constant here on purpose**, and that reasoning survives the amendment
+intact: the median is a property of the cohort, computed by Stage 3 after the [§3] restrictions, and
+freezing it as a number in the configuration would silently decouple it from the cohort it describes.
+`COHORT_DEPENDENT_SUBGROUPS` is what makes that structural — Stage 3's `derive_cohort` raises if asked
+to compute it twice, so a bootstrap replicate resamples the column rather than recomputing its
+cut-point.
 
 ## 7. The no-raw-names rule
 
@@ -917,7 +928,7 @@ Lift these rather than re-deriving them, checking each against §4 and §5 above
 | `RENAME` (raw → analysis names) | lift the 25 mapped entries; the pilot maps several columns this contract drops |
 | `CENTER_RECODE` | lift verbatim |
 | `CENTER_ORDER`, `ONSET_ORDER` | lift; `ONSET_ORDER` becomes `FACTOR_LEVELS["onset_type"]` |
-| `TARGET_MISMATCH` | lift verbatim |
+| `TARGET_MISMATCH`, `MISMATCH_RATIO_UNDEFINED_COUNTS_AS_MET` | **do not lift** [AMENDED 2026-08-10]. The subgroup they served is withdrawn (§6), so lifting them would restore a constant with no consumer — and an invitation to restore the subgroup without the amendment. |
 | `MRS_THRESHOLDS` | lift, as a tuple |
 | `PS_COVARIATES`, `BALANCE_ONLY`, `PS_COVARIATES_FULL` | lift, as tuples |
 | `TREATMENT` | lift |

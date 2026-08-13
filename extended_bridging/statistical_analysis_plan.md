@@ -257,7 +257,20 @@ mediated proportion.
 families; raw and adjusted p-values both reported.
 
 **Subgroups** (hypothesis-generating, with an interaction test): unknown versus witnessed onset;
-target mismatch; core volume above/below median.
+core volume above/below median.
+
+**Amendment, 2026-08-10 — the target-mismatch subgroup is withdrawn.** It was listed as a third
+subgroup and is removed before any subgroup estimate was produced. The cohort is CTP-selected by
+construction (§2), so target mismatch is close to the criterion that admitted these patients rather
+than a contrast within them: the subgroup is expected to be near-constant, and an interaction test on
+a split of a few patients against the rest is not hypothesis-generating but hypothesis-shaped noise,
+reported in a subgroup table where it reads as a finding. The supporting count — core volume is
+exactly 0 in 50 of 125 records, so most patients clear the core and ratio criteria and the flag turns
+almost entirely on one volume threshold — is marginal and was established in Stage 0 before any
+outcome was examined by arm, as was this decision. The two remaining subgroups are unaffected:
+onset is unwitnessed or on waking in 93 of the 126 records against 33 witnessed, and the median
+split is balanced by construction. `penumbra_ml` keeps its §6 exclusion and its balance-table role,
+both of which stand independently of this subgroup.
 
 **Sensitivity analyses** on the primary outcome (Leave out for now), each reporting ESS and worst residual |SMD|:
 full-covariate propensity model (adding the four vascular risk factors); propensity model without

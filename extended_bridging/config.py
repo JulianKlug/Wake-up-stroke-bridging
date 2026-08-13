@@ -315,6 +315,20 @@ REFERENCE_LEVELS: Final[dict[str, str]] = {
     "onset_type": "witnessed",   # the clinical baseline
 }
 
+# Which onset flag produces which non-baseline level of `onset_type` [§5]. The baseline is
+# REFERENCE_LEVELS["onset_type"], which is already declared and is Stage 6's reference category, so
+# it is deliberately not repeated here. test_config.py asserts that this tuple's levels plus that
+# baseline are exactly FACTOR_LEVELS["onset_type"], so a level cannot be added in one place only.
+#
+# Stage 3 loops over this tuple rather than writing the level names, and accumulates each flag's
+# missingness over the same loop: a third onset flag then contributes both its level and its
+# missingness in one edit. Its order is not a precedence rule — Stage 3 §4.1 asserts no record is
+# positive on both flags, so no record can match twice.
+ONSET_TYPE_FROM_FLAG: Final[tuple[tuple[str, str], ...]] = (
+    ("unwitnessed", "unwitnessed"),
+    ("wake_up", "wake_up"),
+)
+
 
 # --- covariates [§6] --------------------------------------------------------------------------
 
@@ -335,8 +349,10 @@ STANDARDISATION_COVARIATES: Final[tuple[str, ...]] = tuple(
 PS_COVARIATES_FULL: Final[tuple[str, ...]] = PS_COVARIATES + (
     "hypertension", "hyperlipidemia", "diabetes", "smoking")                    # [§13]
 
-# Produced by Stage 3, so they are analysis names that the contract cannot supply.
-DERIVED_NAMES: Final[tuple[str, ...]] = ("onset_type",)
+# DERIVED_NAMES used to be declared here, as the literal ("onset_type",). It is now computed, in the
+# derived-names block at the foot of this file — after OUTCOMES and SUBGROUPS, the two registries it
+# reads. It was not deleted; it moved, and it had to move, because this file executes top to bottom
+# and both of those registries are declared below this line.
 
 
 # --- outcome registry [§5] --------------------------------------------------------------------
@@ -362,6 +378,12 @@ OUTCOMES: Final[dict[str, Outcome]] = {
     "mrs_5_6_90d": Outcome(
         "mRS 5-6 at 90 days", "binary", "safety", "mrs_90d", ">=", 5, False),
 }
+
+# The outcomes Stage 3 builds, as against the ones read directly from the workbook. `source is None`
+# is the only test of which is which, here and in Stage 3's loop, so an outcome cannot be derived by
+# being remembered. Declared immediately after OUTCOMES, which it reads.
+DERIVED_DICHOTOMIES: Final[tuple[str, ...]] = tuple(
+    key for key, o in OUTCOMES.items() if o.source is not None)
 
 
 # --- outcome-model overrides [§8 amendment, DECISION 3] --------------------------------------
@@ -453,27 +475,50 @@ BINARY_COLUMNS: Final[tuple[str, ...]] = (
 SEX_LABELS: dict[int, str] | None = None
 
 
-# --- subgroups and target mismatch [§13] -------------------------------------------------------
-
-TARGET_MISMATCH: Final[dict[str, float]] = {
-    "max_core_ml": 70, "min_ratio": 1.8, "min_penumbra_ml": 15}
+# --- subgroups [§13] ----------------------------------------------------------------------------
 
 MRS_THRESHOLDS: Final[tuple[int, ...]] = (0, 1, 2, 3, 4, 5)      # cumulative RD_k [§8]
 
-# Core volume is exactly 0 in 50 of 125 non-missing records, so the mismatch *ratio* is undefined
-# for 40% of the cohort. True means core = 0 with penumbra > min_penumbra_ml satisfies the ratio
-# criterion. Stage 3 must branch on this constant and on TARGET_MISMATCH["min_penumbra_ml"], not on
-# a literal: an implementation reading `if core == 0 and penumbra > 15:` has reproduced the
-# convention while defeating the purpose of declaring it.
+# The [§13] subgroups, after the amendment of 2026-08-10 withdrew the third one. That amendment is
+# in statistical_analysis_plan.md §13 and its consequences for the code are in Stage 3 §6.1; the two
+# constants that served only the withdrawn subgroup were declared here and are deleted rather than
+# commented out. A withdrawn subgroup with a live constant is an invitation to restore it without
+# the amendment, and Stage 3's definition of done greps this repository's Python for their names.
 #
-# This covers core == 0. It does not cover core being missing: one record has no core volume and one
-# has no Tmax>6 s volume, and Stage 3 must return <NA> — not "met", not "not met" — when any input
-# to the criterion is missing.
-MISMATCH_RATIO_UNDEFINED_COUNTS_AS_MET: Final[bool] = True
+# Neither key is a covariate: test_config.py asserts no subgroup name appears in any covariate list,
+# so a subgroup cannot become an adjustment variable by being convenient. Neither is post-time-zero
+# either — both are baseline attributes — so neither joins POST_TIME_ZERO.
+SUBGROUPS: Final[dict[str, str]] = {
+    "unknown_onset":     "unwitnessed or wake-up onset versus witnessed [§13]",
+    "core_above_median": "core volume above the cohort median [§13]",
+}
 
-# The third subgroup, core volume above/below median [§13], has no constant here on purpose: the
-# median is a property of the cohort, computed by Stage 3 after the [§3] restrictions, and freezing
-# it as a number here would silently decouple it from the cohort it describes.
+# The subgroups whose definition needs the whole cohort rather than one record. Stage 3's second
+# entry point, derive_cohort, computes these after the [§3] restrictions and raises if asked twice:
+# the median is a property of the cohort, so freezing it as a number here would silently decouple it
+# from the cohort it describes, and recomputing it per bootstrap replicate would give every replicate
+# its own cut-point and its own subgroup [Stage 3 §6.4].
+COHORT_DEPENDENT_SUBGROUPS: Final[tuple[str, ...]] = ("core_above_median",)
+
+
+# --- derived names ------------------------------------------------------------------------------
+#
+# Produced by Stage 3, so they are analysis names that the contract cannot supply. Declared here, at
+# the foot of the file, because both are computed from registries above: DERIVED_DICHOTOMIES from
+# OUTCOMES, and the subgroup keys from SUBGROUPS. Written in the covariates block where
+# DERIVED_NAMES used to sit, they would raise NameError on import.
+#
+# "onset_type" is the one literal, because it is the only derived name no other registry declares.
+# test_config.py asserts DERIVED_NAMES is disjoint from ANALYSIS_NAMES, so a derived column can never
+# shadow one the contract delivers.
+
+DERIVED_NAMES: Final[tuple[str, ...]] = ("onset_type", *DERIVED_DICHOTOMIES, *SUBGROUPS)
+
+# The derived columns that exist after Stage 3's first, row-wise entry point. `core_above_median` is
+# not among them — it does not exist until derive_cohort has run — which is why Stage 3's derived
+# missingness table ranges over this and not over DERIVED_NAMES [Stage 3 §8.3].
+ROW_WISE_DERIVED: Final[tuple[str, ...]] = tuple(
+    name for name in DERIVED_NAMES if name not in COHORT_DEPENDENT_SUBGROUPS)
 
 
 # --- the no-raw-names rule ---------------------------------------------------------------------

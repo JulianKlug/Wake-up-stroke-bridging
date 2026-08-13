@@ -88,16 +88,25 @@ names the cases it touched.
 
 ## Stage 3 — Derived variables [§5, §6, §13]
 
+**Spec:** `specs/stage3_derived_variables.md`.
+
 **Build.**
 - `onset_type`, a three-level factor from the wake-up and unwitnessed flags. Assert the two are never
   both positive.
 - All outcome dichotomies derived from their ordinal source [§5]. **Reimpose missingness explicitly**
   — a comparison against a missing value returns false in most frameworks and would silently
   manufacture zeros.
-- Subgroup variables [§13]: unknown vs witnessed onset, target mismatch, core volume above/below
-  median.
-- Drop any covariate with zero variance.
-- Mark structurally non-applicable fields as distinct from missing ones [§11].
+- Subgroup variables [§13]: unknown vs witnessed onset, and core volume above/below median. The
+  target-mismatch subgroup is withdrawn by the [§13] amendment of 2026-08-10; the cohort is
+  CTP-selected, so it is close to the criterion that admitted these patients.
+- The median is a property of the cohort, so it is computed after the Stage 5 restrictions and then
+  **frozen**: subgroup membership is a fixed patient attribute the Stage 10 bootstrap resamples along
+  with the patient, never recomputed inside a replicate.
+- **Detect and log** any covariate with zero variance. Nothing is dropped here and no covariate list
+  is mutated — Stage 6's design-matrix builder drops constant columns at the point of use, which is
+  also where a bootstrap replicate can empty a factor level.
+- Mark structurally non-applicable fields as distinct from missing ones [§11], extending the Stage 2
+  classification to the derived columns.
 
 **Accept when.** A test asserts that every derived dichotomy has exactly the missingness of its
 ordinal source, and that the three onset levels partition the cohort.
