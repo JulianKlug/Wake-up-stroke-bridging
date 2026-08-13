@@ -357,16 +357,23 @@ def test_every_kind_has_a_section_heading():
     assert tuple(data._HEADINGS) == data.KINDS
 
 
-def test_the_headings_are_the_declared_seven_in_pipeline_order():
+def test_the_headings_are_the_declared_eight_in_pipeline_order():
     # Pinned against the literal, like SOURCES and _MUST_NAME_CASES: `derivation` is Stage 3's and
     # sits between `observation` and `structural`, because a document that printed the derivations
     # after the missingness table describing them would read backwards.
+    #
+    # `cohort` is Stage 5's and sits between `derivation` and `structural` [Stage 5 §6.2]. Neither of
+    # KINDS' two properties is perfect there, because Stage 3 has two entry points on opposite sides
+    # of Stage 5 and both record `derivation`: `derive`'s four entries run before the restrictions and
+    # `derive_cohort`'s two after them. The position is wrong about two entries rather than four, and
+    # it puts "who is in the analysis" immediately before the section reporting its denominators.
     assert data.KINDS == (
         "provenance", "contract", "correction", "observation",
-        "derivation", "structural", "missingness")
+        "derivation", "cohort", "structural", "missingness")
     assert list(data._HEADINGS.values()) == [
         "Provenance", "Contract", "Corrections", "Observations",
-        "Derivations", "Structural non-applicability", "Missingness and denominators"]
+        "Derivations", "Cohort construction", "Structural non-applicability",
+        "Missingness and denominators"]
 
 
 # --- 12.8  byte-identical reproduction -------------------------------------------------------------

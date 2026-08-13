@@ -127,15 +127,25 @@ SOURCES: Final[tuple[Source, ...]] = (WORKBOOK, FIXTURE)
 #     order, and so what lets the shuffle test detect a correction written by row position
 
 # In pipeline order, which is also the order the document reads in: what was read, what the contract
-# did, what was corrected, what was observed, what was derived, what is structurally absent, what is
-# missing. `derivation` is Stage 3's and is inserted here rather than appended, because appending it
-# would print the derivations *after* the missingness table that describes them.
+# did, what was corrected, what was observed, what was derived, **who is in the analysis**, what is
+# structurally absent, what is missing. `derivation` is Stage 3's and is inserted here rather than
+# appended, because appending it would print the derivations *after* the missingness table that
+# describes them.
+#
+# `cohort` is Stage 5's and describes **rows removed**, which no other kind is about — `correction` is
+# about values and `derivation` about columns [Stage 5 §6.1]. Neither of KINDS' two properties can be
+# had perfectly at its position, because Stage 3 has two entry points on opposite sides of Stage 5:
+# `derive`'s four entries run before the restrictions and `derive_cohort`'s two after them, and both
+# are `derivation`. Sitting between `derivation` and `structural` is wrong about two entries rather
+# than four, and it puts the cohort immediately before the section describing its denominators — the
+# last two headings then read "who is in, and what is missing for them" [Stage 5 §6.2].
 #
 # A test that treats two of these headings as adjacent takes the neighbour from this tuple, never by
 # naming it: a kind inserted between them must be a one-line change here.
 KINDS: Final[tuple[str, ...]] = (
     "provenance", "contract", "correction", "observation",
     "derivation",
+    "cohort",
     "structural", "missingness")
 
 # The section headings of the rendered document, in KINDS order. A section with no entries still
@@ -147,6 +157,7 @@ _HEADINGS: Final[dict[str, str]] = {
     "correction":  "Corrections",
     "observation": "Observations",
     "derivation":  "Derivations",
+    "cohort":      "Cohort construction",
     "structural":  "Structural non-applicability",
     "missingness": "Missingness and denominators",
 }
@@ -154,10 +165,18 @@ _HEADINGS: Final[dict[str, str]] = {
 # Roadmap Stage 2 demands the names-its-cases rule of corrections. `observation` is held to it too:
 # the one observation this stage defines is a standing query with the data owner (§7.3), and a query
 # that names no patient cannot be answered, which makes it exactly as useless as an unattributed
-# correction. The other five kinds legitimately name none — provenance, contract, derivation and
+# correction. The other six kinds legitimately name none — provenance, contract, derivation and
 # missingness describe columns rather than patients, and structural describes a whole arm. Stage 3
 # leaves this unchanged for that reason: a derivation describes a column. The one place it names
 # patients is its both-onset-flags assertion, which raises, so such a frame never reaches a log.
+#
+# `cohort` is deliberately excluded, and it is the one exclusion that looks like an omission
+# [Stage 5 §6.3]. Stage 5's kind carries two sorts of entry — two restrictions that remove patients
+# and must name them, and one flow table that removes nobody and has nobody to name — and a rule keyed
+# by *kind* cannot express that: forcing it would either give the flow entry an `n` misrepresenting
+# what it did, or print the whole cohort's identifiers under a summary table. So the rule lives in
+# `cohort.py`, in the single helper both removals go through, where it can be stated exactly and more
+# strongly than here: the entry must name as many patients as it says it removed, not merely one.
 _MUST_NAME_CASES: Final[frozenset[str]] = frozenset({"correction", "observation"})
 
 
@@ -612,9 +631,14 @@ def _assert_schema(df: pd.DataFrame, source: Source) -> None:
     reason = df["contraindication_reason"]
     blank = reason[reason.notna() & (reason.str.strip() == "")]
     if len(blank):
-        bad.append(f"A9  contraindication_reason: {len(blank)} whitespace-only cell(s) — a blank "
-                   "reads as 'a reason was recorded' and moves a patient from indeterminate to "
-                   "eligible [DECISION 1, §3]")
+        # A9 is a data-quality check and nothing more. Under DECISION 1 it was load-bearing for the
+        # classifier — a blank read as 'a reason was recorded' and moved a patient between classes —
+        # and this message said so. DECISION 1a classifies from `ivt_contraindicated` alone and reads
+        # neither the text of this column nor its presence, so the dependency is gone and the message
+        # must not keep describing it [Stage 5 §10, §21 R7].
+        bad.append(f"A9  contraindication_reason: {len(blank)} whitespace-only cell(s) — a cell "
+                   "that is present but empty records no reason and reads as one; the workbook "
+                   "should carry either a reason or nothing")
 
     if bad:
         raise C.SchemaError(
@@ -630,18 +654,24 @@ def _assert_schema(df: pd.DataFrame, source: Source) -> None:
 #   structural      a key of STRUCTURALLY_NON_APPLICABLE. onset_to_ivt_min is absent for all 87
 #                   controls because they were never given IVT. That is structure, not data loss.
 #   not recorded    a key of INFORMATIVE_ABSENCE. contraindication_reason is absent for 82 of 126
-#                   records, and that absence *is* the signal: under DECISION 1 it is the one bit
-#                   the column contributes, the thing that separates eligible from indeterminate.
+#                   records, and that absence is a fact about how the workbook was filled in rather
+#                   than data loss — under DECISION 1a no classifier reads it, so it is neither.
 #   missing         anything else with a non-zero absence count — genuine data loss
 #   complete        no absences
 #
-# A reader who does not see the split reads 82/126 on contraindication_reason as two-thirds
-# unusable, when Stage 4 uses every one of those 82. Stage 2 labels them; nothing imputes them.
+# A reader who does not see the split reads 82/126 on contraindication_reason as two-thirds unusable,
+# when no analysis needs a single one of those cells: DECISION 1a classifies eligibility from
+# `ivt_contraindicated` alone. Stage 2 labels the absence; nothing imputes it. Under DECISION 1 this
+# column contributed one bit and the label said so; that class is withdrawn and the label must not
+# keep claiming it [Stage 5 §10, §21 R7].
 #
 # The per-centre columns are there because the pattern is centre-driven, not random: the
 # contraindication reason was recorded for controls at HUG and USZ and nowhere else. A pooled count
-# hides that shape entirely, and it is the shape that makes the indeterminate group most of the
-# control arm.
+# hides that shape entirely — and it is that shape which makes the assumption DECISION 1a rests on a
+# centre-level one: `ivt_contraindicated = 0` has to mean the same thing at the two centres that never
+# collected a reason as at the two that collected one for every control. It governs 43 of the primary
+# cohort's 54 controls, nothing in the data can test it, and Stage 5's cohort-flow table is what keeps
+# the group countable.
 
 
 def absence_by_column(df: pd.DataFrame, audit: Audit, columns: Sequence[str],

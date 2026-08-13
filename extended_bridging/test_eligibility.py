@@ -627,13 +627,15 @@ def test_it_renders_under_the_existing_derivations_heading():
     assert f"- **{config.ELIGIBILITY}** (n=2)" in rendered
 
 
-def test_data_kinds_is_unchanged_by_this_stage():
-    # Asserted directly, so a future implementer cannot quietly add a kind. Stage 5 has to log rows
-    # *removed*, which no existing kind describes, and it will plausibly insert one; doing it here
-    # would spend a data.py amendment on a spec not yet written.
+def test_this_stage_adds_no_kind_and_stage_5_added_exactly_cohort():
+    # Asserted directly, so a future implementer cannot quietly add a kind. Stage 4 added none: its
+    # entry is a `derivation`, because it describes a column. Stage 5 added exactly one — `cohort`,
+    # for rows *removed*, which no other kind is about — and left `_MUST_NAME_CASES` alone, because a
+    # kind-keyed rule cannot say "the two entries that remove patients must name them, the flow table
+    # that removes nobody need not"; `cohort._record_removal` states it exactly instead [Stage 5 §6].
     assert data.KINDS == (
         "provenance", "contract", "correction", "observation",
-        "derivation", "structural", "missingness")
+        "derivation", "cohort", "structural", "missingness")
     assert data._MUST_NAME_CASES == frozenset({"correction", "observation"})
 
 

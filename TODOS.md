@@ -55,45 +55,6 @@ whoever declares the dtype — the first one's whole point disappears if `Float6
 
 ---
 
-## Make the Stage 3 audit-inventory test positional instead of a tail slice
-
-**Surfaced by:** the engineering review of `specs/stage4_eligibility_classification.md`, 2026-08-12
-(§20 defect 1 there).
-
-**What.** `test_derive.py:714`'s `test_the_six_entries_appear_with_the_declared_kinds_and_steps_in_order`
-reads `[(e.kind, e.step) for e in audit.entries][-len(_STAGE_3_INVENTORY):]` — the last six entries,
-whatever they are. Replace the tail slice with an index captured before the calls, the way
-`test_derives_four_entries_precede_derive_cohorts_two` two lines below it already does.
-
-**Why.** The test's helper is `_full_pipeline()` = `load → derive → derive_cohort`, which never calls
-`classify`, so Stage 4 leaves it green and Stage 4 must not touch it (its T6 promises "no test edited
-except the two moved", and that promise is the check on §10's ledger). But that is an accident of the
-helper, not a property of the assertion. The real pipeline is
-
-```
-  load  →  derive  →  classify  →  Stage 5 restrictions  →  derive_cohort
-           4 entries    1 entry                              2 entries
-```
-
-so the moment any test exercises the real order, `[-6:]` spans the eligibility entry and the
-assertion compares the wrong six. It fails loudly if the entry lands in the middle and — worse —
-could pass while describing a pipeline nobody runs.
-
-Measured, not assumed: `load(FIXTURE)` appends 6 entries (7 on the workbook; the seventh is
-`observation` / `onset_to_groin_999`), `derive()` appends 4, `derive_cohort()` appends 2.
-
-**Pros.** The assertion becomes about what Stage 3 appended rather than about what happened to be
-last. Removes a trap that only springs during Stage 5, when attention is elsewhere. One-line change.
-
-**Cons.** It edits a Stage 3 test outside Stage 4's scope, which is exactly why it is deferred here
-rather than folded in — Stage 4's T6 verification depends on that file being untouched.
-
-**Depends on / blocked by.** Do it **with Stage 5**, in the commit that first builds the real
-pipeline order, so the fix and the thing it protects against land together. Not before: landing it
-during Stage 4 would break T6's verification step.
-
----
-
 ## Correct Stage 4 §4.2 and Definition of done 9: a fill on E5 is a no-op, not a bug
 
 **Surfaced by:** implementing `specs/stage4_eligibility_classification.md`, 2026-08-12, while working

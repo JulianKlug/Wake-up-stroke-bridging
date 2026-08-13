@@ -710,9 +710,20 @@ def _full_pipeline() -> tuple[pd.DataFrame, data.Audit]:
 
 
 def test_the_six_entries_appear_with_the_declared_kinds_and_steps_in_order():
-    _, audit = _full_pipeline()
-    stage_3 = [(e.kind, e.step) for e in audit.entries][-len(_STAGE_3_INVENTORY):]
-    assert stage_3 == _STAGE_3_INVENTORY
+    """Positional against an index captured before the calls, never a tail slice.
+
+    This read `[-len(_STAGE_3_INVENTORY):]` — the last six entries, whatever they were — which was
+    green only because `_full_pipeline()` never calls `classify` or `build`. Stage 5 makes the trap
+    concrete rather than hypothetical: `build` puts three `cohort` entries between `derive`'s four and
+    `derive_cohort`'s two, so on the real pipeline order the tail six are Stage 5's and this assertion
+    compared the wrong ones. Driven inline rather than through `_full_pipeline()`, which builds its own
+    audit and cannot hand back the index — and which six other tests assert against unchanged.
+    """
+    df, audit = data.load(data.FIXTURE)
+    before = len(audit.entries)
+    df = derive.derive(df, audit)
+    derive.derive_cohort(df, audit)
+    assert [(e.kind, e.step) for e in audit.entries[before:]] == _STAGE_3_INVENTORY
 
 
 def test_derives_four_entries_precede_derive_cohorts_two():
