@@ -417,6 +417,27 @@ def _python_files_under_scan() -> list[Path]:
     return found
 
 
+def test_every_test_module_lives_in_the_tests_directory():
+    """The layout is a rule, not a convention, and this is what keeps it one.
+
+    The shipped modules are flat at the project root — `import config as C` throughout — and every
+    acceptance test lives in `tests/`, beside the fixtures it already shared a directory with
+    (`fixture_schema.xlsx`, `reference/*.R`). A `test_*.py` reappearing at the root would still be
+    collected, because `testpaths` is a default rather than a restriction, so it would work and the
+    split would quietly stop being true.
+
+    Two things this does NOT assert, deliberately. It does not forbid a nested directory under
+    `tests/`, because a future stage may want one. And it does not require the shipped modules to be
+    flat — that is Stage 1's decision and `pyproject.toml`'s `pythonpath` records it.
+    """
+    root = MODULE_DIR
+    misplaced = sorted(p.name for p in root.glob("test_*.py"))
+    assert misplaced == [], (
+        "acceptance tests belong in tests/, not at the project root: " + ", ".join(misplaced))
+    assert sorted(p.name for p in (root / "tests").rglob("test_*.py")), (
+        "tests/ contains no test module — the collection root moved without the tests")
+
+
 def test_no_raw_column_names_outside_config():
     offenders = [
         f"{path.relative_to(MODULE_DIR)}:{lineno}: {header!r}"
@@ -437,10 +458,17 @@ def test_the_raw_name_scan_is_case_sensitive():
 
 
 def test_the_exemption_list_is_exactly_the_three_declared_files():
+    # The keys are BASENAMES, and the scan matches on basename too, so an exemption survives a file
+    # moving between directories — which is what happened when the acceptance tests moved into
+    # `tests/`. The existence check therefore searches the tree rather than joining onto MODULE_DIR:
+    # the earlier `(MODULE_DIR / path).exists()` form asserted a location the exemption never claimed,
+    # and it began failing for `test_config.py` the moment this file moved one level down.
     assert set(config.EXEMPT_FROM_RAW_NAME_SCAN) == {
         "config.py", "stage0_data_inventory.py", "test_config.py"}
+    present = {path.name for path in MODULE_DIR.rglob("*.py")
+               if ".venv" not in path.parts and "__pycache__" not in path.parts}
     for path, reason in config.EXEMPT_FROM_RAW_NAME_SCAN.items():
-        assert (MODULE_DIR / path).exists(), f"{path} is exempted but does not exist"
+        assert path in present, f"{path} is exempted but does not exist"
         assert reason.strip(), f"{path} is exempted without a stated reason"
 
 

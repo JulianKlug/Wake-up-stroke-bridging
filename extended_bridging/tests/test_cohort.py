@@ -78,7 +78,8 @@ DATA_GATED = pytest.mark.skipif(
     reason="the private workbook is gitignored and absent from this checkout")
 
 MODULE = Path(cohort.__file__).resolve()
-MODULE_DIR = MODULE.parent
+MODULE_DIR = MODULE.parent          # the flat module root
+TESTS_DIR = Path(__file__).resolve().parent   # this file's own directory
 
 CLASSES = config.ELIGIBILITY_ORDER
 ARMS = tuple(config.TREATMENT_LABELS[code] for code in sorted(config.TREATMENT_LABELS))
@@ -800,7 +801,11 @@ def test_the_log_is_identical_across_interpreters_with_different_hash_seeds():
     its own line so that a SchemaError surfaces as a traceback rather than being swallowed into an
     empty string that then compares equal across both seeds.
     """
-    script = ("import sys, pathlib; sys.path.insert(0, '.')\n"
+    # Both directories, for the reason test_propensity.py's driver gives: the shipped modules are at
+    # the project root and the test modules one level down in `tests/`, and a subprocess running plain
+    # `python` gets neither from pytest.
+    script = (f"import sys; sys.path[:0] = [{str(MODULE_DIR)!r}, {str(TESTS_DIR)!r}]\n"
+              "import pathlib\n"
               "import derive, eligibility, cohort, test_data, test_cohort\n"
               "df, audit = test_data.run(test_cohort.cohort_frame(),\n"
               "                          test_data.hand_source(pathlib.Path('/tmp')))\n"

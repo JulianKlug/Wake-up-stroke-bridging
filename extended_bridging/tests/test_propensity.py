@@ -45,7 +45,8 @@ DATA_GATED = pytest.mark.skipif(
     reason="the private workbook is gitignored and absent from this checkout")
 
 MODULE = Path(propensity.__file__).resolve()
-MODULE_DIR = MODULE.parent
+MODULE_DIR = MODULE.parent          # the flat module root
+TESTS_DIR = Path(__file__).resolve().parent   # this file's own directory
 SOURCE = MODULE.read_text(encoding="utf-8")
 
 ARM_CODES = tuple(sorted(config.TREATMENT_LABELS))
@@ -487,14 +488,19 @@ def test_the_log_is_identical_across_interpreters_with_different_hash_seeds(tmp_
     The driver is written out rather than sketched, for Stage 3 §12.12's reason: an implementer
     choosing it freely can choose one that fits nothing at all and still see two identical outputs.
     """
+    # BOTH directories go on the path, and that is the price of the tests living in `tests/`: the
+    # shipped modules are at the project root and this test module is one level down, so a driver
+    # given only one of the two fails on whichever import it cannot see. pytest's own path handling
+    # does not apply to a subprocess running plain `python`.
     driver = textwrap.dedent("""
         import sys
+        sys.path.insert(0, %r)
         sys.path.insert(0, %r)
         import data, propensity
         from test_propensity import fitted
         _, audit, _ = fitted()
         sys.stdout.write(audit.to_markdown())
-    """) % str(MODULE_DIR)
+    """) % (str(MODULE_DIR), str(TESTS_DIR))
     script = tmp_path / "driver.py"
     script.write_text(driver, encoding="utf-8")
     outputs = []
@@ -669,7 +675,7 @@ def test_no_tail_slice_of_the_entries_appears_in_either_new_test_file(name):
     An assertion on `audit.entries[-4:]` passes whether or not the entries it names are the ones the
     call added, because any four trailing entries satisfy it.
     """
-    source = (MODULE_DIR / name).read_text(encoding="utf-8")
+    source = (TESTS_DIR / name).read_text(encoding="utf-8")
     offenders = [
         node.lineno for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Slice)

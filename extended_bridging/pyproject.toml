@@ -99,4 +99,13 @@ override-dependencies = ["tabulate>=0.9"]
 # trying to build anything.
 
 [tool.pytest.ini_options]
-testpaths = ["."]
+# The acceptance tests live in `tests/`, beside the fixtures they already shared it with
+# (`fixture_schema.xlsx`, `reference/*.R`). The shipped modules stay flat at the project
+# root, so `import config as C` is unchanged everywhere.
+testpaths = ["tests"]
+# And this is what makes that work. pytest inserts a test file's own directory into
+# sys.path (importmode=prepend), which gets the cross-imports between test modules —
+# `from test_data import run` — but NOT the shipped modules one level up. `pythonpath` is
+# relative to rootdir, so this puts the project root on the path and `import config`
+# resolves. Without it every test module fails at collection with ModuleNotFoundError.
+pythonpath = ["."]

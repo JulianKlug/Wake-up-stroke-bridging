@@ -60,7 +60,8 @@ import propensity
 
 RSCRIPT = shutil.which("Rscript")
 R_PACKAGES = ("logistf", "PSweight")
-REFERENCE = Path(__file__).resolve().parent / "tests" / "reference"
+REFERENCE = Path(__file__).resolve().parent / "reference"
+PROJECT = REFERENCE.parent.parent          # the flat module root, one level above tests/
 
 
 def _r_environment() -> dict[str, str]:
@@ -269,14 +270,14 @@ def test_R_is_confined_to_this_file(name):
     which hit is real. Put it in the one file already licensed to know R exists, and the grep returns
     exactly that file.
     """
-    offenders = [str(path.relative_to(REFERENCE.parent.parent)) for path in _python_files()
+    offenders = [str(path.relative_to(PROJECT)) for path in _python_files()
                  if path.resolve() != Path(__file__).resolve()
                  and name in path.read_text(encoding="utf-8")]
     assert offenders == []
 
 
 def _python_files() -> list[Path]:
-    root = REFERENCE.parent.parent
+    root = PROJECT
     found: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d not in {".venv", "__pycache__"})

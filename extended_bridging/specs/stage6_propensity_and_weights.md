@@ -142,16 +142,16 @@ population without a join on `case_id`.
 | Path | Contents |
 |---|---|
 | `extended_bridging/model.py` | `design`, `complete_cases`, `firth`, `Fit` (eight fields — §3.2), `FitError` |
-| `extended_bridging/test_model.py` | the acceptance tests of §12.1-12.7 — **including §12.4a's safeguards and its one unreachability assertion** — and §12.12; the synthetic fixtures of §12.0 **written out there in full**, both the three answer-known ones and the hard-fit family; and **three** of §16b's four oracles — `firthlogist`, the `scipy` objective check and the large-n MLE. The fourth, §12.0.2's golden vector, is `test_propensity.py`'s, because it pins `fit`'s output rather than `firth`'s |
+| `extended_bridging/tests/test_model.py` | the acceptance tests of §12.1-12.7 — **including §12.4a's safeguards and its one unreachability assertion** — and §12.12; the synthetic fixtures of §12.0 **written out there in full**, both the three answer-known ones and the hard-fit family; and **three** of §16b's four oracles — `firthlogist`, the `scipy` objective check and the large-n MLE. The fourth, §12.0.2's golden vector, is `test_propensity.py`'s, because it pins `fit`'s output rather than `firth`'s |
 | `extended_bridging/propensity.py` | `fit`, `Propensity`, `ess` |
-| `extended_bridging/test_propensity.py` | the acceptance tests of §12.8-12.14, its **own** module-scoped `workbook` fixture, and §16b's second oracle — the golden vector of §12.0.2 |
-| `extended_bridging/test_reference_r.py` | the gated R oracle of §16b.2 — the **only** Python in the repository that knows R exists, imported by nothing |
+| `extended_bridging/tests/test_propensity.py` | the acceptance tests of §12.8-12.14, its **own** module-scoped `workbook` fixture, and §16b's second oracle — the golden vector of §12.0.2 |
+| `extended_bridging/tests/test_reference_r.py` | the gated R oracle of §16b.2 — the **only** Python in the repository that knows R exists, imported by nothing |
 | `extended_bridging/tests/reference/firth_logistf.R`, `ato_psweight.R` | ~20 committed lines each: read a CSV, fit, write coefficients. No analysis logic and no covariate list (§16b.2) |
 | `extended_bridging/config.py` | **amended** — the seven declared `FIRTH_*` numerics of §5.6, and nothing else (§10) |
-| `extended_bridging/test_config.py` | **amended** — one assertion that `REFERENCE_LEVELS[f] == FACTOR_LEVELS[f][0]`, which is the coupling §4.2's by-name drop rests on and which nothing asserted (§4.2, §10) |
+| `extended_bridging/tests/test_config.py` | **amended** — one assertion that `REFERENCE_LEVELS[f] == FACTOR_LEVELS[f][0]`, which is the coupling §4.2's by-name drop rests on and which nothing asserted (§4.2, §10) |
 | `extended_bridging/data.py` | **amended** — `KINDS` and `_HEADINGS` gain `model`; `_MUST_NAME_CASES` deliberately unchanged, for Stage 5 §6.3's reason (§7.1, §10) |
 | `extended_bridging/pyproject.toml` | **amended** — `numpy` becomes a direct import of a shipped module; `scipy` becomes a **test-only** import (§2), and §12.7's scan forbids it in `model.py` and `propensity.py`; a new **dev-only** `reference` group holds `firthlogist` behind its scikit-learn ceiling (§2, §16b) |
-| `extended_bridging/test_data.py`, `test_eligibility.py`, `test_cohort.py` | **amended** — the three literal pins of `KINDS` and `_HEADINGS.values()`, and the two test names carrying the word *eight* (§10) |
+| `extended_bridging/tests/test_data.py`, `test_eligibility.py`, `test_cohort.py` | **amended** — the three literal pins of `KINDS` and `_HEADINGS.values()`, and the two test names carrying the word *eight* (§10) |
 | `extended_bridging/implementation_roadmap.md` | **amended, and landing with this document** — Stage 6 gains its `**Spec:**` line and three **Accept when** items (§19) |
 
 `out/logs/audit_<label>.md` is an **output, not a deliverable**, as in Stages 2-5: gitignored, written
@@ -164,6 +164,13 @@ a `HAND-N` or `COHORT-N` fixture record, or a count.
 ## 2. Environment
 
 `uv`, Python 3.12, flat module layout, `import config as C`. Commands run from `extended_bridging/`.
+
+**The shipped modules are flat at the project root; the acceptance tests live in `tests/`**, beside the
+fixtures they already shared it with. `import config as C` is unchanged in both, because
+`pyproject.toml` declares `pythonpath = ["."]` relative to rootdir — pytest puts a test file's own
+directory on the path, which serves the cross-imports between test modules, and `pythonpath` is what
+puts the modules under test there. `test_config.py` asserts the split so it stays true: a `test_*.py`
+at the root would still be collected, and the layout would quietly stop holding.
 
 ```bash
 cd extended_bridging && uv sync && uv run pytest -v
@@ -2876,7 +2883,7 @@ when R or its packages are absent, and is never on any estimation path.
   extended_bridging/
     tests/reference/firth_logistf.R      committed, ~20 lines, reviewable in a diff
     tests/reference/ato_psweight.R       committed
-    test_reference_r.py                  the only Python that knows R exists
+    tests/test_reference_r.py            the only Python that knows R exists
 ```
 
 ```python
@@ -3210,8 +3217,16 @@ Stage 6 is complete when all of the following hold, and not before.
 14. The audit log has been read end to end by a human, and its numbers agree with §18 and with
     `../out/stage0_data_inventory.md`: the fit's `n` equals `cohort_flow`'s `records`, minus
     `covariate_completeness`'s `n`.
-15. `grep -rn "sklearn\|firthlogist" extended_bridging/*.py` returns hits in `test_model.py` only, and
-    `grep -rn "Rscript\|logistf\|PSweight" extended_bridging/*.py` in `test_reference_r.py` only.
+15. `grep -rn --include='*.py' "sklearn\|firthlogist" extended_bridging` returns hits in
+    `tests/test_model.py` only, and `grep -rn --include='*.py' "Rscript\|logistf\|PSweight"
+    extended_bridging` in `tests/test_reference_r.py` only.
+
+    **The glob matters and an earlier form of this item was wrong once the tests moved into
+    `tests/`.** It read `extended_bridging/*.py`, which stopped matching any test module and so
+    returned nothing for both patterns — reading as *clean* while checking nothing. A grep whose
+    emptiness is indistinguishable from success is the same silent-green failure the AST scans
+    have companions for, and §12.7 and §16b.2 assert both properties in code anyway, which is
+    what actually holds them.
 15a. **`logistf`'s convergence rule has been READ, from source, and recorded in §18.** This does not need
     R installed: `logistf`'s CRAN tarball is a download and its convergence test is a few lines of R.
     Record four things in §18 with the package version: the default `lconv`, `gconv` and `xconv`;
