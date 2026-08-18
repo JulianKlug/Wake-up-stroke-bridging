@@ -266,18 +266,56 @@ is now asserted by import scan.
 
 ## Stage 7 — Balance and overlap diagnostics [§9]
 
+**Spec:** `specs/stage7_balance_and_overlap.md`.
+
 **Build.**
 - Standardised mean differences before and after weighting, using the **unweighted** pooled SD as a
   common denominator so the yardstick does not move.
 - Judged against the full [§6] confounder set regardless of which covariates a given specification put
   in its own propensity model.
-- The four vascular risk factors reported as negative controls [§6].
+- The **four** vascular risk factors reported as negative controls [§6]. `BALANCE_ONLY` holds
+  **five** names and the fifth is not one of them: `penumbra_ml` is excluded from the propensity
+  model because it is core and Tmax>6 s restated, and a covariate excluded for exact collinearity is
+  not a covariate weighting was expected to fix. The role column is computed from
+  `PS_COVARIATES_FULL`, which is [§6]'s own identity, rather than from `BALANCE_ONLY`
+  [Stage 7 §4.3].
 - A **within-centre** overlap table alongside the pooled one: per centre, numbers per arm, propensity
   range per arm, ESS, maximum weight, weight share, worst within-centre |SMD|. Centres with structural
   non-positivity are reported as such rather than given an overlap plot.
 
 **Accept when.** The SMD function reproduces a hand-computed value, and returns missing rather than
-zero for a variable observed in only one arm.
+zero for a variable observed in only one arm. And:
+
+- **One balance row per declared factor *level*, not per design-matrix column** — including each
+  factor's reference level and a declared level nobody has. `model.design` drops the reference dummy
+  by name and then drops constant columns, so a table built from its columns is three rows shorter on
+  this cohort and omits `center_HUG`, `onset_type_witnessed` and `center_USZ`. The first of those
+  carries the **worst residual imbalance in the cohort**, so the shortcut produces a complete-looking
+  table whose reported worst is wrong, with nothing raising. Stage 7 therefore builds indicators from
+  `FACTOR_LEVELS` and does not import `model` [Stage 7 §4.2, §12.2].
+- **A covariate constant within each arm and different between them returns missing, not zero.** That
+  is a covariate which perfectly separates the arms, and `pilots/analysis.py:194-208` reports it as
+  `0.0` — passing the threshold as the best-balanced row in the table — because its only guard is
+  `sd > 0`. This is the second reading of the criterion above, and it is the branch the pilots get
+  wrong; the branch the criterion names, they already get right. The comparison is of the two **arm
+  constants** and never of the two weighted means: measured, `np.average` of one constant under two
+  weight vectors differs at 1 ulp, and the weighted-mean form reports a covariate identical in both
+  arms as undefined [Stage 7 §5.3, §5.3a].
+- **The pooled overlap report is a row of the within-centre table, reconciled against Stage 6 rather
+  than recomputed.** Stage 6's `overlap_weights` entry already carries the pooled per-arm `n`, ESS,
+  max weight and weight share, so a second table would be a third rendering of them in the same log.
+  Building the pooled row with the same function as the centre rows is what stops the two disagreeing
+  about what a column means, and no second effective sample size exists anywhere: `propensity.ess` is
+  called per centre per arm and a Kish sum appears nowhere in the module [Stage 7 §6.1, §6.3].
+
+**What this stage found, and it is not a code defect.** [§9]'s |SMD| < 0.10 threshold is **exceeded
+after weighting, by covariates that are in the propensity model**: measured 0.211 on `center = HUG`
+and 0.154 on `center = Lugano`, where Stage 6 §13 carried the pilots' synthetic expectation of
+`0 < worst < 0.05`. With an unpenalised score every in-model row balances to 1e-15, so the residual
+is the [§7] estimator's own — Firth's modified score solves a different equation from the one the
+exact-balance property rests on. It is reported and handed to the PI under [§9] and [§13]; it is
+**not** a licence to substitute an estimator [§7], and Stage 6 §12.10's pair fails if one is
+silently reinstated [Stage 7 §6.4, §13].
 
 ## Stage 8 — Primary outcome estimator [§8]
 
