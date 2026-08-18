@@ -149,3 +149,95 @@ Stage 1/Stage 2 amendment as well as a new file. No test written before Stage 6 
 rather than a DataFrame — do **not** build it speculatively with Stage 5, whose acceptance tests are
 all frame-driven. When it is built, give it a control at a treating centre (the property `cohort_frame`
 adds as `COHORT-1`) or it will hit P2 exactly as the schema fixture does.
+
+**Status update, 2026-08-14.** **Stage 6 is not the trigger**, checked rather than assumed during its
+engineering review. Every Stage 6 acceptance test runs on a frame or on synthetic arrays, and
+`test_propensity.py` takes the whole pipeline end to end with no `data/` through `cohort_frame()` — see
+`specs/stage6_propensity_and_weights.md` §12.0. **Stage 10 is the likelier trigger**: a resampling test
+wants a reproducible file rather than a frame built in Python. Re-evaluate there.
+
+---
+
+## Extract a shared table row-builder from `data.absence_by_column`
+
+**Surfaced by:** the engineering review of `specs/stage6_propensity_and_weights.md`, 2026-08-14
+(finding 7; the decision it produced is recorded in that spec's §7.4).
+
+**What.** Split `data.absence_by_column` (`data.py:677`) into two pieces: a public row-builder returning
+`(header, rows)` for a per-column, per-centre absence table, and a thin wrapper that records the
+`missingness` audit entry from it. Any stage wanting that table under a *different* audit kind then calls
+the builder instead of rewriting the loop.
+
+**Why.** The function's own docstring is the argument for it existing at all:
+
+> "Public because Stage 3 calls it too … A second implementation over there would drift on the branch
+> that matters — `structural` versus `missing` — which is the exact misreading §10.2 exists to prevent.
+> So there is one classifier, called twice with different column lists."
+
+It is now called three times — `data.py`'s `_missingness`, `derive.py:381`, and `cohort.py:479` over the
+built cohort — and every call renders under `missingness`, because recording that kind is baked into the
+function. Stage 6's spec originally asked for a fourth rendering inside its new `model` kind, which would
+have been a hand-rolled copy of the per-centre loop
+(`(absent & (df["center"] == centre)).sum()` over `CENTER_ORDER`). Stage 6 solved that by **narrowing its
+own table** to `covariate`, `n_absent`, `excluded_by` and pointing at `absence_by_cohort_column` for the
+per-centre breakdown (§7.4). That is right for Stage 6 and does not generalise: Stage 7's within-centre
+overlap table [§9] and Stage 14's flow diagram [§16] both want per-centre counts under headings that are
+not `missingness`.
+
+**Pros.** One implementation of the four-way `structural` / `not recorded` / `missing` / `complete`
+classification and of the per-centre columns, for every stage rather than for every stage that records
+`missingness`. Removes the reason a future stage has to re-derive Stage 6 §7.4's decision. The centre
+columns keep coming from `CENTER_ORDER` rather than from the data, in one place, which is the property
+that comment block exists to protect.
+
+**Cons.** It reopens a landed, tested module that three modules import, in a repository whose acceptance
+criterion is a byte-identical audit log — so `test_data.py`'s rendering tests are in the blast radius and
+the split must be provably output-preserving. **No stage needs it today**: Stage 6 §7.4's narrowing means
+Stage 6 does not, and Stages 7 and 14 do not exist yet.
+
+**Depends on / blocked by.** Nothing technical. Do it when Stage 7 or Stage 14 first wants the table under
+a non-`missingness` heading — that is the point where the duplication becomes real rather than
+hypothetical, and where the refactor can be verified against a second real caller instead of an imagined
+one. Whoever does it should read Stage 6 §7.4 first: it records what was declined and why, so the
+refactor can be judged against the argument rather than against the code.
+
+---
+
+## Get the cross-model second opinion on the Stage 6 spec
+
+**Surfaced by:** the engineering review of `specs/stage6_propensity_and_weights.md`, 2026-08-14 — as the
+one piece of that review's own scope it failed to deliver. Recorded in that spec's §19 and §20.
+
+**What.** Re-run an independent second-model review of the Stage 6 spec and fold anything it finds into
+that document's §20 as a second round.
+
+**Why.** §19 of the Stage 6 spec asked for two things that execution cannot settle: an engineering review
+and a cross-model second opinion. The review of 2026-08-14 delivered the first — twelve findings, §20 —
+and could not deliver the second. The `codex exec` pass failed with `ERROR: Failed to refresh token: 401
+Unauthorized` **mid-run**, after it had already streamed most of the document, and no substitute was
+dispatched. So half of what §19 asked for is genuinely outstanding, which §19 and §20 both now state
+rather than glossing.
+
+The expected yield is not zero and the precedent is in this repository: Stage 4's review found ten
+defects in a document of this shape, Stage 5's found eight, this one found twelve, and in all three cases
+some of what the review missed was caught during implementation. A second reader is cheapest **now**,
+before `model.py`, `propensity.py` and two test files are written against the spec.
+
+**Pros.** Two models disagreeing on a 2700-line specification is a stronger signal than one model
+agreeing with itself. The failed run got far enough to show the pass itself is viable — the failure was
+auth, not capability or context length.
+
+**Cons.** It is a re-run of work already attempted, so the marginal yield over §20's twelve findings is
+unknown and may be zero. Needs `codex login`, a manual step. §20's findings plus Definition of done items
+6-12 — written as break-it-and-watch instructions precisely because Stages 4 and 5 showed reviews miss
+things — already cover the classes of defect a second reader usually catches.
+
+**Context for whoever picks it up.** Two practical notes from the failed attempt: the installed `codex`
+rejects `--enable web_search_cached` (`error: unexpected argument '--enable' found`), so drop that flag;
+and the prompt is worth reusing — it fed the spec's first 30KB, named this review's nine principal
+findings, and instructed the second model **not** to repeat them but to find what they missed. Reviewing
+the *revised* spec rather than the original is the point, so the finding list should be updated to §20's
+twelve before re-running.
+
+**Depends on / blocked by.** `codex login`, or any second model given the spec. Do it **before T2 of
+Stage 6 starts** — after that, a finding costs a code change as well as a spec change.

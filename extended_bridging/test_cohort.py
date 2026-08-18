@@ -777,12 +777,13 @@ def test_the_entries_render_under_the_cohort_construction_heading():
         assert f"- **{step}**" in rendered
 
 
-def test_data_kinds_is_the_declared_eight_in_order():
-    # So a future implementer cannot quietly add a ninth. `cohort` sits between `derivation` and
-    # `structural` [§6.2], which is what puts "who is in the analysis" before its denominators.
+def test_data_kinds_is_the_declared_nine_in_order():
+    # So a future implementer cannot quietly add a tenth. `cohort` sits between `derivation` and
+    # `model` [§6.2], which is what puts "who is in the analysis" before what was fitted to them and
+    # before its denominators. `model` is Stage 6's [Stage 6 §7.1].
     assert data.KINDS == (
         "provenance", "contract", "correction", "observation",
-        "derivation", "cohort", "structural", "missingness")
+        "derivation", "cohort", "model", "structural", "missingness")
     assert data._HEADINGS["cohort"] == "Cohort construction"
 
 

@@ -635,7 +635,7 @@ def test_this_stage_adds_no_kind_and_stage_5_added_exactly_cohort():
     # that removes nobody need not"; `cohort._record_removal` states it exactly instead [Stage 5 §6].
     assert data.KINDS == (
         "provenance", "contract", "correction", "observation",
-        "derivation", "cohort", "structural", "missingness")
+        "derivation", "cohort", "model", "structural", "missingness")
     assert data._MUST_NAME_CASES == frozenset({"correction", "observation"})
 
 

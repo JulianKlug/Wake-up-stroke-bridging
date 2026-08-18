@@ -590,6 +590,13 @@ def test_the_factor_declarations_agree_with_each_other():
 @pytest.mark.parametrize("factor", list(config.REFERENCE_LEVELS))
 def test_every_reference_level_is_one_of_its_own_levels(factor):
     assert config.REFERENCE_LEVELS[factor] in config.FACTOR_LEVELS[factor]
+    # And it is the LEADING one, which is the coupling Stage 6 §4.2's by-name reference drop rests on
+    # and which nothing asserted until Stage 6 discovered it depended on it. On a declared Categorical,
+    # `pd.get_dummies(..., drop_first=True)` drops the first *declared* level — so `design`'s by-name
+    # drop and `drop_first` are the same model only while the reference IS that first level. Without
+    # this line the equivalence is a coincidence that reordering CENTER_ORDER, or naming a non-leading
+    # reference, breaks silently: the two forms would then fit different models under the same name.
+    assert config.REFERENCE_LEVELS[factor] == config.FACTOR_LEVELS[factor][0]
 
 
 def test_centre_levels_are_exactly_the_recode_targets():

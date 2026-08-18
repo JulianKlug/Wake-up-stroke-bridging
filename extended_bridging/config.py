@@ -277,6 +277,40 @@ SMD_THRESHOLD: Final[float] = 0.10     # [§9]
 RARE_MINORITY_THRESHOLD: Final[int] = 10
 
 
+# --- the Firth fit [§7, Stage 6 §5] -----------------------------------------------------------
+#
+# Prespecified, and they are part of the estimator: [§10] refits this model in every one of N_BOOT
+# replicates, so a tolerance is a property of the sampling distribution and not a runtime knob. The
+# ORDER the two convergence tests run in is prespecified for the same reason [Stage 6 §5.3].
+#
+# These are the PILOTS' values, carried from pilots/analysis.py. An earlier draft of this block called
+# them the R reference implementation's defaults. **That claim is struck, not merely withdrawn**: the
+# reference implementation's source has since been read (DoD-15a, recorded in Stage 6 §18g) and its
+# defaults are none of these — and, more importantly, its stopping RULE is a different rule, testing
+# the likelihood change, the score AND the coefficient step conjunctively where §5.3 tests the first
+# two disjunctively and excludes the third deliberately.
+#
+# §5.3's argument for excluding the coefficient step is untouched by that and never depended on the
+# attribution: under near-separation the penalised surface is genuinely flat, so a step-norm criterion
+# would report a finite correct fit as a failure — and [§10] drops failed replicates, so the ones
+# dropped would be exactly the sparse ones. That is selection on the replicate.
+#
+# The R package's name is deliberately not written in any shipped module [Stage 6 DoD-15]; it lives in
+# the spec and in the one test module that knows R exists.
+#
+# The prefix is FIRTH_ and not PS_ because model.py reads them, and model.py does not know what the
+# exposure is [Stage 6 §0.1, §12.12] — whose attribute scan forbids any `C.` name beginning `PS_`
+# there. A PS_-prefixed tolerance would be a propensity-flavoured constant read by an outcome fit.
+
+FIRTH_MAX_ITER: Final[int] = 200          # measured: 7 on the cohort, 11 on the hand frame
+FIRTH_TOL: Final[float] = 1e-8            # |Δ penalised log-likelihood| — the route that always fires
+FIRTH_SCORE_TOL: Final[float] = 1e-6      # max |modified score|; fires on ill-conditioned I — §5.3
+FIRTH_MAX_HALVINGS: Final[int] = 30       # exhausting them raises; it is not a convergence route
+FIRTH_MAX_STEP: Final[float] = 5.0        # trust radius, RELATIVE to ‖beta‖ — see Stage 6 §5.2a
+FIRTH_ETA_CLIP: Final[float] = 500.0      # keeps exp() in range; reachable at the upper end [§3.1]
+FIRTH_WEIGHT_FLOOR: Final[float] = 1e-10  # floors p(1-p) so the information matrix stays invertible
+
+
 # --- treatment and centres -----------------------------------------------------------------
 
 TREATMENT: Final[str] = "ivt"                       # 1 = IVT before EVT (bridging), 0 = EVT alone

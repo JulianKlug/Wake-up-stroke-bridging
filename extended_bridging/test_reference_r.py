@@ -1,0 +1,315 @@
+"""Stage 6 §16b.2 — the gated R oracle. The ONLY Python in this repository that knows R exists.
+
+Imported by nothing, on no estimation path, and never producing a number that is reported. §12.7's
+scan pins R's blast radius to this one file: `subprocess`, `Rscript`, `logistf` and `PSweight` appear
+here and nowhere else under `extended_bridging/`.
+
+**Why an oracle and not a dependency** [§16b.1]. R is where the methodologically authoritative
+implementations live — `logistf` is the reference Firth implementation and `PSweight` is the reference
+implementation of this SAP's exact estimand, written by the authors of the overlap-weight method — and
+that is said plainly rather than worked around. It is declined as a *runtime* dependency because it
+doubles the reproducibility surface, because the bridge is the fragile part (a serialisation boundary
+crossed on every one of `N_BOOT` replicates), and because adopting `PSweight` would be adopting its
+conventions for weights, variance and balance where [§7], [§8] and [§10] are already specified down to
+the p-value's definition.
+
+**The boundary is a CSV written to `tmp_path` and a CSV read back**, never `rpy2`: no embedded
+interpreter, no shared-library build requirement, no R x Python x numpy compatibility matrix. The cost
+is one process spawn per test, in a test that runs once — not 2000 times inside a bootstrap, which is
+exactly the distinction §16b.1 turns on. Floats cross at `%.17g` and come back under
+`options(digits = 17)`, so a disagreement is the estimator's and never the serialisation's, and
+`Rscript --vanilla` means no user or site profile can change the result.
+
+**The skip is loud on purpose.** Every AST scan in Stages 1-5 has a companion proving it fires,
+precisely so a check matching nothing cannot pass as green. The same hazard applies here in a worse
+form: this oracle skips on any machine without R and the two packages, which is *most* machines, so
+the default state is "not run". `pytest -rs` therefore reads as an instruction rather than as noise.
+
+**STATUS: the gate has been opened and passed, 2026-08-16 — DoD-16 is satisfied.** Measured against
+`logistf` 1.26.1 and `PSweight` 2.1.2 on R 4.5.0; §18g carries the numbers.
+
+**What it took to open it, because the obstacle was environmental and will recur.** R's startup runs
+`system("uname -a", intern = TRUE)`. On this machine PATH carried a second toolchain prefix whose
+`sh`/`uname` are linked against a different libc, so that call segfaulted with status 139 inside R's
+forked child, `utils` never loaded, and `install.packages` did not exist — which looks exactly like a
+broken R and is not one. `_r_environment` below is the fix, and it is why every subprocess in this
+module gets an explicit environment rather than inheriting one. Two intermediate diagnoses were wrong
+and are recorded so nobody repeats them: it is **not** the sandbox (reproduced with the sandbox
+disabled and under `--vanilla --no-init-file`), and it is **not** a broken `r-base-core`.
+
+Two things had to be true beyond that, both about libraries rather than about R: a glibc-matched
+`cmake` on PATH for `nloptr` -> `lme4` -> `PSweight`, and a library path excluding
+`/usr/local/lib/R/site-library`, which held 75 packages built under R 3.6.3 that abort dependent
+builds with "installed before R 4.0.0". Hence `R_LIBS_SITE` and `R_LIBS_USER` being passed through.
+"""
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
+import config
+import model
+import propensity
+
+RSCRIPT = shutil.which("Rscript")
+R_PACKAGES = ("logistf", "PSweight")
+REFERENCE = Path(__file__).resolve().parent / "tests" / "reference"
+
+
+def _r_environment() -> dict[str, str]:
+    """The environment every `Rscript` call below is given, and both edits to it are load-bearing.
+
+    **System directories are put FIRST on PATH, not appended.** R's startup runs
+    `system("uname -a", intern = TRUE)` through `sh`, so whichever `sh` and `uname` PATH resolves are
+    the ones that execute inside R's forked child. On a machine carrying a second toolchain prefix —
+    a Gentoo prefix, a conda environment, a cross-compilation sysroot — those binaries can be linked
+    against a different libc, and running them under R segfaults: `utils` then fails to load, R
+    continues without it, and `install.packages` and much else silently do not exist. Measured here,
+    where the probe returned status 139 and the package check therefore reported the packages
+    missing when they were installed and loadable.
+
+    That failure mode is exactly the one §16b.2 says this gate must not have. A skip is the DEFAULT
+    state of this module, so anything that makes the probe fail for an unrelated reason turns the
+    oracle off permanently and silently, and the suite stays green while proving nothing. Preferring
+    the system tools costs nothing when there is no second toolchain and is the whole difference when
+    there is.
+
+    **`R_LIBS_USER` and `R_LIBS_SITE` are passed through when set**, so an oracle installed into a
+    user library is found, and so a site library full of packages built under an older R can be
+    excluded by the caller without editing this file.
+    """
+    environment = {
+        "PATH": "/usr/bin:/bin:" + os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+        "LANG": "C",
+    }
+    for passthrough in ("R_LIBS_USER", "R_LIBS_SITE", "R_LIBS"):
+        if passthrough in os.environ:
+            environment[passthrough] = os.environ[passthrough]
+    return environment
+
+
+R_ENV = _r_environment()
+
+
+def _r_has(packages: tuple[str, ...]) -> bool:
+    """True only if every package LOADS. A package that installs but cannot load is not an oracle."""
+    if RSCRIPT is None:
+        return False
+    probe = ";".join(f'if(!requireNamespace("{p}",quietly=TRUE)) quit(status=1)' for p in packages)
+    try:
+        return subprocess.run([RSCRIPT, "--vanilla", "-e", probe], env=R_ENV,
+                              capture_output=True, timeout=180).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+reference_r = pytest.mark.skipif(
+    RSCRIPT is None or not _r_has(R_PACKAGES),
+    reason=f"R oracle: needs Rscript and {', '.join(R_PACKAGES)}; see spec §16b.2. Install into a "
+           "user library and point R_LIBS_USER at it; if R reports that install.packages does not "
+           "exist, that is the PATH collision _r_environment documents, not a broken R.")
+
+DATA_GATED = pytest.mark.skipif(
+    not config.DATA_XLSX.exists(),
+    reason="the private workbook is gitignored and absent from this checkout")
+
+
+def _run(script: str, source: Path, destination: Path, *extra: str) -> str:
+    """Every R invocation goes through here, and every one gets `R_ENV` — including this one.
+
+    The gate's probe and the scripts it gates must share an environment. An earlier version passed
+    `env=R_ENV` in `_r_has` alone, so the probe found both packages, the tests un-skipped, and then
+    every script died in R's startup with `could not find function "read.csv"` — `utils` unloadable
+    for the PATH reason `_r_environment` documents. Loud rather than silent, but it is the same
+    defect in the half of the pair that does the work.
+    """
+    done = subprocess.run(
+        [RSCRIPT, "--vanilla", str(REFERENCE / script), str(source), str(destination), *extra],
+        env=R_ENV, capture_output=True, text=True, timeout=600)
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def _write(frame: pd.DataFrame, path: Path) -> Path:
+    """Full precision across the boundary: 6 significant figures could not distinguish 1e-15
+    agreement from 1e-7 agreement, and the first is the claim being made."""
+    frame.to_csv(path, index=False, float_format="%.17g")
+    return path
+
+
+def cohort_design():
+    """The workbook's design and response, built by `model.design` so R cannot disagree about it."""
+    import cohort
+    import data
+    import derive
+    import eligibility
+    df, audit = data.load(data.WORKBOOK)
+    df = cohort.build(eligibility.classify(derive.derive(df, audit), audit), audit)
+    mask = model.complete_cases(df, config.PS_COVARIATES)
+    X, _ = model.design(df.loc[mask], config.PS_COVARIATES)
+    return X, df.loc[mask, config.TREATMENT].to_numpy(dtype=float)
+
+
+# --- the two comparisons -------------------------------------------------------------------------
+
+@reference_r
+@DATA_GATED
+def test_logistf_agrees_with_our_kernel_on_the_workbook_design(tmp_path):
+    """DoD-16's second half: whether `logistf` and we agree on the coefficients.
+
+    The tolerance is deliberately not machine precision, and the reason is a structural difference
+    already established by reading the source (§18g): `logistf` stops when xconv AND gconv AND lconv
+    are ALL met, ours stops when lconv OR gconv is met and never tests the coefficient step. On a
+    penalised surface that §5.3 describes as genuinely flat, two different stopping rules stop in
+    different places — so the honest comparison is on the penalised log-likelihood, with a loose
+    coefficient bound beside it. The Python port of `logistf` differs from us by 3.66e-06 here for
+    exactly this reason while agreeing on the objective to 2e-10, which is what sets these tolerances.
+    """
+    X, y = cohort_design()
+    frame = X.copy()
+    frame["y"] = y
+    out = tmp_path / "coefficients.csv"
+    version = _run("firth_logistf.R", _write(frame, tmp_path / "design.csv"), out,
+                   str(config.FIRTH_MAX_ITER), str(config.FIRTH_MAX_HALVINGS),
+                   str(config.FIRTH_MAX_STEP), str(config.FIRTH_TOL),
+                   str(config.FIRTH_SCORE_TOL), str(config.FIRTH_TOL))
+    assert version.strip(), "the R package version must be captured, not assumed"
+
+    theirs = pd.read_csv(out)["coefficient"].to_numpy(dtype=float)
+    ours = model.firth(X, y)
+    Xc = np.column_stack([np.ones(len(y)), X.to_numpy(dtype=float)])
+    assert abs(model._penalised_loglik(Xc, y, ours.beta)
+               - model._penalised_loglik(Xc, y, theirs)) < 1e-6
+    assert float(np.max(np.abs(ours.beta - theirs))) < 1e-3
+
+
+@reference_r
+@DATA_GATED
+def test_psweight_agrees_on_e_and_w_before_the_ess_is_compared(tmp_path):
+    """DoD-16's first half. **Compare `e` and `w` FIRST**, and the ESS separately.
+
+    `PSweight` owns the whole ATO pipeline, so it may report an effective sample size that is not
+    Kish's, or report one after its own normalisation of the weights. A convention difference in the
+    third quantity must not be read as a weighting error in the first two, which is why this test
+    asserts on `e` and `w` and merely RECORDS what the ESS came back as.
+
+    `PSweight` fits its own unpenalised propensity model, so exact agreement with a Firth score is not
+    expected and is not asserted: what is asserted is that the two scores describe the same population
+    — rank correlation and the ATO weight identity — which is what a check on the *estimand* rather
+    than on the *estimator* can establish.
+    """
+    X, y = cohort_design()
+    frame = X.copy()
+    frame["a"] = y
+    out = tmp_path / "weights.csv"
+    reported = _run("ato_psweight.R", _write(frame, tmp_path / "cohort.csv"), out)
+    assert "PSweight" in reported
+
+    theirs = pd.read_csv(out)
+    ours = model.firth(X, y)
+    assert np.all((theirs["e"].to_numpy() > 0.0) & (theirs["e"].to_numpy() < 1.0))
+    # the ATO weight identity, which is the estimand and not the estimator
+    expected = np.where(y == 1.0, 1.0 - theirs["e"].to_numpy(), theirs["e"].to_numpy())
+    assert np.allclose(theirs["w"].to_numpy(), expected, atol=1e-12)
+    # and the two scores order the cohort the same way, which is what a different fitter should preserve
+    assert float(pd.Series(ours.p).corr(theirs["e"], method="spearman")) > 0.9
+
+    # §16b.2's LAST open question, and it can only be answered by running the package: is the ESS it
+    # REPORTS Kish's? Measured: yes, to every digit it prints. So there is no convention difference to
+    # caveat, and the gap between its ESS and ours is entirely the propensity model — the estimator
+    # [§7] prescribes — rather than the formula or a normalisation.
+    #
+    # Note WHY normalisation could never have produced one: Kish is scale-invariant, since
+    # (Σcw)²/Σ(cw)² = (Σw)²/Σw². Only a different formula could differ, and it is not a different one.
+    numbers = dict(zip(reported.split()[2::2], (float(v) for v in reported.split()[3::2])))
+    for code, key in ((1, "reported_ess_treated"), (0, "reported_ess_control")):
+        arm = theirs["w"].to_numpy()[y == float(code)]
+        assert numbers[key] == pytest.approx(propensity.ess(arm), rel=1e-6)
+
+
+@reference_r
+def test_the_r_package_versions_are_captured_and_non_empty(tmp_path):
+    """An oracle that agreed at an unrecorded version is a claim with no date on it (§16b.2).
+
+    Whoever opens this gate copies what this prints into the spec's §18, with the date it ran.
+    """
+    frame = pd.DataFrame({"x": np.arange(1.0, 11.0), "y": [0.0] * 5 + [1.0] * 5})
+    version = _run("firth_logistf.R", _write(frame, tmp_path / "d.csv"), tmp_path / "c.csv",
+                   str(config.FIRTH_MAX_ITER), str(config.FIRTH_MAX_HALVINGS),
+                   str(config.FIRTH_MAX_STEP), str(config.FIRTH_TOL),
+                   str(config.FIRTH_SCORE_TOL), str(config.FIRTH_TOL))
+    assert "logistf" in version and any(ch.isdigit() for ch in version)
+
+
+# --- the gate itself, which runs everywhere ----------------------------------------------------------
+
+R_ONLY_NAMES = ("Rscript", "logistf", "PSweight")
+
+
+@pytest.mark.parametrize("name", R_ONLY_NAMES)
+def test_R_is_confined_to_this_file(name):
+    """§16b.2 and DoD-15: R's blast radius is this module and the two committed scripts.
+
+    This is what keeps the oracle an oracle. R is where the methodologically authoritative
+    implementations live, and it is declined as a RUNTIME dependency rather than as a reference — so
+    the one thing that must stay true is that no estimation path can reach it, and no shipped module
+    can so much as name it.
+
+    The scan lives HERE rather than in `test_model.py` for a reason that is the rule itself: a scan
+    must name the strings it searches for, so wherever it lives becomes a file that names them. Put it
+    in the general test module and DoD-15's `grep` returns two files and a reader has to reason about
+    which hit is real. Put it in the one file already licensed to know R exists, and the grep returns
+    exactly that file.
+    """
+    offenders = [str(path.relative_to(REFERENCE.parent.parent)) for path in _python_files()
+                 if path.resolve() != Path(__file__).resolve()
+                 and name in path.read_text(encoding="utf-8")]
+    assert offenders == []
+
+
+def _python_files() -> list[Path]:
+    root = REFERENCE.parent.parent
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in {".venv", "__pycache__"})
+        found.extend(Path(dirpath) / n for n in sorted(filenames) if n.endswith(".py"))
+    return found
+
+
+def test_this_module_is_imported_by_nothing():
+    offenders = [str(path.name) for path in _python_files()
+                 if path.resolve() != Path(__file__).resolve()
+                 and "test_reference_r" in path.read_text(encoding="utf-8")]
+    assert offenders == []
+
+
+def test_the_committed_r_scripts_exist_and_are_short_enough_to_read():
+    # An oracle nobody can read is not evidence. Twenty-odd lines each: read CSV, fit, write
+    # coefficients — no analysis logic and no covariate list, so the R side cannot disagree about the
+    # SPECIFICATION while appearing to disagree about the ESTIMATOR.
+    for script in ("firth_logistf.R", "ato_psweight.R"):
+        path = REFERENCE / script
+        assert path.exists(), path
+        code = [line for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.strip().startswith("#")]
+        assert len(code) <= 30, f"{script} has grown {len(code)} lines of code; keep it reviewable"
+
+
+def test_the_scripts_name_no_covariate():
+    # The design matrix arrives already built by `model.design`, which is what keeps invariant 4 and
+    # the [§6] specification on the Python side of the boundary.
+    for script in ("firth_logistf.R", "ato_psweight.R"):
+        # Over the CODE only, and on whole words: the comments explain what the scripts are for, and
+        # `packageVersion` contains "age".
+        code = " ".join(line.split("#")[0]
+                        for line in (REFERENCE / script).read_text(encoding="utf-8").splitlines())
+        words = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", code))
+        assert words.isdisjoint(config.PS_COVARIATES), f"{script} names a covariate"

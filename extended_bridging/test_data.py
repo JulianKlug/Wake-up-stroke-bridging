@@ -357,7 +357,7 @@ def test_every_kind_has_a_section_heading():
     assert tuple(data._HEADINGS) == data.KINDS
 
 
-def test_the_headings_are_the_declared_eight_in_pipeline_order():
+def test_the_headings_are_the_declared_nine_in_pipeline_order():
     # Pinned against the literal, like SOURCES and _MUST_NAME_CASES: `derivation` is Stage 3's and
     # sits between `observation` and `structural`, because a document that printed the derivations
     # after the missingness table describing them would read backwards.
@@ -367,13 +367,18 @@ def test_the_headings_are_the_declared_eight_in_pipeline_order():
     # of Stage 5 and both record `derivation`: `derive`'s four entries run before the restrictions and
     # `derive_cohort`'s two after them. The position is wrong about two entries rather than four, and
     # it puts "who is in the analysis" immediately before the section reporting its denominators.
+    #
+    # `model` is Stage 6's and sits between `cohort` and `structural` [Stage 6 §7.1]: a fitted model is
+    # not a derived column and not a missing value, and it follows the population it was fitted to —
+    # which is the only order in which the fit's `n` can be checked against `cohort_flow`'s `records`
+    # by eye.
     assert data.KINDS == (
         "provenance", "contract", "correction", "observation",
-        "derivation", "cohort", "structural", "missingness")
+        "derivation", "cohort", "model", "structural", "missingness")
     assert list(data._HEADINGS.values()) == [
         "Provenance", "Contract", "Corrections", "Observations",
-        "Derivations", "Cohort construction", "Structural non-applicability",
-        "Missingness and denominators"]
+        "Derivations", "Cohort construction", "Fitted models",
+        "Structural non-applicability", "Missingness and denominators"]
 
 
 # --- 12.8  byte-identical reproduction -------------------------------------------------------------

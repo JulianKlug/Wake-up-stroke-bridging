@@ -197,23 +197,72 @@ count as its own line, arm-restricted; and:
 
 ## Stage 6 — Propensity score and weights [§7]
 
+**Spec:** `specs/stage6_propensity_and_weights.md`.
+
+**Two modules, not one.** `model.py` holds what is outcome-agnostic — the design-matrix builder and
+the Firth fitter — and `propensity.py` holds the [§7] specification. Stage 9's `m_a(X)` and Stage 12's
+standardisation model enter `model.py` directly, so neither imports a module named for the exposure in
+order to fit an outcome model [Stage 6 §0.1].
+
 **Build.**
 - A design-matrix builder: reference-coded dummies for factors, constant columns dropped (a resampled
-  or subset cohort can leave a factor level empty and make the design singular).
+  or subset cohort can leave a factor level empty and make the design singular). The level set is
+  **declared** (`FACTOR_LEVELS`) and the reference column is dropped **by name**, never `drop_first`.
+  The reason is not the obvious one, and an earlier version of this bullet gave the obvious one: on a
+  *declared* `Categorical`, `drop_first=True` drops the first **declared** level, which is the
+  reference, so the two forms are equivalent and neither rebaselines. Measured. By-name is kept because
+  it does not depend on `REFERENCE_LEVELS[c] == FACTOR_LEVELS[c][0]` — a coupling nothing asserted until
+  Stage 6 added it to `test_config.py`. A replicate that loses the reference level entirely fails as a
+  **rank deficiency**, not as a `KeyError` [Stage 6 §4.2, §20 finding 2].
 - **Firth-penalised logistic regression.** Maximise `l(b) + ½ log|I(b)|`; modified score
   `X'(y − p + h(0.5 − p))` with `h` the hat-matrix diagonal. Step-halving on the penalised likelihood;
-  converge on the penalised likelihood change or a flat modified score. **Raise on failure — never
-  fall back to a different estimator** [§7].
+  converge on the penalised likelihood change or a flat modified score — both criteria fire, the second on
+  designs whose information matrix is ill-conditioned. **The rule is deliberately not the reference
+  implementation's, which is now read rather than guessed:** `logistf` requires the likelihood change,
+  the score *and* the coefficient step conjunctively, where this one takes either of the first two and
+  excludes the third — because under near-separation the surface is flat, so a step-norm criterion would
+  fail a finite correct fit and [§10] would drop exactly the sparse replicates [Stage 6 §5.3, §18g]. **Raise on failure — never fall
+  back to a different estimator** [§7].
 - Overlap weights `w = 1 − e` treated, `w = e` control.
 - Kish effective sample size per arm.
 
 **Accept when.** Tests confirm: at large n on well-behaved data the coefficients match an unpenalised
 maximum-likelihood fit; under complete separation the fit stays finite where the unpenalised one
-diverges; the returned probabilities are finite and in (0, 1).
+diverges; the returned probabilities are finite and in (0, 1). And:
 
-**Record in the output**, per [§7]: ESS per arm, a description of the weighted population, and the
-statement that both are conditional on this propensity specification because the ATO target population
-is `h(X) = e(X){1 − e(X)}`.
+- **Complete-case on the [§6] covariates, with the missingness reimposed rather than resolved** [§11].
+  The fit runs on the covariate-complete subset — 92 of the 93 cohort patients on v7, the exception a
+  control at Lugano missing both CTP volumes — and `e` and `w` come back as Series over the **whole**
+  cohort, `nan` off an explicit `in_model` mask, with the excluded patients named in the log. A
+  weight of zero is a patient who was weighed; an absent weight is a patient who was not, and only the
+  second gives [§11] its denominator. The ATO population is therefore the complete-case set, which is
+  stated rather than left implicit [Stage 6 §4.4].
+- **Three silent failures are runtime raises, not test-time checks**, because none is caught by a
+  check on the output. A `pd.NA` in an `Int64` covariate becomes `nan` in the design **silently**, and
+  the fit then runs to completion returning all-`nan` coefficients with a plausible iteration count;
+  a factor value outside `FACTOR_LEVELS` becomes an all-zero dummy row, which is the encoding of the
+  *reference* level, so the record is modelled as though it were at the reference and the fit returns
+  a finite number; and a **response** outside `{0, 1}` — an ordinal `mrs_90d` handed to the logistic
+  fitter — fits, converges and returns coefficients for a model of something else, with nothing missing
+  anywhere. The third guards the module boundary Stages 8, 9 and 12 enter directly, and was added by the
+  engineering review. All three measured [Stage 6 §3.1, §4.5, §5.4, §20 finding 3].
+- **A new `model` audit kind carries the [§7] record**, so "record in the output" has a place: ESS per
+  arm, the weighted-population description, and the statement that both are conditional on this
+  propensity specification because the ATO target population is `h(X) = e(X){1 − e(X)}` — in the
+  reproducible log, beside the fitted coefficients, rather than in a return value a reporting layer may
+  drop [Stage 6 §7].
+
+**On the estimator being in-repo.** There is no maintained Firth implementation for Python:
+`statsmodels` has none, `firthlogist` was last released in 2022 and requires scikit-learn (excluded at
+Stage 1), `pyfirth` is a two-line stub, and R's `logistf` cannot be a dependency of a 2000-replicate
+bootstrap. Measured rather than assumed. So the estimator is implemented here and carries **five
+oracles** instead: `firthlogist` as a dev-only reference, a dependency-free golden vector, a
+`scipy.optimize` check on the same penalised objective, the unpenalised MLE at large n
+[Stage 6 §16b], and a gated subprocess comparison against R's `logistf` and `PSweight`. The fifth is
+the only *independent* one — the first is a port of `logistf`, the second and third check us against
+ourselves, and the fourth bites only at large n — and it agrees with this implementation on the
+penalised optimum to **1e-9** [Stage 6 §16b.2, §18g]. **Raise on failure — never fall back to a different estimator** [§7] is unchanged and
+is now asserted by import scan.
 
 ## Stage 7 — Balance and overlap diagnostics [§9]
 

@@ -140,12 +140,21 @@ SOURCES: Final[tuple[Source, ...]] = (WORKBOOK, FIXTURE)
 # than four, and it puts the cohort immediately before the section describing its denominators — the
 # last two headings then read "who is in, and what is missing for them" [Stage 5 §6.2].
 #
+# `model` is Stage 6's and describes **what was fitted** to the population `cohort` describes — a claim
+# about the data, with convergence properties, which renders under no existing heading [Stage 6 §7.1].
+# It sits after `cohort` and before `structural`, so the document reads: what was read, what the
+# contract did, what was corrected, what was observed, what was derived, who is in the analysis, what
+# was fitted to them, what is structurally absent, what is missing. The fit follows the population it
+# was fitted to, which is the only order in which the `n` of Stage 6's propensity_fit entry can be
+# checked against the `n` of Stage 5's cohort_flow by eye.
+#
 # A test that treats two of these headings as adjacent takes the neighbour from this tuple, never by
 # naming it: a kind inserted between them must be a one-line change here.
 KINDS: Final[tuple[str, ...]] = (
     "provenance", "contract", "correction", "observation",
     "derivation",
     "cohort",
+    "model",
     "structural", "missingness")
 
 # The section headings of the rendered document, in KINDS order. A section with no entries still
@@ -158,6 +167,7 @@ _HEADINGS: Final[dict[str, str]] = {
     "observation": "Observations",
     "derivation":  "Derivations",
     "cohort":      "Cohort construction",
+    "model":       "Fitted models",
     "structural":  "Structural non-applicability",
     "missingness": "Missingness and denominators",
 }
@@ -165,10 +175,16 @@ _HEADINGS: Final[dict[str, str]] = {
 # Roadmap Stage 2 demands the names-its-cases rule of corrections. `observation` is held to it too:
 # the one observation this stage defines is a standing query with the data owner (§7.3), and a query
 # that names no patient cannot be answered, which makes it exactly as useless as an unattributed
-# correction. The other six kinds legitimately name none — provenance, contract, derivation and
+# correction. The other seven kinds legitimately name none — provenance, contract, derivation and
 # missingness describe columns rather than patients, and structural describes a whole arm. Stage 3
 # leaves this unchanged for that reason: a derivation describes a column. The one place it names
 # patients is its both-onset-flags assertion, which raises, so such a frame never reaches a log.
+#
+# `model` is deliberately excluded for the same shape of reason as `cohort`, and it is the second kind
+# for which that is a decision rather than an omission [Stage 6 §7.1]: of its four entries exactly one
+# removes patients — the complete-case entry — and a rule keyed by *kind* would force the other three
+# either to misrepresent their `n` or to print the whole cohort's identifiers under a coefficient
+# table. `propensity._record_exclusion` states it exactly instead.
 #
 # `cohort` is deliberately excluded, and it is the one exclusion that looks like an omission
 # [Stage 5 §6.3]. Stage 5's kind carries two sorts of entry — two restrictions that remove patients

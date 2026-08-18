@@ -10,10 +10,17 @@ dependencies = [
     # which falsifies §4.1's premise that `CaseID` inference "yields mixed int/str"
     # and changes read behaviour throughout. The pilot locked 2.3.3.
     "pandas>=2.2,<3",
-    # The upper bound is not cosmetic. numpy 2.x changed scalar type promotion
-    # (NEP 50), which can move floating-point results at the last digits — enough
-    # to perturb a bootstrap percentile away from the pilot's.
+    # A DIRECT import of a shipped module since Stage 6: model.py's Firth fit is
+    # numpy throughout. The upper bound is not cosmetic. numpy 2.x changed scalar
+    # type promotion (NEP 50), which can move floating-point results at the last
+    # digits — enough to perturb a bootstrap percentile away from the pilot's, and
+    # that reason now applies to Stage 6's coefficients as well as to Stage 10's
+    # intervals. Verified at 2.0.2 [Stage 6 §2, §18].
     "numpy>=1.26,<2.1",
+    # TEST-ONLY, and deliberately so: Stage 6 §16b's third oracle runs
+    # scipy.optimize on the same penalised objective the Newton loop maximises.
+    # §12.7's AST scan forbids it in model.py and propensity.py — a shipped module
+    # importing an optimiser is a shipped module one edit from a second estimator.
     "scipy>=1.13",
     # Retained for unpenalised cross-checks in tests, not for any reported
     # estimate. The Firth fit, the weighted proportional-odds fit and the
@@ -31,6 +38,61 @@ dependencies = [
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
+
+# The one place in this repository where a dependency exists to DISAGREE with the code
+# rather than to run it [Stage 6 §2, §16b]. `firthlogist` is the only working Python
+# Firth implementation and it cannot be a runtime dependency: last released 2022-08-07,
+# it requires scikit-learn — excluded from this project by Stage 1's decision — and
+# raises AttributeError against scikit-learn >= 1.6, hence the ceiling.
+#
+# NOT part of `uv sync`'s default set. The one test that uses it is guarded by
+# pytest.importorskip, so a plain checkout is green without it; install with
+# `uv sync --group reference`. No shipped module may import it, and §12.7's scan
+# asserts the name appears in test_model.py and this file and nowhere else.
+#
+# When it stops installing, delete the test rather than pinning harder: the oracles to
+# keep are §12.0.2's golden vector and §16b's scipy check, both dependency-free
+# [Stage 6 §13].
+reference = ["firthlogist>=0.5,<0.6", "scikit-learn<1.6"]
+
+[tool.uv]
+# Stage 6 §16b's first oracle does not resolve without this, and the reason is the
+# collision §18 already measured from the other side: `firthlogist` 0.5.0 declares
+# `tabulate>=0.8.10,<0.9`, this project declares `tabulate>=0.9` for
+# DataFrame.to_markdown(), and uv resolves dependency groups against the project's own
+# dependencies — so declaring the `reference` group made `uv sync` unsatisfiable
+# outright rather than merely downgrading tabulate as `uv run --with` did.
+#
+# The override is scoped to exactly that, and it is safe for a measured reason rather
+# than a hopeful one: firthlogist imports tabulate only for its `summary()` printer,
+# and the oracle calls `.fit()` and reads `coef_` — never `summary()`. Verified in an
+# isolated environment that firthlogist 0.5.0 fits and reproduces §12.5's benchmark
+# (intercept -5.33857258, slope 0.97064956) with tabulate 0.9 present.
+#
+# It is a NO-OP for the default sync, where the project's own `tabulate>=0.9` already
+# decides the version; it binds only when the `reference` group is installed. If it
+# ever has to widen beyond tabulate, that is the signal §13 describes — firthlogist has
+# rotted, and the instruction is to DELETE its test rather than pin harder, keeping
+# §12.0.2's golden vector and §16b's scipy check, both dependency-free.
+override-dependencies = ["tabulate>=0.9"]
+
+# WHAT DECLARING THIS GROUP COST, recorded because it is not free and §2 did not price it.
+# uv resolves dependency groups against the project's own dependencies into ONE lock, and
+# `firthlogist` 0.5.0 declares `numpy>=1.22.4,<2.0.0`. So the group moved the BASE lock from
+# numpy 2.0.2 to 1.26.4 and scipy 1.18.0 to 1.17.1 — measured on the lockfile diff, and
+# confirmed unavoidable: constraining numpy to >=2.0,<2.1 makes the resolution unsatisfiable
+# outright, because the oracle genuinely cannot run on numpy 2.
+#
+# Both versions are inside this project's declared `numpy>=1.26,<2.1`, so the pin is not
+# violated — but Stage 6 §18 records every figure as verified at 2.0.2, and numpy's upper
+# bound exists precisely because NEP 50 scalar promotion can move results at the last digits.
+# So the downgrade is checked rather than assumed inert: §12.14's workbook figures and
+# §12.0.2's golden vector are asserted to the decimals the spec pins, and they reproduce at
+# 1.26.4. If a future resolution moves numpy again, those are the tests that notice.
+#
+# The alternative — dropping the group and running the oracle out-of-process, as §16b.2 does
+# for R — keeps numpy 2.0.2 and is what §13's "when it stops installing, delete the test
+# rather than pin harder" instruction turns into if this ever gets worse.
 
 # No [build-system]: this is an analysis project, not a distributable package, so
 # uv treats it as a virtual project and `uv sync` installs dependencies without
