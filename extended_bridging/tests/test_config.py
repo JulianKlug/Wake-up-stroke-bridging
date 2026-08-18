@@ -533,6 +533,25 @@ def test_the_full_covariate_set_is_a_prefix_plus_exactly_four():
         "hypertension", "hyperlipidemia", "diabetes", "smoking")
 
 
+def test_the_negative_controls_are_the_full_set_minus_the_propensity_model():
+    # [Stage 7 §4.3] The [§6] negative controls and the [§13] full-covariate additions are the same
+    # four names, so the set is computed from that identity rather than declared beside it. Asserted
+    # against the two declarations it is computed from, never against a literal of four: a fifth risk
+    # factor added to PS_COVARIATES_FULL must become a negative control in the same edit.
+    assert config.NEGATIVE_CONTROLS == tuple(
+        c for c in config.PS_COVARIATES_FULL if c not in config.PS_COVARIATES)
+    assert set(config.NEGATIVE_CONTROLS) & set(config.PS_COVARIATES) == set()
+
+
+def test_the_balance_set_is_the_confounders_plus_the_balance_only_names():
+    # [Stage 7 §4.1, §4.5] The second assertion is what makes Stage 7's B4 unreachable on the declared
+    # set: balance is a property of confounders measured at or before time zero, and a post-exposure
+    # variable judged against [§9]'s threshold reads as a confounder that weighting failed to fix.
+    assert config.BALANCE_SET == config.PS_COVARIATES + config.BALANCE_ONLY
+    assert len(set(config.BALANCE_SET)) == len(config.BALANCE_SET)
+    assert set(config.BALANCE_SET) & config.POST_TIME_ZERO == set()
+
+
 # --- 9.8  immutability ------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("name", [

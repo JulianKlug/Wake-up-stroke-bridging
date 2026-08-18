@@ -241,3 +241,114 @@ twelve before re-running.
 
 **Depends on / blocked by.** `codex login`, or any second model given the spec. Do it **before T2 of
 Stage 6 starts** — after that, a finding costs a code change as well as a spec change.
+
+## Second review round on Stage 7 §7.2 and §12.9 — the audit entries and their rendering
+
+**What.** A focused review pass over `specs/stage7_balance_and_overlap.md` §7.2 (the two `model`
+entries, their `n`, their four table rules) and §12.9 (their acceptance criteria), reading the
+rendered log rather than the spec. Fold anything found into the spec, and into `balance.py` if T5 has
+already landed.
+
+**Why.** §18b and §18c ran every code fence in that document — twice, before and after the review
+round of 2026-08-18 — and both runs called `Audit.to_markdown()` and confirmed it renders. **Neither
+read a cell back out of it.** The two `detail` strings were checked only for building, and no assertion
+compared a rendered cell against the object it describes. That is the one part of Stage 7 no execution
+has actually exercised, and §19 now points a second reviewer at it by name.
+
+The precedent is exact and it is the same section number. Stage 6 §7.2 shipped an `overlap_weights`
+entry carrying two tables of different widths; `propensity._padded` (`propensity.py:379-397`) exists
+because `data._md_table` computes its widths from `rows[0]` and raised `IndexError` on the narrower
+rows, while the spec's `[1:]` silently discarded the second table's header. That defect was found by
+running the audit call, not by reading the spec — and Stage 6 §18c had already parsed every fence
+without catching it. Stage 7's `_overlap_table` is 13 columns wide and `_smd_table` is 6, and both go
+through the same renderer.
+
+**Pros.** Cheap now: the entries are 60 lines of helper and two `detail` strings. The failure class is
+known, documented, and has already cost this repository one unplanned helper. Catching it before T7
+means a human reads a correct log rather than debugging a renderer.
+
+**Cons.** The entries are genuinely easier to review against real rendered output than against a spec,
+so part of this may be better done during T5 than before it. Some of it duplicates Definition of done
+items 4 and 11, which already require the log to be produced under two hash seeds and read end to end.
+
+**Context for whoever picks it up.** Start from the two rendered tables in §18c, which are the real
+output on `cohort_frame()`'s cohort: `_overlap_table` is 6 lines and 13 columns, `_smd_table` 20 lines
+and 6. The specific things no test yet asserts: that `_fmt` is the only formatter reaching either grid
+(§7.2), that the verdict column holds only `yes`/`no`/`undefined` and never `1` (§7.2's `_fmt(True)`
+argument), that an undefined SMD renders as the literal `missing`, that `_range` gives one `missing`
+rather than `missing–missing` on an empty arm, and that both `n` values are what §7.2 says they are
+rather than row counts. §12.9 specifies all of these; none of them has been run.
+
+**Depends on / blocked by.** Nothing to start. Best done **before T7**, and ideally alongside T5 so
+the assertions are written against a real `Audit` rather than an assembled module.
+
+---
+
+## Three errata in the Stage 7 spec, all found by running it — all fixed, 2026-08-18
+
+**Surfaced by:** implementing `specs/stage7_balance_and_overlap.md`, 2026-08-18. None changes a
+decision. The first two are in §12's fixtures and changed no shipped code; the third is in a §7
+code fence and changed one character of `balance.py`. All three are recorded in §18, which the
+document declares normative, and this entry is the account of how each was found.
+
+**Kept rather than deleted** because each names a way a specification of this shape fails: a
+fixture that exercises nothing while passing, a number truncated below its own stated tolerance,
+and a conditional clause no available frame reaches.
+
+**1. §12.0's `constant_everywhere()` did not exercise §5.3a — FIXED IN THE SPEC, 2026-08-18.** The
+declared fixture was four records, two per arm, weights `(0.1, 0.9)` and `(0.3, 0.7)`. Both weighted
+means come back as exactly 14.0, so the rejected weighted-mean form returns `0.0` on it and §12.4a's
+companion — "a companion implementing §5.3a's rejected form is shown to return `nan` on it" — could
+not have passed as written. The fixture passed while exercising nothing.
+
+**The cause is the weights and not the arm size**, and an implementation report said the opposite
+first. What decides it is whether an arm's `Σ(w·x)/Σw` division rounds:
+
+```
+  Σ[0.1, 0.9] = 1.0     14.0 / 1.0        →  14.0                  exact
+  Σ[0.3, 0.7] = 1.0     14.0 / 1.0        →  14.0                  exact
+  Σ[0.2, 0.8] = 1.0     …                 →  14.000000000000002    rounds
+  Σ[0.3, 0.7, 0.11]     …                 →  13.999999999999998    rounds
+```
+
+Of 49 two-record weight pairs tried, 12 produce a difference — so two records per arm bite or do not
+bite depending on which weights they carry, and the 3-versus-2 arm sizes of `cohort_frame()`'s cohort
+are where the defect happened to be found rather than why. **Resolved by one number**: the control
+arm's weights are now `(0.2, 0.8)`, the fixture stays four records, §12.4a's bullet stands unedited,
+and §18 gains the measurement row. `test_only_SOME_weight_vectors_round_and_that_is_what_decides_the_branch`
+pins the mechanism so the fixture cannot drift back to two exact vectors.
+
+**2. §12.0.2 and §18 wrote `penumbra_ml`'s unweighted SMD as 1.630960; it is 1.630961 — FIXED IN
+THE SPEC, 2026-08-18.** Measured 1.6309612667875129, so the spec's figure was the same number
+truncated rather than rounded at the seventh digit. Not merely cosmetic: it is 1.27e-6 from the true
+value, and §12.0.2 asserts the vector **to 1e-6**, so a test pinning the spec's own literal at the
+spec's own tolerance failed. Every other row of the golden vector reproduces to every digit printed.
+Both homes now read 1.630961 and §18's row states the convention — `_fmt`'s six significant figures,
+correctly rounded — because this is the one place in the document where that slipped.
+
+**What is owed.** Both are one-line spec edits and neither is a disagreement, so they want the PI's
+sign-off rather than a unilateral edit — the posture the Stage 4 §4.2 item above takes for the same
+reason. Whoever makes them should also strike §12.4a's "a companion implementing §5.3a's rejected
+form … is shown to return `nan` on it [`constant_everywhere()`]" and repoint it at the uneven-arm
+vector, so the spec and the suite describe the same fixture.
+
+**3. §7's `_smd_detail` fence produced a run-on sentence whenever a row was undefined — FIXED IN THE
+SPEC AND IN THE CODE, 2026-08-18.** The undefined-rows clause ended with `", ".join(undefined)` and no
+terminator, so the log read:
+
+```
+  … 19 row(s) are undefined and are reported as such rather than as zero: age, …, penumbra_ml A
+  row's `n` is its own denominator [§11] …
+```
+
+Found by doing what §21.5 said a third round should do — reading a rendered `detail` as prose — on
+the constructed frame §12.7 already builds. It needed that frame: neither the workbook nor
+`cohort_frame()`'s cohort has an undefined row, so the branch had never rendered in §18b, §18c, §18d
+or either review round. §7's fence and `balance.py` both carry the full stop now, and §18 records it.
+
+**§21.5 is CLOSED on its second half**, recorded in the spec as a new §21.5a. Both `detail` strings
+have been read as prose under every branch they have — 0 and many over-threshold rows, 0 and all-19
+undefined rows, 0 and 1 thin centres — and `test_balance.py` §12.9a asserts each branch's sentence
+rather than only its count. §21.5's FIRST half stands: §16b's numbers are now verified by T6 having
+run, so nothing there is owed either. The separate `TODOS` item above asking for a focused round on
+§7.2 and §12.9 is therefore closed by this work, not deferred.

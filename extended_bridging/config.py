@@ -383,6 +383,18 @@ STANDARDISATION_COVARIATES: Final[tuple[str, ...]] = tuple(
 PS_COVARIATES_FULL: Final[tuple[str, ...]] = PS_COVARIATES + (
     "hypertension", "hyperlipidemia", "diabetes", "smoking")                    # [§13]
 
+# [§6] names four vascular risk factors as balance negative controls and adds them back in the
+# [§13] full-covariate sensitivity propensity model. Those are the same four, so the set is
+# COMPUTED from that identity rather than declared beside it: a fifth risk factor added to
+# PS_COVARIATES_FULL becomes a negative control here in the same edit, and cannot fail to.
+NEGATIVE_CONTROLS: Final[tuple[str, ...]] = tuple(
+    c for c in PS_COVARIATES_FULL if c not in PS_COVARIATES)
+
+# The [§9] balance set: the full [§6] confounder set plus everything BALANCE_ONLY carries, which
+# is the four negative controls and penumbra_ml. NOT the propensity model's covariate list —
+# [§9] judges balance against the full set regardless of what a specification fitted.
+BALANCE_SET: Final[tuple[str, ...]] = PS_COVARIATES + BALANCE_ONLY
+
 # DERIVED_NAMES used to be declared here, as the literal ("onset_type",). It is now computed, in the
 # derived-names block at the foot of this file — after OUTCOMES and SUBGROUPS, the two registries it
 # reads. It was not deleted; it moved, and it had to move, because this file executes top to bottom

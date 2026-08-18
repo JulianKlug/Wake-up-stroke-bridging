@@ -49,11 +49,13 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Final
 
 import numpy as np
 import pandas as pd
 import pytest
 
+import balance
 import config
 import model
 import propensity
@@ -62,6 +64,26 @@ RSCRIPT = shutil.which("Rscript")
 R_PACKAGES = ("logistf", "PSweight")
 REFERENCE = Path(__file__).resolve().parent / "reference"
 PROJECT = REFERENCE.parent.parent          # the flat module root, one level above tests/
+
+# Stage 7 §16b. Where an oracle's packages plausibly live when `R_LIBS_USER` is unset — searched, not
+# inherited, and that distinction is the whole finding.
+_R_USER_LIB_CANDIDATES: Final[tuple[Path, ...]] = (Path.home() / "R" / "library",)
+
+
+def _r_user_library() -> str | None:
+    """A user library that EXISTS, when R_LIBS_USER is unset. §16b.
+
+    Measured 2026-08-18: R's own default (~/R/x86_64-pc-linux-gnu-library/<ver>) does not exist on
+    this machine and the oracle's packages are in ~/R/library, so **inheriting R's default finds
+    nothing** — and "fall back to R's own default user library" is a no-op, because that default is
+    exactly what R already uses. There is no ~/.Renviron either, so `--vanilla` suppresses nothing
+    here and stays, because §16b.1 needs a run no user profile can change.
+
+    This is the silently-skipping oracle Stage 6 §16b.2 was written to prevent, arriving by a route
+    that section did not anticipate: the gate reported both packages missing while both were
+    installed and loadable, on the machine they had been installed on.
+    """
+    return next((str(p) for p in _R_USER_LIB_CANDIDATES if p.is_dir()), None)
 
 
 def _r_environment() -> dict[str, str]:
@@ -85,6 +107,12 @@ def _r_environment() -> dict[str, str]:
     **`R_LIBS_USER` and `R_LIBS_SITE` are passed through when set**, so an oracle installed into a
     user library is found, and so a site library full of packages built under an older R can be
     excluded by the caller without editing this file.
+
+    **And when `R_LIBS_USER` is NOT set, a candidate library that exists is searched for** (§16b).
+    Passing a variable through does nothing when the variable is unset, and R's own fallback points
+    at a directory that does not exist here — so without this the gate stays shut on a machine where
+    the packages are installed. An explicitly set variable still wins: a caller pointing at a
+    different library is not overruled by a guess.
     """
     environment = {
         "PATH": "/usr/bin:/bin:" + os.environ.get("PATH", ""),
@@ -94,6 +122,10 @@ def _r_environment() -> dict[str, str]:
     for passthrough in ("R_LIBS_USER", "R_LIBS_SITE", "R_LIBS"):
         if passthrough in os.environ:
             environment[passthrough] = os.environ[passthrough]
+    if "R_LIBS_USER" not in environment:
+        found = _r_user_library()
+        if found is not None:
+            environment["R_LIBS_USER"] = found
     return environment
 
 
@@ -114,9 +146,11 @@ def _r_has(packages: tuple[str, ...]) -> bool:
 
 reference_r = pytest.mark.skipif(
     RSCRIPT is None or not _r_has(R_PACKAGES),
-    reason=f"R oracle: needs Rscript and {', '.join(R_PACKAGES)}; see spec §16b.2. Install into a "
-           "user library and point R_LIBS_USER at it; if R reports that install.packages does not "
-           "exist, that is the PATH collision _r_environment documents, not a broken R.")
+    reason=f"R oracle: needs Rscript and {', '.join(R_PACKAGES)}; see spec §16b.2. Searched for a "
+           f"user library in {', '.join(str(p) for p in _R_USER_LIB_CANDIDATES)} and used "
+           f"R_LIBS_USER={R_ENV.get('R_LIBS_USER', 'unset')}. Install into one of those and it is "
+           "found without editing this file; if R reports that install.packages does not exist, "
+           "that is the PATH collision _r_environment documents, not a broken R.")
 
 DATA_GATED = pytest.mark.skipif(
     not config.DATA_XLSX.exists(),
@@ -236,6 +270,140 @@ def test_psweight_agrees_on_e_and_w_before_the_ess_is_compared(tmp_path):
         assert numbers[key] == pytest.approx(propensity.ess(arm), rel=1e-6)
 
 
+# --- Stage 7 §16b — the balance oracle ---------------------------------------------------------------
+#
+# `PSweight` reports a per-covariate balance table on ANY supplied propensity score, which makes it an
+# independent check on §5's arithmetic and on §4's covariate set at once. The score handed across is
+# ours, so a disagreement is about the balance FORMULA and never about the propensity model.
+#
+# **The convention differs by a DEFAULT, not by a limitation.** `summary.SumStat` takes a
+# `weighted.var` argument, and `weighted.var = FALSE` IS [§9]'s denominator:
+#
+#     PSweight, weighted.var = TRUE   |Δmean_w| / sqrt((SD_w,0² + SD_w,1²)/2)   WEIGHTED SDs
+#     PSweight, weighted.var = FALSE  |Δmean_w| / sqrt((SD_0²   + SD_1²  )/2)   [§9]'s, and ours
+#
+# so the oracle is run BOTH ways: FALSE for a direct comparison against §5's weighted column, which is
+# strictly stronger than reconstructing a numerator, and TRUE for the recorded convention difference.
+# PSweight reports the ABSOLUTE value where §5 keeps the sign.
+
+
+def imperfect_score(n: int = 80):
+    """A synthetic design with a DELIBERATELY imperfect score, so the weighted numerator is non-zero.
+
+    Synthetic rather than the workbook, so this comparison runs on a checkout with no `data/`: what
+    is being checked is an arithmetic convention, and patient data adds nothing to that.
+    """
+    rng = np.random.default_rng(7)
+    x1 = rng.normal(size=n)
+    x2 = rng.binomial(1, 0.4, size=n).astype(float)
+    a = rng.binomial(1, 1.0 / (1.0 + np.exp(-(0.8 * x1 + 0.4 * x2)))).astype(float)
+    e = 1.0 / (1.0 + np.exp(-(0.4 * x1 + 0.2 * x2)))
+    frame = pd.DataFrame({"x1": x1, "x2": x2, "a": a, "e": e})
+    return frame, np.where(a == 1.0, 1.0 - e, e)
+
+
+def psweight_balance(tmp_path):
+    frame, w = imperfect_score()
+    out = tmp_path / "balance.csv"
+    reported = _run("balance_psweight.R", _write(frame, tmp_path / "cohort.csv"), out)
+    assert "PSweight" in reported
+    table = pd.read_csv(out).set_index(["convention", "covariate"])
+    return frame, w, table
+
+
+@reference_r
+def test_the_unweighted_column_agrees_with_psweight_EXACTLY(tmp_path):
+    """With w ≡ 1 the weighted SD is the unweighted SD, so the two conventions coincide — and the
+    oracle therefore validates §5's arithmetic outright on half the table.
+    """
+    frame, _, table = psweight_balance(tmp_path)
+    a = frame["a"].to_numpy(dtype=float)
+    for covariate in ("x1", "x2"):
+        ours = balance.smd(frame[covariate].to_numpy(dtype=float), a, np.ones(len(frame)))
+        theirs = table.loc[("before_unweighted_var", covariate), "smd"]
+        assert abs(ours) == pytest.approx(theirs, rel=1e-9)
+
+
+@reference_r
+def test_the_WEIGHTED_column_agrees_under_weighted_var_FALSE(tmp_path):
+    """The strong assertion: [§9]'s denominator read straight out of the package, compared against
+    §5's weighted column rather than reconstructed from a numerator."""
+    frame, w, table = psweight_balance(tmp_path)
+    a = frame["a"].to_numpy(dtype=float)
+    for covariate in ("x1", "x2"):
+        ours = balance.smd(frame[covariate].to_numpy(dtype=float), a, w)
+        theirs = table.loc[("after_unweighted_var", covariate), "smd"]
+        assert abs(ours) == pytest.approx(theirs, rel=1e-6)
+        assert theirs >= 0.0                      # PSweight reports the absolute value
+
+
+@reference_r
+def test_psweights_ddof_is_ONE_and_a_ddof_zero_denominator_would_be_visible(tmp_path):
+    """Asserted rather than assumed (§16b): a ddof = 0 convention differs by sqrt(n/(n-1)), which at
+    n = 80 is 0.6% — visible at six significant figures and invisible to the eye, and enough to make
+    an "agrees exactly" claim false in the fourth digit.
+    """
+    frame, w, table = psweight_balance(tmp_path)
+    a = frame["a"].to_numpy(dtype=float)
+    for covariate in ("x1", "x2"):
+        x = frame[covariate].to_numpy(dtype=float)
+        row = table.loc[("after_unweighted_var", covariate)]
+        numerator = abs(row["mean_1"] - row["mean_0"])          # their own weighted means
+        ddof_one = balance._pooled_sd(x, a)
+        ddof_zero = float(np.sqrt((x[a == 1.0].var(ddof=0) + x[a == 0.0].var(ddof=0)) / 2.0))
+
+        # their SMD is our numerator over OUR ddof = 1 denominator, and over no other
+        assert numerator / ddof_one == pytest.approx(row["smd"], rel=1e-6)
+        assert numerator / ddof_zero != pytest.approx(row["smd"], rel=1e-4)
+        # the size of the difference the eye would miss: a percent or so — it is ~1/(2k) in the arm
+        # size k, so 1.3% on these two arms of forty and ~0.5% on the workbook's ninety-two.
+        assert 1e-3 < abs(ddof_zero - ddof_one) / ddof_one < 5e-2
+
+
+@reference_r
+def test_the_convention_difference_under_weighted_var_TRUE_is_RECONSTRUCTIBLE(tmp_path):
+    """The denominators differ BY DECLARATION and the difference is recoverable, which is Stage 6
+    §16b.2's "compare `e` and `w` first and the ESS separately" applied to a third quantity:
+    `|ours| x our_pooled_unweighted_SD == theirs x their_pooled_weighted_SD`.
+
+    [§9] prescribes the unweighted denominator and gives the reason — "so the yardstick does not
+    move" — and PSweight under its own default recomputes the SD under each weighting scheme, so its
+    before and after columns are divided by two different numbers. A legitimate convention, and not
+    this SAP's. The oracle settles which convention each side uses, not which is better.
+    """
+    frame, w, table = psweight_balance(tmp_path)
+    a = frame["a"].to_numpy(dtype=float)
+    for covariate in ("x1", "x2"):
+        x = frame[covariate].to_numpy(dtype=float)
+        row = table.loc[("after_weighted_var", covariate)]
+        theirs_sd = float(np.sqrt((row["sd_0"] ** 2 + row["sd_1"] ** 2) / 2.0))
+        ours = balance.smd(x, a, w)
+        assert abs(ours) * balance._pooled_sd(x, a) == pytest.approx(
+            row["smd"] * theirs_sd, rel=1e-6)
+        # and the ratios themselves do NOT agree, which is what makes this a convention difference
+        assert abs(ours) != pytest.approx(row["smd"], rel=1e-4)
+
+
+@reference_r
+def test_the_gate_is_measured_OPEN_rather_than_assumed_open(monkeypatch):
+    """§16b's closing assertion, and the state the oracle was silently skipping in.
+
+    The parent shell's `R_LIBS_USER` is removed, `_r_environment` is rebuilt, and `_r_has` is asked
+    whether both packages load under it. A gate that can only be opened by the caller exporting a
+    variable is a gate that is shut by default, on the machine where the packages are installed.
+    """
+    monkeypatch.delenv("R_LIBS_USER", raising=False)
+    environment = _r_environment()
+    resolved = environment.get("R_LIBS_USER")
+    assert resolved is not None and Path(resolved).is_dir()
+
+    probe = ";".join(f'if(!requireNamespace("{p}",quietly=TRUE)) quit(status=1)'
+                     for p in R_PACKAGES)
+    done = subprocess.run([RSCRIPT, "--vanilla", "-e", probe], env=environment,
+                          capture_output=True, timeout=180)
+    assert done.returncode == 0, done.stderr.decode()
+
+
 @reference_r
 def test_the_r_package_versions_are_captured_and_non_empty(tmp_path):
     """An oracle that agreed at an unrecorded version is a claim with no date on it (§16b.2).
@@ -253,6 +421,9 @@ def test_the_r_package_versions_are_captured_and_non_empty(tmp_path):
 # --- the gate itself, which runs everywhere ----------------------------------------------------------
 
 R_ONLY_NAMES = ("Rscript", "logistf", "PSweight")
+
+# Every committed script, so a fourth one joins both hygiene checks below by being declared here.
+R_SCRIPTS = ("firth_logistf.R", "ato_psweight.R", "balance_psweight.R")
 
 
 @pytest.mark.parametrize("name", R_ONLY_NAMES)
@@ -296,7 +467,7 @@ def test_the_committed_r_scripts_exist_and_are_short_enough_to_read():
     # An oracle nobody can read is not evidence. Twenty-odd lines each: read CSV, fit, write
     # coefficients — no analysis logic and no covariate list, so the R side cannot disagree about the
     # SPECIFICATION while appearing to disagree about the ESTIMATOR.
-    for script in ("firth_logistf.R", "ato_psweight.R"):
+    for script in R_SCRIPTS:
         path = REFERENCE / script
         assert path.exists(), path
         code = [line for line in path.read_text(encoding="utf-8").splitlines()
@@ -307,7 +478,7 @@ def test_the_committed_r_scripts_exist_and_are_short_enough_to_read():
 def test_the_scripts_name_no_covariate():
     # The design matrix arrives already built by `model.design`, which is what keeps invariant 4 and
     # the [§6] specification on the Python side of the boundary.
-    for script in ("firth_logistf.R", "ato_psweight.R"):
+    for script in R_SCRIPTS:
         # Over the CODE only, and on whole words: the comments explain what the scripts are for, and
         # `packageVersion` contains "age".
         code = " ".join(line.split("#")[0]
