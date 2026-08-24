@@ -319,17 +319,75 @@ silently reinstated [Stage 7 §6.4, §13].
 
 ## Stage 8 — Primary outcome estimator [§8]
 
+**Spec:** `specs/stage8_primary_outcome_estimator.md`.
+
 **Build.**
 - A **weighted proportional-odds model with treatment as the sole predictor**. Most implementations
-  have no observation-weight support; weighting the log-likelihood contribution per observation is
-  sufficient. Return `β` and `exp(β)`, oriented so > 1 favours bridging.
+  have no observation-weight support — measured: `statsmodels`' `OrderedModel` has none at all, and
+  there is no maintained weighted alternative for Python — and weighting the log-likelihood
+  contribution per observation is sufficient **for the point estimate and not for a standard error**,
+  because the weights are a tilting function of an *estimated* propensity score rather than
+  frequencies. The inverse observed information therefore omits the variability of estimating `e`,
+  which [§7] states enters the interval, so no standard error and no interval leaves this stage:
+  [§10]'s percentile bootstrap is the prespecified one and there is no second
+  [Stage 8 §5.6, §21 item 6].
 - **Weighted empirical cumulative risk differences** `RD_k`, `k = 0…5`, taken from the weighted
   distributions rather than from threshold-specific models, so the cumulative probabilities stay
   ordered by construction.
+- Two modules, as at Stage 6: the fitter is `model.py`'s and is **general in its covariates from the
+  first line**, because [§14a] prescribes the same estimator with a wider design and unit weights, so
+  Stage 12 reuses it rather than a second proportional-odds implementation existing. The [§8]
+  specification is `outcome.py`'s, and Stage 9's binary estimators extend that module so the weighted
+  per-arm proportion has one home [Stage 8 §0.1].
 
-**Accept when.** The weighted fit equals an unweighted fit when all weights are 1; the cumulative
-probabilities are monotone in `k` within each arm; the orientation test confirms `exp(β) > 1` when
-treatment shifts mRS downward.
+**Accept when.** The orientation test confirms `exp(β) > 1` when treatment shifts mRS downward — **with
+a sign-flipped companion shown to report the opposite direction**, because every reference
+implementation parametrises `α_k − x'β` where [§14a] writes `α_k + βA`: measured, the coefficients come
+back negated and the cutpoints do not, so two fits that disagree about the primary result look
+identical in four of five printed quantities, and `pilots/analysis.py:475` carries the negation that is
+correct for `statsmodels` and inverts this study's result [Stage 8 §7]. And:
+
+- **A fit whose treatment coefficient reaches a declared bound raises rather than returning**, because
+  an unpenalised proportional-odds fit on a separated sample **converges**. This is not what the
+  criterion below originally assumed and it is the finding the stage arrived with: measured, a
+  perfectly separated 20-against-20 frame converges in **17 iterations on the score criterion** with
+  every safeguard counter at zero, every fitted probability finite and nothing anywhere out of range —
+  and returns `exp(β) = 6.5e15`. Four hundred sparse replicates of the cohort's
+  shape produced **zero** convergence failures, because there are none to produce. So [§10]'s "replicates
+  whose prespecified fit fails are dropped and counted" has nothing to count unless the bound raises,
+  and without it a percentile interval is a quantile of a distribution with a tail at `exp(21)`
+  [Stage 8 §6]. The bound is prespecified in `config.py` for the reason the Firth tolerances are, and
+  its value is chosen from a measured **empty band** rather than from any estimate: over 4800 fits at
+  twelve true effect sizes, no non-degenerate fit exceeded `|β| = 8.79`, no degenerate one came below
+  `18.81`, and nothing at all landed between the two.
+- **Integer weights equal an unweighted fit on the row-replicated frame**, and *that* is the weighting
+  criterion. "The weighted fit equals an unweighted fit when all weights are 1" is kept as its
+  companion and is not sufficient alone: measured, `polr(X, y, ones)` equals `polr(X, y, None)` bit for
+  bit, so an implementation that never reads the weights satisfies it. The replication form agrees at
+  **0.000e+00** and is the only available oracle that checks the weighting at machine precision
+  [Stage 8 §14.3, §18b].
+- **The cumulative probabilities are monotone in `k` within each arm — by construction, so this is not
+  the assertion that protects the route.** `P_w(Y ≤ k)` is a cumulative sum of non-negative weights over
+  a `k`-independent denominator, so it cannot fail on a correct implementation: measured non-monotone in
+  **0 of 2000** samples. And it does not reliably fail on an incorrect one either — the
+  threshold-specific route crosses in only **8 of 1990** samples and by less than 5e-07. What must be
+  asserted instead is that the route taken *is* the empirical one: the `RD_k` against a hand computation,
+  and against the six-threshold-model route, shown to **differ** [Stage 8 §8.2].
+- **The estimate's [§11] denominator is a third population and is named, counted and logged** — the
+  cohort's 93, then the ATO's covariate-complete 92 [Stage 6 §4.4], then those of *those* whose mRS is
+  present. On v7 the third equals the second, which is exactly the condition under which an
+  implementation that never built the mask is green [Stage 8 §4.1, §14.2].
+
+**On the estimate not being in the specification.** Stage 8's spec deliberately does **not** measure or
+quote `β`, `exp(β)` or any `RD_k` on the workbook, and its data-gated acceptance tests assert
+properties — converged, ascending cutpoints, bounded coefficient, monotone `RD_k`, orientation
+agreeing across the two scales — rather than values. Every earlier stage recorded its decisions as
+taken before any outcome was examined by arm, and Stage 8 is where that necessarily ends; the choice is
+whether it ends while the estimator is being specified or after, against a specification already
+committed. It ends after. The regression pin is a synthetic golden vector instead, the estimate lands
+in the gitignored log, and the cost — no pinned regression number on the primary effect anywhere in
+git — is stated rather than minimised, with the trigger under which the pins become correct filed in
+`TODOS.md` [Stage 8 §4.3, §15].
 
 ## Stage 9 — Secondary binary estimators [§8]
 
@@ -378,9 +436,35 @@ never substituted with a different estimator.** Surface the failure count and ra
 - Secondary binary and safety outcomes: on the risk-difference scale.
 - Cumulative `RD_k`: intervals only, **no p-values** [§8].
 
+**Three things Stage 8 hands over rather than leaving to be found here** [Stage 8 §11].
+- **Two failure counters, reported separately.** A dropped replicate is either a non-convergence or a
+  separation guard (`G7`), and the two mean different things about the data. Measured at Stage 8: 400
+  sparse replicates of this cohort's shape produced **zero** convergence failures, because an
+  unpenalised ordinal fit on a separated sample converges rather than failing. **A failure counter
+  reading zero is therefore not evidence that no replicate was degenerate** unless the G7 count is
+  reported beside it.
+- **The distribution of `len(fit.alpha)` across replicates**, alongside those counters. The number of
+  fitted cutpoints is a property of the replicate — Stage 8 collapses the response to the levels
+  carrying positive weight — so a replicate missing a declared mRS level contributes a `β` on a coarser
+  scale, and percentiles are taken across them. Under proportional odds they are the same parameter,
+  which is [§8]'s own untested assumption. **And Stage 8's separation bound was calibrated at seven
+  occupied categories only**, so if that distribution is not degenerate at six cutpoints, the drop rate
+  is partly a function of a bound measured on frames unlike the ones being dropped. Reporting the
+  distribution is what makes that answerable from the replicates already drawn
+  [Stage 8 §5.3, §6.3, §15].
+- **`FitError` is the droppable failure and `SchemaError` is not.** A `SchemaError` from `primary` or
+  `propensity.fit` is a bug in the resampler, not a sparse replicate, and catching it would drop
+  replicates for a reason that is not about the data (`propensity.py:468-469`).
+
 **Accept when.** On synthetic data with a known effect the interval covers the truth at roughly the
 nominal rate; the failure counter is exercised by a deliberately degenerate input; and no code path
-can return an estimate from a fallback estimator.
+can return an estimate from a fallback estimator. And:
+
+- **The separation count and the convergence count are both surfaced, and the separation one is
+  exercised.** A test drives a replicate loop over a deliberately separable frame and asserts the G7
+  count is non-zero while the convergence count stays zero — the pair, because Stage 8 measured that the
+  second never fires on this estimator and a single "failures" counter therefore reads zero on data that
+  is degenerate throughout [Stage 8 §6.1, §14.7].
 
 ## Stage 11 — Multiplicity, subgroups, E-value [§6, §13]
 
@@ -446,7 +530,6 @@ seed, replicate count, and bootstrap failure counts.
 - Safety outcomes are labelled descriptive.
 - Every estimate carries its own denominator [§11].
 - The manuscript checklist from [§16] is emitted as a file, not left implicit.
-
 ---
 
 ## Invariants worth asserting in the test suite

@@ -352,3 +352,73 @@ undefined rows, 0 and 1 thin centres — and `test_balance.py` §12.9a asserts e
 rather than only its count. §21.5's FIRST half stands: §16b's numbers are now verified by T6 having
 run, so nothing there is owed either. The separate `TODOS` item above asking for a focused round on
 §7.2 and §12.9 is therefore closed by this work, not deferred.
+
+---
+
+## Pin the primary estimate once the analysis is locked
+
+**Surfaced by:** writing `extended_bridging/specs/stage8_primary_outcome_estimator.md`, 2026-08-21
+(§4.3 and §15 there).
+
+**What.** Add the workbook's `β`, `exp(β)` and six `RD_k` as literal regression pins in
+`extended_bridging/tests/test_outcome.py` §14.12, and to that spec's §20 verification table, replacing
+the property assertions that stand in for them today.
+
+**Why.** Stage 8's spec deliberately does not measure or quote the primary effect, and §4.3 is the
+argument: every earlier stage recorded its decisions as taken before any outcome was examined by arm,
+and specifying the estimator *after* seeing the estimate would have put three decisions — §5.3's
+category collapse, §6's coefficient bound and §8's thresholds — on the wrong side of that line. So
+§14.12 asserts properties (converged, ascending cutpoints, `|β|` inside the bound, monotone `RD_k`,
+orientation agreeing across the two scales) and nothing else.
+
+**The cost, which this item exists to repay.** There is no pinned regression number on the primary
+effect anywhere in git. An edit that moves `β` in the fourth decimal without breaking convergence,
+ordering, orientation or monotonicity passes the whole suite. §14.0.2's golden vector is a partial
+mitigation only: its cohort has five records and four cutpoints against the workbook's ninety-two and
+six, so it exercises the same arithmetic at a different scale and cannot witness a defect that appears
+only at the workbook's.
+
+**Why it is not a code change.** The objection in §4.3 is to computing the estimate *while specifying
+the estimator*, not to pinning it afterwards. Once the PI has seen the estimate and the analysis is
+locked, the numbers are legitimate pins and the objection has expired.
+
+**Depends on / blocked by.** Stage 8's T8, which computes the estimate for the first time, and then the
+PI. Do it as its own commit, touching `test_outcome.py` and the spec's §20, §14.12 and §15 together —
+and delete §15's first bullet in the same commit, since it describes a gap that will no longer exist.
+
+**Status: blocked** until Stage 8 lands and the PI has read the estimate.
+
+---
+
+## Re-measure the separation band at fewer than seven occupied mRS categories
+
+**Surfaced by:** the first independent review round on
+`extended_bridging/specs/stage8_primary_outcome_estimator.md`, 2026-08-21 (§21.1 item 10; filed in
+§15 and handed to Stage 10 in §11 and in the roadmap's Stage 10 entry).
+
+**What.** Establish whether the empty band `(8.79, 18.81)` that `POLR_MAX_ABS_BETA = 14.0` sits inside
+still exists — and is still that band — when the fit has **five or four** cutpoints rather than six.
+Then either confirm the constant, or amend it with the measurement behind the change.
+
+**Why.** Every one of the 4800 fits behind that band is a **seven-category** frame (Stage 8 §6.3, §20).
+But Stage 8 §5.3 collapses the response to the levels carrying positive weight, so the number of
+cutpoints is a property of the *sample*, and [§10] draws 2000 samples. A replicate that happens to draw
+no death fits five cutpoints, and nothing establishes that a `|β|` of 12 on such a frame is degenerate
+rather than legitimate. `G7` is what turns a degenerate fit into a countable failure, so the bound
+partly decides **which replicates the percentile interval is computed from** — and a bound calibrated on
+frames unlike the ones being dropped is the kind of error that reads as rigour.
+
+**Why it was not measured at Stage 8.** It needs a sampler that varies the occupied level set, which is
+a bootstrap, which is Stage 10. Stage 8 §11 therefore asks Stage 10 to report the **distribution of
+`len(fit.alpha)` across replicates** beside its two failure counters, so the question can be answered
+from replicates already drawn rather than by a second synthetic sweep. If that distribution turns out
+degenerate at six, this item closes as theoretical and should be closed explicitly rather than left
+open.
+
+**Not the same as the Stage 12 gap.** Stage 8 §15 already files that the bound is calibrated on a
+one-column design while [§14a]'s standardisation model carries eight covariates. That one bites at
+Stage 12; this one bites at Stage 10, which is next.
+
+**Depends on / blocked by.** Stage 10's replicate loop and its cutpoint-count report.
+
+**Status: open**, blocked on Stage 10.
