@@ -674,6 +674,80 @@ def test_cumulative_thresholds_track_the_mrs_range():
     assert config.MRS_THRESHOLDS == tuple(range(config.PLAUSIBLE_RANGES["mrs_90d"][1]))
 
 
+# --- Stage 8 §12  the three computed views the [§8] estimator reads ---------------------------------
+#
+# Six assertions, and each one pins what a Stage 8 constant is COMPUTED FROM rather than what it
+# happens to equal. Written here rather than in `test_outcome.py` because the registry lives here.
+
+def test_MRS_LEVELS_is_the_inclusive_plausible_range_for_the_primary_outcome():
+    low, high = config.PLAUSIBLE_RANGES["mrs_90d"]
+    assert config.MRS_LEVELS == tuple(range(low, high + 1))
+    assert config.MRS_LEVELS == (0, 1, 2, 3, 4, 5, 6)
+
+
+def test_the_mrs_plausible_range_has_an_upper_bound_at_all():
+    """The declared type of PLAUSIBLE_RANGES is `tuple[int, int | None]` and `None + 1` is a
+    TypeError, so §12's computed `MRS_LEVELS` rests on a fact the type does not guarantee.
+
+    Three entries in that dict — core_ml, tmax6_ml, penumbra_ml — genuinely carry `None` above, so
+    this is not hypothetical: it is the one column of the nine for which the computed form works, and
+    nothing else says so.
+    """
+    assert config.PLAUSIBLE_RANGES["mrs_90d"][1] is not None
+
+
+def test_MRS_LEVELS_and_MRS_THRESHOLDS_cannot_drift():
+    """Stage 8 §8.3. RD_k stops at 5 because P(Y <= 6) is 1 in both arms by definition, so a seventh
+    threshold would be a structural zero — and this identity is what stops the two constants being
+    edited apart. MRS_THRESHOLDS is misfiled inside the [§13] subgroups block and is deliberately not
+    moved; this assertion is what makes the misfiling harmless (Stage 8 §12, §17).
+    """
+    assert config.MRS_LEVELS[:-1] == config.MRS_THRESHOLDS
+
+
+def test_PRIMARY_OUTCOME_is_the_unique_primary_family_key():
+    # `next(...)` over a generator would take the FIRST of two silently, so the uniqueness half is
+    # the assertion that notices. `test_exactly_one_outcome_is_primary` above pins the count; this
+    # pins that PRIMARY_OUTCOME is that one, computed and never written as a literal.
+    primary = [key for key, o in config.OUTCOMES.items() if o.family == "primary"]
+    assert primary == [config.PRIMARY_OUTCOME]
+    assert config.PRIMARY_OUTCOME == "mrs_90d"
+
+
+def test_the_primary_outcome_is_ORDINAL_and_LOWER_IS_BETTER():
+    """Stage 8 §7.1's precondition, asserted where the registry lives.
+
+    Under `logit P(Y <= k) = alpha_k + beta*A` a positive beta raises P(Y <= k) in the treated arm at
+    every k, so mass moves to LOW mRS. `exp(beta) > 1 favours bridging` therefore holds only for an
+    ordinal outcome on which lower is better. For one on which higher is better the same coefficient
+    favours the comparator, and the orientation statement [§8] requires would be exactly inverted
+    with every number in the table still finite and still plausible. `outcome._orientation` raises on
+    a registry that breaks this; this is the same fact asserted at the declaration.
+    """
+    outcome = config.OUTCOMES[config.PRIMARY_OUTCOME]
+    assert outcome.kind == "ordinal"
+    assert outcome.higher_is_better is False
+
+
+def test_POLR_MAX_ABS_BETA_is_strictly_inside_the_measured_sparse_region():
+    """Stage 8 §6.3, and after §14.7's split this is the ONLY assertion in the repository guarding
+    that calibration.
+
+    §14.7's band probe runs 240 fits and asserts the band *is* a band; the 4800-fit sweep that
+    measured its endpoints, and the 1800-fits-per-cutpoint-count re-measurement that corrected them,
+    are recorded in the spec's §20 and are deliberately not re-run on every commit. What replaces
+    them is this comparison against both endpoints as literals.
+
+    The endpoints are the CORRECTED ones — 11.037 and 18.98, measured across every cutpoint count a
+    [§10] replicate can produce — and not the superseded (8.79, 18.81), which was measured at six
+    cutpoints only. That matters in one direction: an edit back to the 10.0 an earlier draft used
+    passes the superseded pair and FAILS this one, because legitimate fits reach 11.04 at odd cutpoint
+    counts (§21.1 item 24).
+    """
+    assert 11.04 < config.POLR_MAX_ABS_BETA < 18.98
+    assert config.POLR_MAX_ABS_BETA == 14.0
+
+
 def test_sex_labels_stay_none_until_the_query_is_answered():
     assert config.SEX_LABELS is None
 

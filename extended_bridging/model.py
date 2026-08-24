@@ -49,6 +49,15 @@ appears in any model's design matrix — assert against an explicit denylist, no
 ``design`` is the one function every model's covariates pass through, D2 is that assertion, and
 Stages 8, 9 and 12 inherit it by *calling* ``design`` rather than by remembering.
 
+**An observation-weight vector does not breach the no-exposure rule, and this sentence is here so the
+next reader does not have to re-derive it** [Stage 8 §0.1, §12]. ``propensity.ess``'s docstring calls
+the rule a *"no-exposure-no-weights rule"*, and read against this module's own docstring that clause is
+about ``ess`` — a Kish sum, which fits nothing — and not about a fitter. ``firth(X, y)`` already takes
+the **exposure** as an opaque ``y`` and is outcome-agnostic because it does not know what ``y`` *is*; a
+non-negative observation-weight vector is opaque in exactly the same way. The rule being honoured is
+"this module names neither the treatment nor any covariate list", and ``polr(X, y, w)`` names none of
+the three.
+
 This module is **not** exempt from the Stage 1 §7 raw-name scan and must never become exempt. It names
 no raw header, and it names no exposure — §12.12 scans for both.
 """
@@ -520,3 +529,401 @@ def firth(X: pd.DataFrame, y: np.ndarray) -> Fit:
         f"{C.FIRTH_SCORE_TOL:g}. {rescales} step(s) were shortened by the trust region and {halvings} "
         f"halving(s) were taken [§5.2a]. [§7] prescribes one estimator, and [§10] drops and counts "
         "the replicate rather than substituting another.")
+
+
+# --- Stage 8a — the weighted proportional-odds fit [§8] --------------------------------------------
+#
+#   polr(X, y, w)  is a SECOND fitter beside `firth`, not a generalisation of it. The two share only
+#   `FitError`, and they differ in the one place a reader will assume they agree: `firth` PREPENDS an
+#   intercept and `polr` must not be given one, because the K cutpoints ARE the intercepts and a
+#   column of ones is exactly collinear with their sum. O6 is what turns that mistake into a raise.
+#
+#   It is general in its covariates from the first line and that is not speculative generality:
+#   [§14a] prescribes `logit P(Y <= k | A, X) = alpha_k + beta*A + gamma'X` over
+#   STANDARDISATION_COVARIATES, which is this estimator with a wider design and unit weights. One
+#   implementation, two callers [Stage 8 §0.1].
+
+
+@dataclass(frozen=True)
+class PolrFit:
+    """One weighted proportional-odds fit, in the `logit P(Y <= k) = alpha_k + x'beta` form.
+
+    `alpha` is ascending and `categories` says which response values were FITTED, so a caller can
+    name the declared level each cutpoint belongs to WITHOUT re-deriving the collapse: `alpha[j]` is
+    the cutpoint at or below `categories[j]` [Stage 8 §5.3].
+
+    The last four fields describe how the fit was *reached* rather than what it is, which is `Fit`'s
+    precedent and earns its place for `Fit`'s reason (Stage 6 §3.2): [§10] refits N_BOOT times and a
+    safeguard whose activation nobody can count is a safeguard nobody can evaluate.
+
+    **`categories` is a field and not a length**, and it earns its place three times: the collapse
+    makes the number of cutpoints a property of the SAMPLE rather than of the declared level set; the
+    audit table renders one row per *declared* level and marks the absent ones, which it cannot do
+    from a count; and [§10] hands Stage 10 a `beta` whose comparability across replicates depends on
+    which categories each replicate had. An `n_categories: int` would carry the shape and lose the
+    identity, and the identity is what the log has to print.
+
+    **THERE IS NO STANDARD ERROR FIELD, and that is a correctness claim rather than an omission**
+    [Stage 8 §5.6]. `-H^-1` at the optimum is the inverse observed information of a likelihood in
+    which `w_i` counts observations; observation weights supplied by a caller need not be frequencies,
+    and where they are a tilting function of an ESTIMATED nuisance parameter the sampling variability
+    of estimating it is omitted entirely. [§10]'s percentile bootstrap is the prespecified interval.
+    """
+
+    beta: np.ndarray             # (m,), one per design column — NO intercept, and no alpha
+    alpha: np.ndarray            # (K,), ascending; K = len(categories) - 1
+    categories: tuple[int, ...]  # the response values FITTED, ascending
+    columns: tuple[str, ...]     # the design's column names, in beta's order
+    iterations: int
+    converged_on: str            # "likelihood" | "score"
+    first_step_norm: float       # ‖step‖ at iteration 1, BEFORE any rescale   ┐
+    rescales: int                # steps shortened by the trust region         ├─ Stage 8 §5.2
+    halvings: int                # total step-halvings across all iterations   ┘
+
+
+def _weighted_categories(y: np.ndarray, w: np.ndarray) -> tuple[int, ...]:
+    """The response levels carrying POSITIVE total weight, ascending. [Stage 8 §5.3]
+
+    One function and two callers — `_assert_polr_fittable`'s O5 counts what this returns and `polr`
+    collapses to it — because the expression is not the obvious one and O5's ordering turns on a
+    subtlety inside it: `np.nan > 0.0` is False, so a single nan weight makes its level's total
+    weight nan and DELETES the level rather than propagating. Written twice, the two copies are one
+    edit from disagreeing about which levels a fit has, and the disagreement would be silent in both
+    directions: O5 would count a different number of categories from the number `polr` then fits, and
+    both numbers would be finite and plausible (measured).
+
+    `int(v)` is safe because O4 has already established that every response value is integral, and O4
+    precedes O5 for that reason as well. This function does NOT re-run O3: it is called from inside
+    O5, so a nan weight has already raised by the time `polr` calls it a second time.
+    """
+    return tuple(int(v) for v in np.unique(y) if w[y == v].sum() > 0.0)
+
+
+def _ord_pieces(Xb: np.ndarray, alpha: np.ndarray, upper: np.ndarray, lower: np.ndarray,
+                has_u: np.ndarray, has_l: np.ndarray) -> tuple[np.ndarray, ...]:
+    """The two cumulative probabilities bracketing each observation's category, and two derivatives.
+
+    `upper`/`lower` are cutpoint indices and `has_u`/`has_l` say whether each exists: an observation
+    in the LOWEST category has no lower cutpoint (P(Y <= -1) = 0) and one in the HIGHEST has no upper
+    one (P(Y <= K) = 1). Those two boundary conventions are what make the first and last categories
+    contribute a single-sided derivative rather than a special case — so `gu` defaults to 1.0 and `gl`
+    to 0.0, and NOT to the clipped expit of a clipped index.
+
+    The clip on the linear predictor is the one `firth` uses and for the same reason: it keeps `exp`
+    in range. Measured: the largest |linear predictor| this estimator has produced is 18.2, in the
+    perfectly separated construction, so POLR_ETA_CLIP is never approached on any real input —
+    recorded rather than relied on.
+    """
+    zu = np.where(has_u, alpha[np.clip(upper, 0, len(alpha) - 1)] + Xb, 0.0)
+    zl = np.where(has_l, alpha[np.clip(lower, 0, len(alpha) - 1)] + Xb, 0.0)
+    gu = np.where(has_u, 1.0 / (1.0 + np.exp(-np.clip(zu, -C.POLR_ETA_CLIP, C.POLR_ETA_CLIP))), 1.0)
+    gl = np.where(has_l, 1.0 / (1.0 + np.exp(-np.clip(zl, -C.POLR_ETA_CLIP, C.POLR_ETA_CLIP))), 0.0)
+    du = np.where(has_u, gu * (1.0 - gu), 0.0)              # d gamma_u / d z
+    dl = np.where(has_l, gl * (1.0 - gl), 0.0)
+    ddu = np.where(has_u, du * (1.0 - 2.0 * gu), 0.0)       # d2 gamma_u / d z2
+    ddl = np.where(has_l, dl * (1.0 - 2.0 * gl), 0.0)
+    return gu, gl, du, dl, ddu, ddl
+
+
+def _ord_loglik(Xn: np.ndarray, y_idx: np.ndarray, w: np.ndarray, alpha: np.ndarray,
+                beta: np.ndarray, K: int) -> float:
+    """The weighted log-likelihood, or -inf where any category probability is non-positive.
+
+    -inf rather than a raise, so that step-halving can REJECT a step and try a shorter one; a raise
+    there would turn a recoverable step into a failed fit. This is `_penalised_loglik`'s posture
+    (Stage 6 §5.2), and the branch is what makes a crossed pair of cutpoints unreachable rather than
+    caught: a crossing makes some observation's category probability non-positive, so the halving
+    rejects the crossing rather than an assertion detecting it after the step was taken.
+
+    THE BRANCH IS MEASURED NOT TO FIRE on any input this estimator has been given: 3000 attempts at
+    reaching a crossing with pure Newton from a crowded start never lost the ordering. It is kept
+    because it is the CONTRACT between the collapse and the halving loop — remove the collapse, or
+    start from an unordered alpha, and this branch becomes the thing that stops a crash. Do not
+    delete it as dead code without deleting the reason it is dead.
+    """
+    upper, lower = y_idx, y_idx - 1
+    has_u, has_l = y_idx <= K - 1, y_idx >= 1
+    gu, gl = _ord_pieces(Xn @ beta, alpha, upper, lower, has_u, has_l)[:2]
+    p = gu - gl
+    if np.any(p <= 0.0) or not np.all(np.isfinite(p)):
+        return -np.inf
+    return float(np.sum(w * np.log(p)))
+
+
+def _ord_score_hess(Xn: np.ndarray, y_idx: np.ndarray, w: np.ndarray, alpha: np.ndarray,
+                    beta: np.ndarray, K: int) -> tuple[np.ndarray, np.ndarray]:
+    """The analytic weighted score and Hessian over (alpha, beta), in that order.
+
+    Analytic and not differenced: a finite-difference gradient is 2*(K+m) extra likelihood
+    evaluations per Newton step, and [§10] refits N_BOOT times. Verified against central differences
+    at three parameter values on two frames, with the Hessian negative definite at every one of them
+    — which is the concavity claim as a measurement rather than a citation.
+
+    The derivation, once, because a wrong sign here is a plausible number: with u = P(Y <= j),
+    v = P(Y <= j-1) and p = u - v, the per-observation log-likelihood is log p and
+
+        d/dzu  = u'/p = du/p          d2/dzu2      = ddu/p - (du/p)^2
+        d/dzl  = -v'/p = -dl/p        d2/dzl2      = -ddl/p - (dl/p)^2
+                                      d2/dzu dzl   = du*dl/p^2
+
+    and zu = alpha_ju + x'beta, zl = alpha_jl + x'beta, so d z_k / d alpha_m = 1{k = m} and
+    d z_k / d beta = x. The beta block therefore collects Huu + 2*Hul + Hll, which is the sum of
+    both single-sided terms PLUS TWICE the cross term, and the alpha-beta blocks collect one
+    single-sided term plus the cross term each.
+    """
+    n, m = Xn.shape
+    upper, lower = y_idx, y_idx - 1
+    has_u, has_l = y_idx <= K - 1, y_idx >= 1
+    gu, gl, du, dl, ddu, ddl = _ord_pieces(Xn @ beta, alpha, upper, lower, has_u, has_l)
+    p = gu - gl
+
+    A, B = du / p, -dl / p
+    Huu = ddu / p - (du / p) ** 2
+    Hll = -ddl / p - (dl / p) ** 2
+    Hul = du * dl / p ** 2
+
+    g = np.zeros(K + m)
+    H = np.zeros((K + m, K + m))
+    np.add.at(g, upper[has_u], (w * A)[has_u])
+    np.add.at(g, lower[has_l], (w * B)[has_l])
+    g[K:] = Xn.T @ (w * (A + B))
+
+    np.add.at(H, (upper[has_u], upper[has_u]), (w * Huu)[has_u])
+    np.add.at(H, (lower[has_l], lower[has_l]), (w * Hll)[has_l])
+    both = has_u & has_l
+    np.add.at(H, (upper[both], lower[both]), (w * Hul)[both])
+    np.add.at(H, (lower[both], upper[both]), (w * Hul)[both])
+
+    cu = np.where(both, Huu + Hul, np.where(has_u, Huu, 0.0))
+    cl = np.where(both, Hll + Hul, np.where(has_l, Hll, 0.0))
+    for r in range(m):
+        column = np.zeros(K)
+        np.add.at(column, upper[has_u], (w * cu * Xn[:, r])[has_u])
+        np.add.at(column, lower[has_l], (w * cl * Xn[:, r])[has_l])
+        H[:K, K + r] += column
+        H[K + r, :K] += column
+    H[K:, K:] = (Xn * (w * (Huu + 2.0 * Hul + Hll))[:, None]).T @ Xn
+    return g, H
+
+
+#   THE TWO SILENT FAILURES THIS FUNCTION IS THE ONLY GUARD AGAINST [Stage 8 §5.5, §3.1]
+#
+#   one nan weight   --polr-->  its response level's total weight is nan, `nan > 0.0` is
+#                               False, and the POSITIVE-WEIGHT RULE DELETES THE LEVEL. It
+#                               does not propagate. Measured: a four-category fit became a
+#                               three-category one, beta moved from -1.775 to -1.205,
+#                               iterations 4, converged_on "likelihood", nothing raised.
+#   one nan response --polr-->  np.unique returns nan as a level, `w[y == nan]` is empty so
+#                               its total weight is 0.0, and the RECORD IS DROPPED by the
+#                               same rule. Measured: 80 records fitted as 79, with nothing
+#                               missing anywhere in the output.
+#   So O3 MUST PRECEDE O5. With O3 first the nan is a raise; with O5 first it is a different
+#   model, over a coarser scale, reported with a plausible iteration count.
+
+def _assert_polr_fittable(Xn: np.ndarray, y: np.ndarray, w: np.ndarray,
+                          columns: tuple[str, ...]) -> None:
+    """O1-O6 — the six things that make `polr` return, or blame, the wrong answer.
+
+    Ordered cheap-to-expensive and raising at the FIRST failure rather than collecting, as
+    `_assert_fittable` does (Stage 6 §5.4) and for its reason: each one makes the next meaningless.
+    A rank computed over a design containing nan is not a rank.
+
+    **O4 MUST precede O5** for the same shape of reason O3 does, and `int(v)` inside
+    `_weighted_categories` is safe only because it does.
+
+    The messages name neither the exposure nor any outcome, which is a constraint and not a stylistic
+    choice: this module is outcome-agnostic (Stage 6 §0.1) and the acceptance suite scans its raise
+    strings for both. The concrete examples live in the spec instead.
+    """
+    if not np.all(np.isfinite(Xn)):
+        bad = [columns[j] for j in np.unique(np.argwhere(~np.isfinite(Xn))[:, 1])]
+        raise FitError(
+            f"O1  the design carries a non-finite value in: {', '.join(bad)}. An Int64 column with "
+            "pd.NA converts to nan SILENTLY, and every candidate step is then nan, so no step is "
+            "accepted and the fit blames step-halving for a failure of the data. Use "
+            "model.complete_cases().")
+
+    if not np.all(np.isfinite(y)):
+        raise FitError(
+            f"O2  the response carries {int((~np.isfinite(y)).sum())} non-finite value(s) of "
+            f"{len(y)}. It does NOT propagate here — np.unique returns nan as a level, its total "
+            "weight is 0, and the record is DROPPED by the positive-weight rule with nothing "
+            "missing anywhere in the result. Measured: 80 records fitted as 79. The response is "
+            "complete-case per estimate and the mask is the caller's.")
+
+    # O3 BEFORE O5, and the order is the finding rather than a preference: `np.nan > 0.0` is False,
+    # so without this a nan weight DELETES the response category it sits in instead of raising, and
+    # the fit comes back finite, plausible, and over a coarser scale (measured, above).
+    if not np.all(np.isfinite(w)) or np.any(w < 0.0):
+        raise FitError(
+            f"O3  the weights carry {int((~np.isfinite(w)).sum())} non-finite and "
+            f"{int(np.sum(w < 0.0))} negative value(s). A non-finite weight DELETES an outcome "
+            "category rather than propagating (see O5's ordering); a negative one makes the "
+            "objective non-concave, so the Hessian may be indefinite and a Newton step may ascend "
+            "away from the maximiser while every counter reads clean.")
+
+    off = y[np.not_equal(np.mod(y, 1.0), 0.0)]
+    if off.size:
+        raise FitError(
+            f"O4  the response takes {off.size} non-integer value(s): "
+            f"{', '.join(f'{v:g}' for v in np.unique(off)[:10])}. This is an ORDINAL fit and the "
+            "response is a category code: one cutpoint is estimated per distinct value, so a "
+            "continuous response silently makes the parameter count the number of distinct values "
+            "and every category a singleton. It fits. A continuous response belongs to no model in "
+            "this pipeline.")
+
+    categories = _weighted_categories(y, w)                                # one definition
+    if len(categories) < 2:
+        raise FitError(
+            f"O5  {len(categories)} response category/ies carry positive weight: "
+            f"{tuple(float(v) for v in categories)}. A proportional-odds fit needs at least two: "
+            "with one, there is no cutpoint to estimate and the likelihood is constant in every "
+            "parameter.")
+
+    rank = int(np.linalg.matrix_rank(Xn)) if Xn.shape[1] else 0
+    if Xn.shape[1] and rank < Xn.shape[1]:
+        raise FitError(
+            f"O6  the design has rank {rank} of {Xn.shape[1]} columns: {', '.join(columns)}. The "
+            "cutpoints ARE the intercepts, so a column of ones is exactly collinear with their sum "
+            "and a design carrying its own intercept fails here — which is the opposite of the "
+            "penalised logistic fit in this module, and the one place a reader will assume the two "
+            "agree.")
+
+
+def polr(X: pd.DataFrame, y: np.ndarray, w: np.ndarray | None = None) -> PolrFit:
+    """Weighted proportional-odds regression [§8]. Raises FitError; never returns a fallback.
+
+    THE PARAMETRISATION, spelled out, because every reference implementation uses the other sign::
+
+        logit P(Y <= k | x)  =  alpha_k  +  x'beta ,        k = 0 … K-1
+        alpha_1 < alpha_2 < … < alpha_K                     the cutpoints, ascending
+
+        l(theta)  =  SUM_i  w_i * log( P(Y = y_i | x_i) )   the log-likelihood is WEIGHTED
+                     with P(Y = j) = P(Y <= j) - P(Y <= j-1)
+
+    This is [§14a]'s own form, so it is the SAP's parametrisation and not a choice made here.
+    `statsmodels`' `OrderedModel` and R's `polr` and `clm` all write `theta_k - x'beta` instead, and
+    measured against both: **the coefficients come back NEGATED and the cutpoints do NOT.** That
+    asymmetry is what makes the mistake survive review — a reader comparing two fits sees four
+    cutpoints agreeing to five decimals and concludes the implementations agree. Do not "fix" the sign
+    to match a textbook; a caller reading this coefficient under the other convention inverts the
+    direction of its own result with every number still finite and still plausible.
+
+    `X` carries NO intercept and must not: the K cutpoints are the intercepts, and adding a column of
+    ones makes the design exactly singular against their sum. That is the opposite of `firth`, which
+    prepends its own — so the two functions differ in the one place a reader will assume they agree,
+    and O6's rank check is what turns the mistake into a raise rather than into a pseudo-inverse.
+
+    `w` is a non-negative observation-weight vector or None. None is the UNWEIGHTED fit and is not a
+    synonym for ones: a caller who passes nothing has said something different from a caller who
+    passes ones, and the acceptance suite turns on the two being indistinguishable in the result and
+    visible in the call.
+
+    Four numerical details, each load-bearing:
+
+    * **The response is collapsed to the categories carrying positive weight**, before anything else
+      numeric happens, and `categories` reports what was fitted.
+    * **The start values are beta = 0 and alpha_k = logit of the weighted cumulative share.** At
+      beta = 0 that is the exact maximiser of the intercept-only model, so iteration 1 starts at the
+      solution of a nested model rather than at an arbitrary point — measured 4 to 5 iterations on
+      every frame. And they are FINITE BY CONSTRUCTION because of the collapse: every kept category
+      carries positive weight, so every cumulative share is strictly inside (0, 1).
+    * **The step is rescaled, not rejected**, when it exceeds the trust radius, and the radius is
+      RELATIVE to the iterate — `firth`'s correction (Stage 6 §5.2a), inherited for its reason: a
+      proportional-odds estimate is equivariant under rescaling a covariate and an absolute bound is
+      not, so with one, WHICH replicates [§10] drops would depend on how the data was recorded.
+    * **`np.linalg.solve`, not `inv`, and it is deliberately NOT wrapped.** Stage 6 §5.2's argument
+      applies unchanged: a `pinv` fallback silently picks the minimum-norm solution among infinitely
+      many, so the fit returns coefficients for a design that identifies none. O6 establishes full
+      rank before the loop begins.
+
+    Unlike `firth` there is no penalty and no ½log|I| term, so **the objective is concave** — the
+    weighted sum of concave per-observation log-likelihoods, verified negative definite at the optimum
+    and away from it. Stage 6 §5.2c's one unguarded failure mode, "this loop finds *a* stationary
+    point where [§7] prescribes *the* maximiser", therefore does not recur here: for this estimator
+    they are the same point.
+
+    **What is far more dangerous instead is that A SEPARATED FIT CONVERGES AND RETURNS.** Measured on
+    20 against 20 with no overlap: beta 36.4058, exp(beta) 6.5e15, 17 iterations on the score
+    criterion, zero rescales, zero halvings, every fitted probability finite and nothing anywhere out
+    of range. The likelihood flattens as beta grows and the loop returns normally, so there is no
+    failure for [§10] to drop and count. This function does not guard it — a bound on a coefficient is
+    a statement about the specification and not about the arithmetic, so it lives on the caller's
+    side, exactly as Stage 6 put F5 in `propensity.py` and not here.
+    """
+    Xn = np.asarray(X.to_numpy(dtype=float))
+    y = np.asarray(y, dtype=float)
+    w = np.ones(len(y)) if w is None else np.asarray(w, dtype=float)
+    _assert_polr_fittable(Xn, y, w, tuple(X.columns))                      # O1-O6
+
+    # POSITIVELY-WEIGHTED and not merely OBSERVED, and the two reasons are one decision seen twice:
+    # it is what makes every cumulative share below strictly interior, so the start values are finite
+    # by construction; and it is what makes a crossed pair of cutpoints unreachable, because a
+    # crossing only drives a category probability non-positive FOR OBSERVATIONS IN THAT CATEGORY, and
+    # if they all carry zero weight the `-inf` never fires. The rule is one function with two callers
+    # — O5 counts what this returns — because the nan subtlety above lives inside the expression.
+    categories = _weighted_categories(y, w)
+    keep = np.isin(y, np.asarray(categories, dtype=float))
+    Xn, y, w = Xn[keep], y[keep], w[keep]
+    K, m = len(categories) - 1, Xn.shape[1]
+    y_idx = np.searchsorted(np.asarray(categories, dtype=float), y)
+
+    share = np.array([w[y_idx <= k].sum() / w.sum() for k in range(K)])    # strictly interior
+    par = np.concatenate([np.log(share / (1.0 - share)), np.zeros(m)])
+    ll_old = _ord_loglik(Xn, y_idx, w, par[:K], par[K:], K)
+    first_step_norm, rescales, halvings = 0.0, 0, 0
+
+    for iteration in range(1, C.POLR_MAX_ITER + 1):
+        g, H = _ord_score_hess(Xn, y_idx, w, par[:K], par[K:], K)
+        step = -np.linalg.solve(H, g)                       # LinAlgError is NOT caught
+        norm = float(np.linalg.norm(step))
+        if iteration == 1:
+            first_step_norm = norm
+        size = norm / max(1.0, float(np.linalg.norm(par)))
+        if size > C.POLR_MAX_STEP:
+            step = step * (C.POLR_MAX_STEP / size)
+            rescales += 1
+
+        for _ in range(C.POLR_MAX_HALVINGS):
+            ll_new = _ord_loglik(Xn, y_idx, w, (par + step)[:K], (par + step)[K:], K)
+            if ll_new >= ll_old:
+                break
+            step = step / 2.0
+            halvings += 1
+        else:
+            raise FitError(
+                f"polr: step-halving exhausted {C.POLR_MAX_HALVINGS} halvings at iteration "
+                f"{iteration} without increasing the weighted log-likelihood. [§8] prescribes one "
+                "estimator; there is no second one to try [invariant 5].")
+
+        par = par + step
+        # TWO CONVERGENCE ROUTES, either one sufficient, and the PolrFit records which fired —
+        # `firth`'s rule (Stage 6 §5.3), with the step norm deliberately not a third for its reason.
+        # The ORDER they run in is part of the estimator: [§10] refits in every replicate, so
+        # reordering them changes the sampling distribution. That is a [§13] amendment, not a repair.
+        #
+        # `g` is bound at the TOP of the iteration and both tests run after `par = par + step`, so a
+        # PolrFit reporting "score" reports a flat score one iterate behind its own coefficients.
+        # Harmless — when the score is below the tolerance the step is negligible — but stated
+        # because the acceptance suite asserts `converged_on` as a property of the return, and an
+        # implementer who recomputed the score after the step to "fix" this would change which
+        # iteration the loop exits on.
+        #
+        # AND THE SCORE ROUTE IS THE ONE A SEPARATED FIT RETURNS ON. Stage 6 §5.3 established that a
+        # fit coming back "score" is telling you its design is close to singular; here it is telling
+        # you something stronger and worse.
+        moved = abs(ll_new - ll_old)
+        if moved < C.POLR_TOL:
+            return PolrFit(par[K:], par[:K], categories, tuple(X.columns), iteration,
+                           "likelihood", first_step_norm, rescales, halvings)
+        if float(np.max(np.abs(g))) < C.POLR_SCORE_TOL:
+            return PolrFit(par[K:], par[:K], categories, tuple(X.columns), iteration,
+                           "score", first_step_norm, rescales, halvings)
+        ll_old = ll_new
+
+    raise FitError(
+        f"polr: no convergence in {C.POLR_MAX_ITER} iterations. The weighted log-likelihood moved "
+        f"{moved:.3g} against a tolerance of {C.POLR_TOL:g}, and the largest score component was "
+        f"{float(np.max(np.abs(g))):.3g} against {C.POLR_SCORE_TOL:g}. {rescales} step(s) were "
+        f"shortened by the trust region and {halvings} halving(s) taken. [§8] prescribes one "
+        "estimator, and [§10] drops and counts the replicate rather than substituting another.")

@@ -32,6 +32,7 @@ from __future__ import annotations
 import ast
 import os
 from pathlib import Path
+from typing import Final
 
 import numpy as np
 import pandas as pd
@@ -1150,3 +1151,1203 @@ def test_firthlogist_agrees_with_our_kernel_on_the_cohort_design(workbook):
     mask = model.complete_cases(df, config.PS_COVARIATES)
     X, _ = model.design(df.loc[mask], config.PS_COVARIATES)
     _agrees_with_firthlogist(X, df.loc[mask, config.TREATMENT].to_numpy(dtype=float))
+
+
+# =====================================================================================================
+#  STAGE 8 — the weighted proportional-odds fit. `specs/stage8_primary_outcome_estimator.md` §14.
+#
+#  `polr`'s sections live here because that is where the function is: §14.3, §14.4, §14.7's fit half
+#  and §14.8. The sections that read a `Primary` or an `Audit` are `test_outcome.py`'s.
+# =====================================================================================================
+
+# --- 14.0.4  the synthetic constructions, written out ------------------------------------------------
+#
+# Six deterministic generators, no assertions, no fixtures, no frames. They are written out rather than
+# described because a document that pins a number produced by a construction it does not specify has a
+# hole exactly the shape of the number: "a 200-record construction with the treated arm's mass at
+# mRS 0-3" does not yield exp(beta) = 84.58, and an implementer cannot reach it from that sentence.
+#
+# EVERY ONE SEEDS FROM `config.SEED` AND NONE HOLDS A LITERAL SEED, for FIRTH_TOL's reason one level
+# down: a seed is what makes a measured number reproducible, so a second seed in a test module is a
+# second answer to a question config.py already answers. Stage 10 reads the same constant.
+#
+# `test_outcome.py` imports them by name, exactly as it imports `cohort_frame` from `test_cohort`.
+
+
+def hand_ordinal():
+    """12 records, 6 against 6, all seven declared mRS levels. (y, a, w) — §14.3, §14.6.
+
+    Hand-computable and hand-checkable: the weights are small integers summing to 21 in each arm, so
+    every weighted cumulative probability in §14.6 is a sum of at most six of them over a denominator
+    of 21.
+
+    **THE WEIGHTS ARE INTEGERS, AND THAT IS A REQUIREMENT AND NOT A CONVENIENCE.** §14.3's and §18b's
+    first oracle run the integer-weight replication check on this frame, and "the unweighted fit on
+    the frame with each row repeated `w` times" is undefined for a fractional weight — `np.repeat`
+    raises `TypeError: Cannot cast array data from dtype('float64') to dtype('int64')`.
+
+    **And scaling fractional weights up to integers does NOT work**, which is measured rather than
+    assumed: the polr MLE is invariant to a common weight scale in exact arithmetic, but `POLR_TOL` is
+    ABSOLUTE on a log-likelihood that scales with the weight sum, so multiplying every weight by 20
+    tightens the stopping criterion twentyfold and the two fits stop at different points —
+    |Δbeta| = 9.458e-10 measured, which FAILS §14.3's 1e-10 tolerance. Integers chosen from the start
+    agree at 1.11e-16. That is the first measured consequence of §5.2's absolute tolerances.
+    """
+    y = np.array([0., 1., 2., 3., 4., 5., 1., 2., 3., 4., 5., 6.])
+    a = np.array([1.] * 6 + [0.] * 6)
+    w = np.array([1., 2., 3., 4., 5., 6., 6., 5., 4., 3., 2., 1.])
+    return y, a, w
+
+
+def replication_frame(n: int = 120, levels: int = 5):
+    """(X, y, w) with INTEGER weights in {1, 2, 3, 4}, for the replication oracle. §14.3, §18b.
+
+    Integer by construction and not by rounding: the oracle is that a weighted fit equals the
+    unweighted fit on the row-replicated frame, and a non-integer weight makes "replicated" undefined.
+    Two covariates so the oracle covers a beta of length > 1, which the [§8] path never has and
+    Stage 12 always does.
+
+    **THE LOGISTIC NOISE TERM IS LOAD-BEARING.** This is the proportional-odds data-generating
+    process: a latent variable `x'b + Logistic(0, 1)`, cut at its own quantiles. Without the noise,
+    `y` is a MONOTONE function of `x'b` — every category is an interval of the linear predictor — and
+    the frame is **perfectly separated in the ordinal sense**, so the likelihood has no interior
+    maximum and `beta` runs to the trust region's limit. Measured on a noiseless draft:
+    `beta = [-3281.7, -1652.8]` at n=120 and `[-48828, -24382]` at n=500, both converging on the
+    score criterion with clean counters. **Every oracle built on this frame is void on a separated
+    one**: two optimisers of a likelihood whose maximum is at infinity need not agree at all. With the
+    noise, `max|beta|` is 0.93 here and 0.76 on `reference_frame()` — comfortably interior.
+    """
+    rng = np.random.default_rng(config.SEED)
+    X = pd.DataFrame({"x1": rng.normal(size=n), "x2": rng.normal(size=n)})
+    latent = (0.8 * X["x1"].to_numpy() + 0.4 * X["x2"].to_numpy()
+              + rng.logistic(size=n))                          # <- the noise
+    cuts = np.quantile(latent, np.linspace(0.0, 1.0, levels + 1)[1:-1])
+    y = np.searchsorted(cuts, latent).astype(float)
+    w = rng.integers(1, 5, size=n).astype(float)
+    return X, y, w
+
+
+def reference_frame(n: int = 500, levels: int = 5):
+    """(X, y), two covariates, unweighted — the frame the statsmodels sign oracle runs on. §7.2, §14.5.
+
+    Unweighted deliberately: `OrderedModel` has no weight support of any kind, so the only comparison
+    available is the unweighted one, and this generator is what makes `ours.beta + sm.beta` a
+    reproducible quantity rather than a remembered one.
+
+    It delegates to `replication_frame` rather than repeating the construction, so it inherits the
+    noise term that docstring is about — and it inherited the BUG for the same reason, at n = 500
+    where separation is sharper.
+    """
+    X, y, _ = replication_frame(n=n, levels=levels)
+    return X, y
+
+
+def orientation_frame(per_arm: int = 100):
+    """(X, y, w) where treatment shifts mRS DOWNWARD by construction. §7.3, §14.5.
+
+    The construction whose truth is known, which is what the roadmap's orientation criterion needs and
+    what prose cannot supply: the treated arm's mass sits at mRS 0-3 and the control's at 2-6, so the
+    direction of the true effect is a property of these two literal tuples and not of a fitted number.
+    Unit weights — the orientation of `beta` is a question about the parametrisation and not about the
+    weighting, and §14.3's oracles own the weighting.
+    """
+    rng = np.random.default_rng(config.SEED)
+    treated = rng.choice(np.array([0., 1., 2., 3.]), size=per_arm, p=[.40, .30, .20, .10])
+    control = rng.choice(np.array([2., 3., 4., 5., 6.]), size=per_arm, p=[.20, .25, .25, .20, .10])
+    y = np.concatenate([treated, control])
+    a = np.concatenate([np.ones(per_arm), np.zeros(per_arm)])
+    return pd.DataFrame({config.TREATMENT: a}), y, np.ones(len(y))
+
+
+def separated_frame(per_arm: int = 20, crossovers: int = 0):
+    """PERFECT separation at crossovers = 0, NEAR separation above it. §6.1, §14.7.
+
+    Every treated record at mRS 0 and every control at mRS 5, with `crossovers` treated records moved
+    to the control's level. This is the construction §6.1 measured — it holds no seed at all, which is
+    why §6.1's numbers are exact rather than distributional: at crossovers = 0 and per_arm = 20 it
+    returns beta 36.4058 in 17 iterations on the score criterion, every counter at zero, and it does
+    so on every machine.
+    """
+    y = np.concatenate([np.zeros(per_arm), np.full(per_arm, 5.0)])
+    y[:crossovers] = 5.0
+    a = np.concatenate([np.ones(per_arm), np.zeros(per_arm)])
+    return pd.DataFrame({config.TREATMENT: a}), y, np.ones(len(y))
+
+
+BAND_EFFECTS: Final[tuple[float, ...]] = (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0)
+
+
+def band_samples(effects, per_effect: int, per_arm: int = 46, levels: int = 7):
+    """The FITS from `len(effects) * per_effect` draws of a cohort-shaped frame. §6.3, §14.7.
+
+    It returns the fits and not a `|beta|` vector, which is a correction: §14.7 asserts things about
+    `cond(-H)` and about the safeguard counters, and both are properties of the fit. An earlier draft
+    returned magnitudes only and left those assertions with no subject. The band assertion takes
+    `max(abs(f.beta))` from each; nothing is lost by returning more.
+
+    A treatment-only weighted proportional-odds sampler over a range of TRUE effect sizes. The range
+    is the point: §6.3's band was first measured at a single true effect of 0.5, which is an
+    assumption about the answer, so the generator takes the effects as an argument and both callers
+    pass a range.
+
+    TWO callers with different budgets, which is §14.7's split. The in-suite probe passes
+    per_effect = 20 for 240 fits and under a second; §6.3's calibration passed per_effect = 400 for
+    4800 fits and about 14 s, which is a calibration and not a test.
+    """
+    rng = np.random.default_rng(config.SEED)
+    out: list[model.PolrFit] = []
+    for effect in effects:
+        for _ in range(per_effect):
+            a = np.concatenate([np.ones(per_arm), np.zeros(per_arm)])
+            latent = effect * a + rng.normal(size=2 * per_arm)
+            cuts = np.quantile(latent, np.linspace(0.0, 1.0, levels + 1)[1:-1])
+            y = np.searchsorted(cuts, latent).astype(float)
+            w = rng.uniform(0.05, 0.95, size=2 * per_arm)
+            try:
+                out.append(model.polr(pd.DataFrame({config.TREATMENT: a}), y, w))
+            except model.FitError:
+                continue                       # O5 on a degenerate draw; NOT a band member
+    return out
+
+
+# --- 14.0.4a  the six that O1-O6, §14.4 and §14.6 need -------------------------------------------------
+#
+# Hand-built, seed-free and small, so their numbers are VALUES rather than tolerances. §14.0.4's
+# generators seed from config.SEED and their sampling differs in detail from the harnesses that first
+# produced the spec's §20 numbers, so every assertion resting on one of those is a tolerance or a
+# property. These six and `separated_frame()` are the exceptions.
+
+
+def nan_weight_frame():
+    """A four-category weighted frame, for O3's ordering. §14.8.
+
+    Twenty records over four categories with strictly positive weights. The test sets `w[0]` to nan
+    and asserts O3; the companion removes O3 and asserts the category DELETION, which is the mechanism
+    no other check in this stage names.
+    """
+    y = np.array([0., 1., 2., 3.] * 5)
+    a = np.array([1., 0.] * 10)
+    return pd.DataFrame({config.TREATMENT: a}), y, np.linspace(0.2, 0.9, 20)
+
+
+def nan_response_frame(n: int = 80):
+    """Eighty records over four categories, for O2 — and for O2's interaction with O4. §14.8."""
+    rng = np.random.default_rng(config.SEED)
+    a = np.array([1., 0.] * (n // 2))
+    latent = 0.9 * a + rng.logistic(size=n)
+    cuts = np.quantile(latent, [0.25, 0.50, 0.75])
+    return (pd.DataFrame({config.TREATMENT: a}),
+            np.searchsorted(cuts, latent).astype(float), np.ones(n))
+
+
+def noninteger_response_frame():
+    """THREE distinct half-integer values over sixty records, for O4. §14.8.
+
+    Sized so that the with-O4-removed companion reaches a FIT. Six distinct values over 24 records
+    makes the Hessian singular and `np.linalg.solve` raises `LinAlgError` — which is not `FitError`,
+    so the companion would assert the wrong thing (measured).
+    """
+    y = np.array([0., 0.5, 1.] * 20)
+    a = np.array([1., 0.] * 30)
+    return pd.DataFrame({config.TREATMENT: a}), y, np.ones(60)
+
+
+def emptied_category_frame(empty: int = 2):
+    """(full, reduced) — a five-category frame and the same frame with one category removed. §14.4.
+
+    Returns BOTH, because §14.4's assertion is that the collapse gives the same fit as the removal.
+    The zero-weight variant is the same frame with `w` zeroed on that category rather than the rows
+    dropped, which is the one input separating §5.3's rule from the observed-set rule.
+    """
+    y = np.array([v for v in (0., 1., 2., 3., 4.) for _ in range(6)])
+    a = np.array([1., 0.] * 15)
+    w = np.linspace(0.3, 0.8, 30)
+    keep = y != float(empty)
+    return ((pd.DataFrame({config.TREATMENT: a}), y, w),
+            (pd.DataFrame({config.TREATMENT: a[keep]}), y[keep], w[keep]))
+
+
+def rare_category_frame():
+    """Sixty-one records, ONE of them in the top category. §14.7.
+
+    The frame on which `_assert_reportable` is shown to bound `beta` and not `alpha`: `max|alpha|` is
+    4.1599 and `|beta|` 0.126998, so with the bound patched to 3.0 an alpha-bound would reject it and
+    the real guard passes. No frame with `|alpha| >= 14` is constructible — alpha for a rare category
+    grows like log n and 14 needs order 1e7 records.
+    """
+    y = np.array([0.] * 30 + [1.] * 30 + [2.])
+    a = np.array(([1., 0.] * 15) * 2 + [1.])
+    return pd.DataFrame({config.TREATMENT: a}), y, np.ones(61)
+
+
+def deaths_both_arms_frame():
+    """Fourteen records, all seven levels in both arms, a death in each. §14.6, §8.3.
+
+    Returns the arm vector as well, because §14.6 calls `cumulative_rd` on it directly. It is the
+    frame on which RD_6 is shown structurally zero while RD_5 is not.
+    """
+    y = np.array([0., 1., 2., 3., 4., 5., 6.] * 2)
+    a = np.array([1.] * 7 + [0.] * 7)
+    w = np.array([3., 3., 3., 2., 2., 1., 1., 1., 2., 2., 3., 3., 3., 4.])
+    return pd.DataFrame({config.TREATMENT: a}), y, a, w
+
+
+# --- 14.4  the two fixtures that drive §5.2's safeguards non-zero --------------------------------------
+#
+# Measured: with `rescales` and `halvings` asserted only as integers on frames where they are zero,
+# BOTH of §5.2's safeguards can be deleted from `polr` and every frame in the suite returns
+# bit-identically. Stage 6 §12.4a does not have that gap — `big_first_step()` and `needs_halving()` are
+# the fixtures it uses — and this stage needs its own two.
+#
+# They are one line each, because a proportional-odds estimate is equivariant under rescaling a
+# covariate and the trust radius is RELATIVE, so scaling the exposure is enough to drive both counters:
+#
+#     exposure scaled by      1.0        0.1        0.01
+#     rescales                  0          1           2
+#     halvings                  0          0           1
+#     first_step_norm      4.8078    31.7083    315.0171
+#
+# The same pair is the scale-invariance test: `beta * scale` is equal across the three to 1e-8 — not
+# tighter, because POLR_TOL is absolute and the three fits stop at slightly different points, which is
+# itself the measurement.
+
+
+def scaled_exposure(scale: float):
+    """`orientation_frame()` with the exposure column multiplied by `scale`. §14.4."""
+    X, y, w = orientation_frame()
+    return X * scale, y, w
+
+
+def polr_big_first_step():
+    """§14.4 — the TRUST REGION, in isolation: 1 rescale and 0 halvings."""
+    return scaled_exposure(0.1)
+
+
+def polr_needs_halving():
+    """§14.4 — both safeguards: 2 rescales and 1 halving."""
+    return scaled_exposure(0.01)
+
+
+def cohort_shaped_frame(effect: float, per_arm: int = 46, levels: int = 7):
+    """One (X, y, w) draw of `band_samples`'s frame — the FRAME, which `band_samples` discards. §14.7.
+
+    `cond(-H)` is a property of the (frame, fit) PAIR: the Hessian is a function of the design, the
+    response indices and the weights, and a `PolrFit` carries none of the three. `band_samples`
+    returns fits so the band assertion and the counter assertion have their subject; this returns the
+    first draw at one true effect so the conditioning assertion has its own. Same sampler, same seed,
+    same shape — 46 against 46 over seven declared levels, which is the workbook cohort's.
+
+    At `effect = 0.5` it is a healthy seven-category frame (`cond(-H)` 58.4); at `effect = 6.0` it is
+    near-separated (`cond(-H)` 2.8e8, `|beta|` 21.3). The gap is six orders of magnitude, which is
+    §6.3's measurement — and the reason that detector is still rejected is not that it fails to
+    discriminate but that the matrix's DIMENSION is a property of the sample.
+    """
+    rng = np.random.default_rng(config.SEED)
+    a = np.concatenate([np.ones(per_arm), np.zeros(per_arm)])
+    latent = effect * a + rng.normal(size=2 * per_arm)
+    cuts = np.quantile(latent, np.linspace(0.0, 1.0, levels + 1)[1:-1])
+    y = np.searchsorted(cuts, latent).astype(float)
+    w = rng.uniform(0.05, 0.95, size=2 * per_arm)
+    return pd.DataFrame({config.TREATMENT: a}), y, w
+
+
+def ord_pieces_of(X, y, w, fit):
+    """(Xn, y_idx, w, K) for a fitted frame — `polr`'s collapse, redone so a test can call a private.
+
+    Written once here rather than inlined at five call sites, and it is deliberately NOT a second
+    copy of the collapse rule: it reads `fit.categories`, which is what `polr` already decided. A
+    helper that recomputed the rule would be exactly the duplication §5.3a took out of `model.py`.
+    """
+    categories = np.asarray(fit.categories, dtype=float)
+    keep = np.isin(y, categories)
+    Xn, y_kept, w_kept = X.to_numpy(dtype=float)[keep], y[keep], w[keep]
+    return Xn, np.searchsorted(categories, y_kept), w_kept, len(fit.categories) - 1
+
+
+def category_probabilities(X, y, w, fit):
+    """P(Y = y_i) under `fit`, per observation — §14.7's fitted-probability detector."""
+    Xn, y_idx, w_kept, K = ord_pieces_of(X, y, w, fit)
+    upper, lower = y_idx, y_idx - 1
+    gu, gl = model._ord_pieces(Xn @ fit.beta, fit.alpha, upper, lower,
+                               y_idx <= K - 1, y_idx >= 1)[:2]
+    return gu - gl
+
+
+def cond_of(X, y, w, fit):
+    """`cond(-H)` at the returned optimum. §14.7."""
+    Xn, y_idx, w_kept, K = ord_pieces_of(X, y, w, fit)
+    _, H = model._ord_score_hess(Xn, y_idx, w_kept, fit.alpha, fit.beta, K)
+    return float(np.linalg.cond(-H))
+
+
+def row_replicated(X, y, w):
+    """The frame with each row repeated `w` times. Integer weights only — §14.3, §18b's oracle 1."""
+    counts = np.asarray(w, dtype=int)
+    assert np.array_equal(counts.astype(float), np.asarray(w, dtype=float)), (
+        "row replication is undefined for a fractional weight; the generator must supply integers")
+    return (pd.DataFrame(np.repeat(X.to_numpy(dtype=float), counts, axis=0), columns=X.columns),
+            np.repeat(np.asarray(y, dtype=float), counts))
+
+
+# The three frames every "on every frame in the suite" assertion below ranges over: a weighted
+# treatment-only fit, a two-covariate weighted fit, and an unweighted one. Named once so a fourth is
+# one line and so no assertion says "every frame" while looking at one.
+def _hand_ordinal_triple():
+    y, a, w = hand_ordinal()
+    return pd.DataFrame({config.TREATMENT: a}), y, w
+
+
+SUITE_FRAMES = {
+    "hand_ordinal": _hand_ordinal_triple,
+    "replication_frame": replication_frame,
+    "orientation_frame": orientation_frame,
+}
+
+# The real O1-O6, captured once at import, so a test that removes ONE check can delegate the other
+# five rather than reimplementing them — a reimplemented guard is a second copy of the thing under
+# test, and it is how a companion ends up asserting its own behaviour.
+_real_assert = model._assert_polr_fittable
+
+
+# --- 14.3  `polr` and the weights [roadmap, amended] --------------------------------------------------
+#
+# EVERY ASSERTION IN THIS SECTION IS A TOLERANCE OR A PROPERTY AND NONE IS A VALUE. The measured
+# numbers are kept beside them as the record of what was seen, and an implementer who gets a different
+# one from these generators has found something rather than broken something.
+
+@pytest.mark.parametrize("name,frame", [
+    ("replication_frame", replication_frame),          # Sigma w = 307, measured agreement 0.0
+    ("hand_ordinal", _hand_ordinal_triple),            # Sigma w = 42,  measured agreement 1.11e-16
+])
+def test_INTEGER_WEIGHTS_EQUAL_ROW_REPLICATION(name, frame):
+    """§18b's first oracle, and the strongest and cheapest this stage has.
+
+    A weighted likelihood with integer weights IS by definition the unweighted likelihood of the
+    frame with each row repeated, so the two fits must agree to machine precision — and no library,
+    no subprocess and no tolerance negotiation is involved. **This is the roadmap's weighting
+    criterion in the form that can fail**: the all-weights-1 form below cannot, because an
+    implementation that never reads `w` at all satisfies it.
+
+    **The tolerance is stated per weight scale, and that is measured rather than stylistic.**
+    `POLR_TOL` is ABSOLUTE on a log-likelihood that scales with `Sigma w`, so how closely two fits of
+    the same likelihood agree depends on the weight sum. At `Sigma w = 307` they agree at 0.0; at
+    `Sigma w = 42` at 1.11e-16; and at `Sigma w = 138` — `hand_ordinal()`'s weights scaled by 20,
+    which is mathematically the SAME MLE — at 9.458e-10, which would FAIL this 1e-10 assertion. So
+    1e-10 holds on both declared fixtures and is **not** a scale-free guarantee: a future fixture at a
+    very different `Sigma w` must re-measure rather than inherit it.
+    """
+    X, y, w = frame()
+    weighted = model.polr(X, y, w)
+    replicated = model.polr(*row_replicated(X, y, w))
+    assert float(np.max(np.abs(weighted.beta - replicated.beta))) < 1e-10
+    assert float(np.max(np.abs(weighted.alpha - replicated.alpha))) < 1e-10
+    assert weighted.categories == replicated.categories
+
+
+def test_all_weights_one_equals_None_BIT_FOR_BIT_which_is_why_it_cannot_be_the_criterion():
+    """The companion that makes the oracle above necessary, and the pair IS the test.
+
+    An implementation that never reads `w` at all satisfies the roadmap's "equals an unweighted fit
+    when all weights are 1" criterion — trivially, because it fits the unweighted model either way.
+    Measured here bit for bit, so the criterion is shown to be unable to fail rather than argued to
+    be. `None` is not a synonym for ones in the CALL (§3) and is indistinguishable in the RESULT,
+    which is exactly the distinction this asserts.
+    """
+    X, y, w = _hand_ordinal_triple()
+    ones, absent = model.polr(X, y, np.ones(len(y))), model.polr(X, y, None)
+    assert np.array_equal(ones.beta, absent.beta)
+    assert np.array_equal(ones.alpha, absent.alpha)
+    assert (ones.iterations, ones.converged_on) == (absent.iterations, absent.converged_on)
+
+
+@pytest.mark.parametrize("name,frame", [
+    ("hand_ordinal", _hand_ordinal_triple),            # measured 1.8268, OPPOSITE SIGNS
+    ("replication_frame", replication_frame),          # measured 0.0566
+])
+def test_the_weighted_fit_DIFFERS_from_the_unweighted_one_on_the_same_data(name, frame):
+    """"Reads `w`" asserted positively rather than only negatively.
+
+    A FLOOR and not a value: the size of the difference is a property of each frame's weights, so a
+    magnitude assertion here would pin the fixture rather than the behaviour. On `hand_ordinal()` the
+    weights ascend across the treated arm's worsening outcomes and descend across the control's, so
+    the weighted and unweighted fits have **opposite signs** — -0.8696 against +0.9573.
+    """
+    X, y, w = frame()
+    assert float(np.max(np.abs(model.polr(X, y, w).beta - model.polr(X, y).beta))) > 1e-3
+
+
+DERIVATIVE_FRAMES = {
+    "hand_ordinal": _hand_ordinal_triple,      # K = 6, m = 1 — the [§8] path's shape
+    "replication_frame": replication_frame,    # K = 4, m = 2 — the shape Stage 12 always has
+}
+
+
+def _parameter_points(X, y, w, fit):
+    """The three points §14.3 checks the derivatives at, never the optimum alone.
+
+    A wrong sign in the `alpha`-`beta` cross block that happens to VANISH at one parameter value would
+    survive a check made only at the optimum — which is exactly where the score is zero and the
+    Hessian is best behaved. `par = 0` in the `beta` block with the start cutpoints, the returned
+    optimum, and the optimum perturbed by 0.5 in every coordinate.
+    """
+    Xn, y_idx, w_kept, K = ord_pieces_of(X, y, w, fit)
+    share = np.array([w_kept[y_idx <= k].sum() / w_kept.sum() for k in range(K)])
+    start = np.concatenate([np.log(share / (1.0 - share)), np.zeros(Xn.shape[1])])
+    optimum = np.concatenate([fit.alpha, fit.beta])
+    return (Xn, y_idx, w_kept, K), (start, optimum, optimum + 0.5)
+
+
+@pytest.mark.parametrize("name,frame", list(DERIVATIVE_FRAMES.items()))
+def test_the_analytic_score_agrees_with_CENTRAL_DIFFERENCES_at_three_points(name, frame):
+    """§18b's fourth oracle. Forty lines of chain rule, and a wrong sign is a plausible number.
+
+    Measured worst |delta score| 4.260e-08 across both frames and all three points, against a
+    tolerance of 1e-6 — two orders of margin.
+    """
+    X, y, w = frame()
+    (Xn, y_idx, w_kept, K), points = _parameter_points(X, y, w, model.polr(X, y, w))
+    for par in points:
+        g, _ = model._ord_score_hess(Xn, y_idx, w_kept, par[:K], par[K:], K)
+        numeric = np.zeros_like(par)
+        for j in range(len(par)):
+            step = np.zeros_like(par)
+            step[j] = 1e-5
+            numeric[j] = (model._ord_loglik(Xn, y_idx, w_kept, (par + step)[:K], (par + step)[K:], K)
+                          - model._ord_loglik(Xn, y_idx, w_kept, (par - step)[:K], (par - step)[K:],
+                                              K)) / 2e-5
+        assert float(np.max(np.abs(g - numeric))) < 1e-6
+
+
+@pytest.mark.parametrize("name,frame", list(DERIVATIVE_FRAMES.items()))
+def test_the_analytic_hessian_agrees_with_central_differences_and_is_NEGATIVE_DEFINITE(name, frame):
+    """The concavity claim as a measurement rather than a citation, at three points on two frames.
+
+    **Symmetric to a TOLERANCE and not by `array_equal`, and that is measured**: `H` is exactly
+    symmetric at m = 1 — the [§8] path — and asymmetric by 1.776e-15 at m = 2, because the `beta`
+    block is formed as `X'(wH)X` and that matmul is not bitwise symmetric for more than one column.
+    An `exactly symmetric` assertion passes on every frame this stage has and fails the first time
+    Stage 12 calls `polr` with a real covariate list.
+
+    Measured worst |delta Hessian| 3.790e-08 and worst asymmetry 1.776e-15, with every eigenvalue
+    negative at all six points.
+    """
+    X, y, w = frame()
+    (Xn, y_idx, w_kept, K), points = _parameter_points(X, y, w, model.polr(X, y, w))
+    for par in points:
+        _, H = model._ord_score_hess(Xn, y_idx, w_kept, par[:K], par[K:], K)
+        numeric = np.zeros_like(H)
+        for j in range(len(par)):
+            step = np.zeros_like(par)
+            step[j] = 1e-5
+            up, _ = model._ord_score_hess(Xn, y_idx, w_kept, (par + step)[:K], (par + step)[K:], K)
+            down, _ = model._ord_score_hess(Xn, y_idx, w_kept, (par - step)[:K], (par - step)[K:], K)
+            numeric[:, j] = (up - down) / 2e-5
+        assert float(np.max(np.abs(H - numeric))) < 1e-6
+        assert float(np.max(np.abs(H - H.T))) < 1e-12
+        assert float(np.max(np.linalg.eigvalsh(H))) < 0.0
+
+
+def test_polr_reaches_the_same_optimum_as_an_INDEPENDENT_optimiser():
+    """§18b's third oracle, and the only one that would catch a sign error in `_ord_score_hess` that
+    happened to be self-consistent.
+
+    Oracle 1 compares two of our own fits and oracle 2 compares a different objective; this checks
+    that the Newton loop reaches the maximiser of the function it says it is maximising. Nelder-Mead
+    from a deliberately poor start, because a gradient method would use a gradient this is checking.
+    `scipy` is TEST-ONLY by policy and this is its second use in the repository (Stage 6 §16b being
+    the first). Measured 1.062e-07 on all six parameters with log-likelihoods identical to ten
+    decimals.
+    """
+    from scipy.optimize import minimize
+    X, y, w = replication_frame()
+    fit = model.polr(X, y, w)
+    Xn, y_idx, w_kept, K = ord_pieces_of(X, y, w, fit)
+    ours = np.concatenate([fit.alpha, fit.beta])
+    # Poor but FEASIBLE: an all-zero start ties every cutpoint, so every category probability is 0,
+    # `_ord_loglik` returns -inf across the whole initial simplex and Nelder-Mead has no gradient of
+    # information to move on — measured, it exhausts maxfev and returns the start. "Deliberately poor"
+    # has to mean far from the optimum, not outside the objective's domain.
+    start = np.concatenate([np.linspace(-1.0, 1.0, K), np.zeros(Xn.shape[1])])
+    theirs = minimize(lambda p: -model._ord_loglik(Xn, y_idx, w_kept, p[:K], p[K:], K),
+                      start, method="Nelder-Mead",
+                      options={"xatol": 1e-10, "fatol": 1e-12, "maxfev": 100000, "maxiter": 100000})
+    assert theirs.success or theirs.status == 0 or float(np.max(np.abs(ours - theirs.x))) < 1e-6
+    assert float(np.max(np.abs(ours - theirs.x))) < 1e-6            # measured 7.417e-08
+    assert model._ord_loglik(Xn, y_idx, w_kept, ours[:K], ours[K:], K) >= -float(theirs.fun) - 1e-9
+
+
+# --- 14.4  the cutpoints, the collapse and the start values -------------------------------------------
+
+@pytest.mark.parametrize("name,frame", list(SUITE_FRAMES.items()))
+def test_alpha_is_STRICTLY_ASCENDING_on_every_frame_in_the_suite(name, frame):
+    """The post-condition §5.4 argues is guaranteed by construction, asserted on the RETURN.
+
+    Not asserted to be *enforced*: nothing in `polr` checks the ordering and nothing needs to. The
+    start values are ordered, a crossed pair gives a non-positive category probability for the
+    observations between the two cutpoints, `_ord_loglik` returns -inf, and the step is halved — so no
+    accepted iterate is unordered and the returned alpha is ascending because every one before it was.
+    That is stronger than an assertion would be: an assertion detects a crossing after the step has
+    been taken, and this makes the step unavailable.
+    """
+    X, y, w = frame()
+    fit = model.polr(X, y, w)
+    assert np.all(np.diff(fit.alpha) > 0.0)
+    assert len(fit.alpha) == len(fit.categories) - 1
+
+
+def test_the_START_VALUES_are_finite_BECAUSE_of_the_collapse():
+    """The coupling stated as an assertion: the collapse and the start values are ONE decision.
+
+    Every kept category carries positive weight, so every weighted cumulative share is strictly
+    inside (0, 1) and its logit is finite. The companion computes the same start values over
+    `MRS_LEVELS` instead and gets a NON-FINITE cutpoint — which is the fit running a cutpoint to a
+    boundary, with the parameter count a property of `config.py` and the identifiability a property
+    of the sample.
+
+    **Both signs, and which one you get is a fact about which declared level is unoccupied.** A
+    declared level BELOW every occupied one has a cumulative share of exactly 0 and gives `-inf`; one
+    ABOVE every occupied one has a share of exactly 1 and gives `+inf`. This frame produces both at
+    once, so the companion does not rest on a single direction: `emptied_category_frame`'s response
+    occupies 0-4, so declared levels 5 and 6 are above it, and zeroing category 0's weight puts a
+    declared level below it.
+    """
+    (X, y, w), _ = emptied_category_frame(empty=2)
+    fit = model.polr(X, y, w)
+    Xn, y_idx, w_kept, K = ord_pieces_of(X, y, w, fit)
+    share = np.array([w_kept[y_idx <= k].sum() / w_kept.sum() for k in range(K)])
+    assert np.all((share > 0.0) & (share < 1.0))
+    assert np.all(np.isfinite(np.log(share / (1.0 - share))))
+
+    # the companion: the same arithmetic over the DECLARED level set, which 5 and 6 are absent from
+    zeroed = np.where(y == 0.0, 0.0, w)
+    declared = np.array([zeroed[y <= float(level)].sum() / zeroed.sum()
+                         for level in config.MRS_LEVELS[:-1]])
+    with np.errstate(divide="ignore"):
+        over_declared = np.log(declared / (1.0 - declared))
+    assert not np.all(np.isfinite(over_declared))
+    assert float(np.min(over_declared)) == -np.inf          # level 0, below every occupied one
+    assert float(np.max(over_declared)) == np.inf           # levels 5 and 6, above every one
+    # and the collapse's own start values on the SAME weights stay finite, which is the contrast
+    collapsed = model.polr(X, y, zeroed)
+    assert collapsed.categories == (1, 2, 3, 4)
+    assert np.all(np.isfinite(collapsed.alpha))
+
+
+def test_a_ZERO_WEIGHT_category_is_dropped_and_the_fit_equals_the_rows_removed_one():
+    """The one input separating §5.3's rule from the observed-set rule.
+
+    `np.unique(y)` would keep a category all of whose records carry zero weight: it contributes
+    nothing to the likelihood, so its two cutpoints are unidentified — and worse, §5.4's crossing
+    argument fails there, because a crossing only drives a category probability non-positive FOR
+    OBSERVATIONS IN THAT CATEGORY, and if they all have zero weight the -inf never fires.
+
+    **The two fits do NOT share an O6 path**, and that is stated so nobody reads this assertion as
+    covering the collapsed design's rank: O6 runs BEFORE the collapse, so the left-hand fit's rank was
+    checked on the full design and the right-hand fit's on the reduced one. §15 files what that leaves
+    uncovered — a caller passing a weight of exactly zero can collapse away every row of a design
+    column and get `np.linalg.solve`'s `LinAlgError`, which is not `FitError`.
+    """
+    (X, y, w), (X_removed, y_removed, w_removed) = emptied_category_frame(empty=2)
+    zeroed = np.where(y == 2.0, 0.0, w)
+    collapsed = model.polr(X, y, zeroed)
+    removed = model.polr(X_removed, y_removed, w_removed)
+    assert 2 not in collapsed.categories
+    assert collapsed.categories == removed.categories == (0, 1, 3, 4)
+    assert float(np.max(np.abs(collapsed.beta - removed.beta))) < 1e-10
+    assert float(np.max(np.abs(collapsed.alpha - removed.alpha))) < 1e-10
+
+
+def test_the_collapse_and_the_full_frame_differ_in_their_cutpoint_count():
+    # The other half: without it, the assertion above would pass on a frame where nothing collapsed.
+    (X, y, w), _ = emptied_category_frame(empty=2)
+    assert len(model.polr(X, y, w).alpha) == 4
+    assert len(model.polr(X, y, np.where(y == 2.0, 0.0, w)).alpha) == 3
+
+
+def test_weighted_categories_is_the_rule_and_is_callable_directly():
+    y = np.array([0., 1., 2., 3.])
+    assert model._weighted_categories(y, np.array([1., 1., 1., 1.])) == (0, 1, 2, 3)
+    assert model._weighted_categories(y, np.array([1., 0., 1., 1.])) == (0, 2, 3)
+    # and the nan fact the whole ordering of O3 and O5 turns on, asserted where the rule lives
+    assert (np.nan > 0.0) is False
+    assert model._weighted_categories(y, np.array([np.nan, 1., 1., 1.])) == (1, 2, 3)
+
+
+def _unique_on_the_bare_response(source: str) -> list[tuple[str, int]]:
+    """Every `np.unique(y)` call — the CATEGORY RULE's expression — with its enclosing function.
+
+    Scoped to the argument and not to the name, and the scoping is the point. `np.unique` legitimately
+    appears three more times in this module, all of them formatting a message: `_assert_fittable`'s F4
+    and `_assert_polr_fittable`'s O1 call it on `np.argwhere(...)` output to name the offending
+    columns, and O4 calls it on the off-domain values to list them. A scan keyed on the bare name
+    would forbid those and the repair would be to gut the scan (Stage 6 §12.7's rule).
+
+    What §5.3a is actually about is one expression: `np.unique(y)`, the positive-weight level set's
+    own subject. Two copies of it are one edit from disagreeing about which levels a fit has, and the
+    disagreement is silent in both directions — O5 counts one number of categories and `polr` fits
+    another, both finite and both plausible.
+    """
+    found: list[tuple[str, int]] = []
+    for parent in ast.walk(ast.parse(source)):
+        if not isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(parent):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "unique" and len(node.args) == 1
+                    and isinstance(node.args[0], ast.Name) and node.args[0].id == "y"):
+                found.append((parent.name, node.lineno))
+    return found
+
+
+def test_the_positive_weight_rule_is_ONE_function_and_not_one_expression_written_twice():
+    # §5.3a. Without this the two copies come back on the next edit and nothing fails.
+    assert [name for name, _ in _unique_on_the_bare_response(SOURCE)] == ["_weighted_categories"]
+    assert "np.unique" not in ast.get_source_segment(SOURCE, _polr_ast()) 
+
+
+def _polr_ast():
+    return next(n for n in ast.walk(ast.parse(SOURCE))
+                if isinstance(n, ast.FunctionDef) and n.name == "polr")
+
+
+def test_that_duplication_scan_fires():
+    pasted = ("def polr(X, y, w):\n"
+              "    categories = tuple(int(v) for v in np.unique(y) if w[y == v].sum() > 0.0)\n")
+    assert [name for name, _ in _unique_on_the_bare_response(pasted)] == ["polr"]
+
+
+def test_the_MINUS_INF_branch_of_ord_loglik_returns_minus_inf_on_a_CROSSED_alpha():
+    """Asserted directly on the private, in the posture Stage 7 §12.11 asserts B4: unreachable on the
+    declared path, tested by calling it.
+
+    **No input reaches it through `polr`**, and that is a measured negative result rather than an
+    assumption: 3000 attempts at reaching a crossing with pure Newton from a deliberately crowded
+    start — the cutpoints initialised to a span of 2e-3 — never lost the ordering. An earlier draft
+    of the spec claimed the crossing was reachable by removing the halving; it is not, and the claim
+    is struck rather than weakened.
+    """
+    X, y, w = _hand_ordinal_triple()
+    fit = model.polr(X, y, w)
+    Xn, y_idx, w_kept, K = ord_pieces_of(X, y, w, fit)
+    assert np.isfinite(model._ord_loglik(Xn, y_idx, w_kept, fit.alpha, fit.beta, K))
+    crossed = fit.alpha.copy()
+    crossed[0], crossed[1] = crossed[1] + 1.0, crossed[0] - 1.0      # a crossed PAIR
+    assert model._ord_loglik(Xn, y_idx, w_kept, crossed, fit.beta, K) == -np.inf
+
+
+@pytest.mark.parametrize("name,frame", list(SUITE_FRAMES.items()))
+def test_POLR_ETA_CLIP_is_never_approached_on_any_frame_here(name, frame):
+    """The honest form of coverage for a branch no input reaches, and a REAL assertion.
+
+    Measured: the largest |linear predictor| this estimator has produced is 18.2, in the perfectly
+    separated construction, against a clip of 500. Asserted against the constant rather than against
+    500, because the point is the relationship.
+    """
+    X, y, w = frame()
+    fit = model.polr(X, y, w)
+    Xn, y_idx, w_kept, K = ord_pieces_of(X, y, w, fit)
+    eta = np.abs(Xn @ fit.beta) + float(np.max(np.abs(fit.alpha)))
+    assert float(np.max(eta)) < config.POLR_ETA_CLIP / 10.0
+
+
+@pytest.mark.parametrize("name,frame", list(SUITE_FRAMES.items()))
+def test_converged_on_is_declared_and_iterations_is_CLOSED_at_the_top(name, frame):
+    # Closed at the top because `range(1, POLR_MAX_ITER + 1)` can return POLR_MAX_ITER, and a
+    # half-open assertion would fail on the last iteration that still converges.
+    fit = model.polr(*frame())
+    assert fit.converged_on in ("likelihood", "score")
+    assert 1 <= fit.iterations <= config.POLR_MAX_ITER
+
+
+def test_the_TRUST_REGION_fires_in_isolation_from_step_halving():
+    # Asserted as VALUES on a frame that drives the counter, not as an integer on a frame where it is
+    # zero: measured, with the type-only form BOTH safeguards can be deleted from `polr` and every
+    # frame in the suite returns bit-identically.
+    fit = model.polr(*polr_big_first_step())
+    assert (fit.rescales, fit.halvings) == (1, 0)
+    assert fit.first_step_norm > config.POLR_MAX_STEP
+
+
+def test_STEP_HALVING_fires_together_with_the_trust_region_at_a_smaller_scale():
+    fit = model.polr(*polr_needs_halving())
+    assert (fit.rescales, fit.halvings) == (2, 1)
+    assert fit.first_step_norm > config.POLR_MAX_STEP
+
+
+@pytest.mark.parametrize("name,frame", [
+    *SUITE_FRAMES.items(),
+    ("separated_frame", separated_frame),
+])
+def test_neither_safeguard_fires_on_a_well_behaved_or_a_separated_frame(name, frame):
+    fit = model.polr(*frame())
+    assert (fit.rescales, fit.halvings) == (0, 0)
+
+
+def test_the_two_safeguard_fixtures_are_also_the_SCALE_INVARIANCE_test():
+    """A proportional-odds estimate is equivariant under rescaling a covariate, which is §5.2's own
+    argument for a RELATIVE trust radius — so the same pair does double duty.
+
+    1e-8 and not tighter, because `POLR_TOL` is absolute and the three fits therefore stop at slightly
+    different points. That looseness is itself the measurement (§5.2), not slack.
+    """
+    betas = [float(model.polr(*scaled_exposure(scale)).beta[0]) * scale
+             for scale in (1.0, 0.1, 0.01)]
+    assert max(abs(b - betas[0]) for b in betas) < 1e-8
+
+
+def test_POLR_MAX_HALVINGS_exhausted_says_there_is_no_second_estimator(monkeypatch):
+    # Stage 6 §12.4a's fourth assertion, one stage on. Without it the `for…else` branch of §5.2 is
+    # unreachable in the suite.
+    monkeypatch.setattr(config, "POLR_MAX_HALVINGS", 1)
+    with pytest.raises(model.FitError) as e:
+        model.polr(*polr_needs_halving())
+    assert "halvings at iteration" in message_of(e)
+    assert "there is no second one to try" in message_of(e)          # invariant 5
+
+
+def test_POLR_MAX_ITER_exhausted_reports_a_NON_ZERO_movement(monkeypatch):
+    monkeypatch.setattr(config, "POLR_MAX_ITER", 2)
+    with pytest.raises(model.FitError) as e:
+        model.polr(*polr_needs_halving())
+    text = message_of(e)
+    assert "no convergence in 2 iterations" in text
+    assert float(text.split("moved ")[1].split(" ")[0]) > 0.0
+    assert "score component" in text and "shortened by the trust region" in text
+
+
+@pytest.mark.parametrize("name,frame", list(SUITE_FRAMES.items()))
+def test_first_step_norm_is_positive_finite_and_INFORMATIVE(name, frame):
+    """`first_step_norm` is the one field of the four that `_fit_detail` does not print, so this
+    assertion is the only thing keeping it alive — which is why it is named rather than folded into
+    "the counters".
+
+    Strictly-positive alone is too weak: measured, a frame whose arms have identical weighted
+    distributions returns `iterations = 1`, `beta = 0.0` and `first_step_norm = 1.86e-16`, a value
+    that passes a positivity assertion and carries no information. The floor is therefore conditional
+    on the fit having taken more than one iteration.
+    """
+    fit = model.polr(*frame())
+    assert np.isfinite(fit.first_step_norm) and fit.first_step_norm > 0.0
+    if fit.iterations > 1:
+        assert fit.first_step_norm > 1e-8
+
+
+def test_that_first_step_norm_floor_would_NOT_hold_on_a_one_iteration_fit():
+    # The measurement behind the conditional above, asserted so the condition is not mistaken for
+    # timidity: two arms with identical weighted distributions converge at iteration 1 with beta 0.
+    X = pd.DataFrame({config.TREATMENT: np.array([1., 1., 1., 0., 0., 0.])})
+    fit = model.polr(X, np.array([0., 1., 2., 0., 1., 2.]), np.ones(6))
+    assert fit.iterations == 1 and fit.converged_on == "likelihood"
+    assert float(fit.beta[0]) == pytest.approx(0.0, abs=1e-12)
+    assert 0.0 < fit.first_step_norm < 1e-8
+
+
+# --- 14.7  separation converges, and G7 is what turns it into a failure --------------------------------
+#
+# THE SECTION THAT CARRIES THIS STAGE'S FINDING. `polr`'s half is here; the guard's half is
+# `test_outcome.py`'s, because G7 is the caller's.
+#
+# ITS BUDGET IS STATED because an earlier draft did not have one: three of its assertions ranged over a
+# CALIBRATION rather than a sample — a 4800-fit sweep, 500 healthy cond(-H) fits and 400 sparse
+# replicates run twice, about 6100 fits and 14 seconds, on every commit for the remaining six stages.
+# The split is: calibrations live in the spec's §20 and in `test_config.py`'s literal, probes live
+# here. Everything below is about 300 fits and under a second, and the calibration's endpoints are
+# guarded by `test_POLR_MAX_ABS_BETA_is_strictly_inside_the_measured_sparse_region`, which is the one
+# assertion that actually catches their regression.
+
+def test_A_PERFECTLY_SEPARATED_FIT_CONVERGES_AND_RETURNS():
+    """The finding, asserted as VALUES — and it can be, because `separated_frame()` holds no seed.
+
+    Nothing in this block is out of range. It is not a rank failure, not a halving exhaustion and not
+    a non-convergence: it converged, on the score criterion, in 17 iterations, with every safeguard
+    counter at zero and every fitted probability finite. The likelihood approaches its supremum as
+    beta grows and FLATTENS; the score falls below tolerance; the loop returns. `exp(beta)` is 6.5e15.
+
+    A tolerance would be a weaker way of saying "nothing looks wrong", which is the whole point.
+    """
+    X, y, w = separated_frame()
+    fit = model.polr(X, y, w)
+    assert fit.converged_on == "score"
+    assert fit.iterations == 17
+    assert (fit.rescales, fit.halvings) == (0, 0)
+    assert float(np.max(np.abs(fit.beta))) > 19.0
+    assert np.all(np.isfinite(fit.beta)) and np.all(np.isfinite(fit.alpha))
+    p = category_probabilities(X, y, w, fit)
+    assert np.all(np.isfinite(p)) and np.all((p > 0.0) & (p <= 1.0))
+
+
+def test_separation_scales_with_n_rather_than_being_an_artefact_of_a_tiny_frame():
+    betas = [float(np.max(np.abs(model.polr(*separated_frame(per_arm=n)).beta)))
+             for n in (10, 20, 40, 80)]
+    # Non-decreasing to a tolerance and NOT `== sorted(betas)`: measured 34.41 / 36.41 / 38.41 /
+    # 38.41, and the last two agree only to 2.9e-14 — the likelihood is flat out there, so an exact
+    # ordering assertion tests float noise on a ridge rather than the scaling.
+    assert all(later >= earlier - 1e-9 for earlier, later in zip(betas, betas[1:]))
+    assert min(betas) > 30.0
+    assert [round(b, 2) for b in betas] == [34.41, 36.41, 38.41, 38.41]
+
+
+def test_the_NON_CONVERGENCE_detector_does_not_fire_ever():
+    # Detector 1 of the four §6.3 designed and measured. It does not discriminate because it does not
+    # fire at all: both a degenerate fit and a healthy one converge.
+    assert model.polr(*separated_frame()).iterations <= config.POLR_MAX_ITER
+    assert model.polr(*cohort_shaped_frame(0.5)).iterations <= config.POLR_MAX_ITER
+
+
+def test_the_FITTED_PROBABILITY_detector_catches_PERFECT_and_misses_NEAR_separation():
+    """Detector 3, and the pair is the reason §6.3's guard is a magnitude bound.
+
+    At perfect separation every fitted category probability is 1.0 and the detector fires. At ONE
+    crossover patient out of twenty the probabilities are unremarkable — min 0.05 — while `exp(beta)`
+    is still 1.5e+09. **Near separation is the case a bootstrap actually draws**, so a detector that
+    only catches perfect separation catches the case that does not arise and misses the case that
+    does.
+    """
+    X, y, w = separated_frame()
+    perfect = category_probabilities(X, y, w, model.polr(X, y, w))
+    assert float(np.min(perfect)) == pytest.approx(1.0, abs=1e-6)
+
+    Xn, yn, wn = separated_frame(crossovers=1)
+    near = model.polr(Xn, yn, wn)
+    assert float(np.min(category_probabilities(Xn, yn, wn, near))) > 0.01
+    assert float(np.exp(np.max(np.abs(near.beta)))) > 1e8
+
+
+def test_the_COND_H_detector_DOES_discriminate_at_equal_cutpoint_count_and_is_rejected_anyway():
+    """Detector 2 — and the whole of this test is a CORRECTION.
+
+    An earlier draft wrote "6.85 against 3 to 40, does not discriminate", and both halves were wrong:
+    the 6.854 is real but it is a **2x2** matrix's, `separated_frame()` having two outcome categories
+    and therefore one cutpoint, while the healthy fits it was compared against are 7x7. That is not a
+    comparison. Measured properly, at equal cutpoint count, it discriminates by six orders of
+    magnitude.
+
+    **Asserted as orders of magnitude and not as ranges**, because the healthy range is a property of
+    the sampler: measured 29.1 to 162.8 healthy, 2.8e8 near-separated, 6.854 on the two-category
+    construction.
+
+    It is still not the guard, for two reasons that survive the correction. The first is the same size
+    dependence that produced the error — `cond(-H)` is a property of a matrix whose dimension is
+    `len(alpha) + len(beta)`, which §5.3 makes a property of the SAMPLE — and the third assertion
+    below is that dependence as a measurement: the two-category separated construction reads BELOW
+    every healthy seven-category fit, so a "cond above a bound" rule fires on nothing there. The
+    second is that a condition-number threshold cannot be justified against anything a reader can
+    evaluate, where a bound on the reported coefficient can: `exp(beta)` is the number the manuscript
+    prints.
+    """
+    healthy_X, healthy_y, healthy_w = cohort_shaped_frame(0.5)
+    healthy_fit = model.polr(healthy_X, healthy_y, healthy_w)
+    healthy = cond_of(healthy_X, healthy_y, healthy_w, healthy_fit)
+
+    sep_X, sep_y, sep_w = cohort_shaped_frame(6.0)
+    sep_fit = model.polr(sep_X, sep_y, sep_w)
+    near = cond_of(sep_X, sep_y, sep_w, sep_fit)
+
+    assert len(healthy_fit.alpha) == len(sep_fit.alpha) == 6      # EQUAL cutpoint count, or nothing
+    assert healthy < 1e4                                          # measured 58.4
+    assert near > 1e6                                             # measured 2.8e8
+    assert float(np.max(np.abs(sep_fit.beta))) > config.POLR_MAX_ABS_BETA
+
+    # the size dependence, which is why it is rejected: a 2x2's condition number is not comparable
+    two_category_X, two_category_y, two_category_w = separated_frame()
+    two_category = cond_of(two_category_X, two_category_y, two_category_w,
+                           model.polr(two_category_X, two_category_y, two_category_w))
+    assert two_category < healthy
+
+
+def test_THE_BAND_IS_A_BAND_at_the_probes_budget_and_not_the_calibrations():
+    """§6.3's distribution asserted as a band rather than as two endpoints, at 5% of the fits.
+
+    240 fits in about 0.7 s across twelve true effect sizes. §6.3's 4800-fit calibration is NOT re-run
+    here: its endpoints are recorded in the spec's §20 and pinned as literals in `test_config.py`,
+    which is what fails if the bound is edited back to the 10.0 an earlier draft used — the failure
+    mode the 4800 fits were guarding against, caught by one comparison instead of fourteen seconds of
+    fitting.
+
+    Measured on this probe: 153 below the bound and 87 at or above it, max below 8.5534, min above
+    20.7879, and nothing at all within +-4 of the bound.
+    """
+    fits = band_samples(BAND_EFFECTS, per_effect=20)
+    magnitudes = np.array([float(np.max(np.abs(f.beta))) for f in fits])
+    below = magnitudes[magnitudes < config.POLR_MAX_ABS_BETA]
+    above = magnitudes[magnitudes >= config.POLR_MAX_ABS_BETA]
+    assert below.size and above.size                       # both modes populated
+    assert int(((magnitudes > config.POLR_MAX_ABS_BETA - 4.0)
+                & (magnitudes < config.POLR_MAX_ABS_BETA + 4.0)).sum()) == 0
+    assert float(below.max()) < config.POLR_MAX_ABS_BETA < float(above.min())
+
+
+def test_the_band_probe_contains_fits_with_a_NON_ZERO_safeguard_counter():
+    """A free witness, and it strikes a sentence an earlier draft carried.
+
+    That draft said "zero of both counters on every frame in §20, which is what makes a non-zero
+    counter in a future run a signal rather than noise". The suite's own probe contradicts it:
+    measured, 10 of these 240 fits carry one.
+    """
+    fits = band_samples(BAND_EFFECTS, per_effect=20)
+    assert sum(1 for f in fits if f.rescales or f.halvings) > 0
+
+
+def test_SPARSE_REPLICATES_produce_ZERO_convergence_failures_and_that_is_the_point():
+    """§11's warning to Stage 10, made concrete rather than cautionary.
+
+    The two counters mean different things about the data, and that does not need four hundred
+    samples to state: **48 replicates here, not 400** — four draws at each of the twelve declared true
+    effect sizes; the measurement over 400 belongs in the spec's §20. What is asserted is that the
+    non-convergence count is exactly 0 while the count of fits that a G7-shaped bound would reject is
+    greater than 0 — measured 0 and 10. A Stage 10 failure counter reading zero is therefore NOT
+    evidence that no replicate was degenerate unless the guard is in the path.
+
+    **The effect range is what makes the second counter non-empty**, which is why it ranges over all
+    twelve rather than over the low end: at true effects of 0 to 1.5 nothing separates, so a probe
+    restricted to those would assert `degenerate > 0` and fail on correct code.
+    """
+    failures, degenerate = 0, 0
+    for effect in BAND_EFFECTS:
+        for draw in range(4):
+            rng = np.random.default_rng(config.SEED + draw)
+            a = np.concatenate([np.ones(39), np.zeros(53)])
+            latent = effect * a + rng.normal(size=92)
+            cuts = np.quantile(latent, np.linspace(0.0, 1.0, 8)[1:-1])
+            y = np.searchsorted(cuts, latent).astype(float)
+            try:
+                fit = model.polr(pd.DataFrame({config.TREATMENT: a}), y,
+                                 rng.uniform(0.05, 0.95, size=92))
+            except model.FitError as raised:
+                failures += "no convergence" in str(raised)
+                continue
+            degenerate += float(np.max(np.abs(fit.beta))) >= config.POLR_MAX_ABS_BETA
+    assert failures == 0
+    assert degenerate > 0
+
+
+# --- 14.8  O1-O6, and the two whose order is the point -------------------------------------------------
+
+def test_O1_fires_on_a_non_finite_design_and_names_the_column():
+    X, y, w = _hand_ordinal_triple()
+    X = X.copy()
+    X.loc[0, config.TREATMENT] = np.nan
+    with pytest.raises(model.FitError) as e:
+        model.polr(X, y, w)
+    assert "O1" in message_of(e) and config.TREATMENT in message_of(e)
+
+
+def test_O2_fires_on_a_non_finite_response():
+    X, y, w = nan_response_frame()
+    y = y.copy()
+    y[3] = np.nan
+    with pytest.raises(model.FitError) as e:
+        model.polr(X, y, w)
+    assert "O2" in message_of(e) and "non-finite" in message_of(e)
+
+
+def test_WITHOUT_O2_AND_O4_a_nan_response_silently_DROPS_the_record(monkeypatch):
+    """The mechanism asserted, not just the raise — and the companion must remove O2 **and** O4.
+
+    `np.mod(nan, 1.0)` is `nan` and `nan != 0.0` is True, so **O4 catches a non-finite response too**,
+    and the companion as first drafted would have asserted a silent drop while watching O4 raise.
+    That interaction is worth stating in its own right: O2 is not the sole detector of a nan response,
+    it is the one with the right message and the earlier position, and O4 is a backstop nobody
+    designed as one.
+
+    With both removed: 79 of 80 records fitted, `categories` UNCHANGED, and beta moves — the record is
+    dropped, not reported. `np.unique` returns nan as a level, `w[y == nan]` is empty so its total
+    weight is 0.0, and the positive-weight rule drops it with nothing missing anywhere in the output.
+    """
+    assert np.isnan(np.mod(np.nan, 1.0)) and (np.mod(np.nan, 1.0) != 0.0)
+    X, y, w = nan_response_frame()
+    clean = model.polr(X, y, w)
+    damaged = y.copy()
+    damaged[3] = np.nan
+
+    # O4 alone still fires, which is what makes the two-removal companion necessary
+    monkeypatch.setattr(model, "_assert_polr_fittable",
+                        lambda Xn, yv, wv, cols: None if not np.all(np.isfinite(yv)) else
+                        _real_assert(Xn, yv, wv, cols))
+    fit = model.polr(X, damaged, w)
+    assert fit.categories == clean.categories
+    assert float(np.max(np.abs(fit.beta - clean.beta))) > 1e-3
+    kept = np.isin(damaged, np.asarray(fit.categories, dtype=float))
+    assert int(kept.sum()) == len(y) - 1                        # 79 of 80, and nothing missing
+
+
+def test_removing_O2_ALONE_does_not_reach_a_fit_because_O4_catches_it_too(monkeypatch):
+    """The interaction stated in its own right, and it is why the companion above removes BOTH.
+
+    O2 is the better message and the earlier position; it is not the sole detector. O4 is a backstop
+    nobody designed as one.
+    """
+    def without_O2(Xn, y, w, columns):
+        if not np.all(np.isfinite(Xn)):
+            raise model.FitError("O1  the design carries a non-finite value in: —")
+        if not np.all(np.isfinite(w)) or np.any(w < 0.0):
+            raise model.FitError("O3  the weights carry a non-finite value")
+        if y[np.not_equal(np.mod(y, 1.0), 0.0)].size:
+            raise model.FitError("O4  the response takes non-integer value(s)")
+
+    monkeypatch.setattr(model, "_assert_polr_fittable", without_O2)
+    X, y, w = nan_response_frame()
+    y = y.copy()
+    y[3] = np.nan
+    with pytest.raises(model.FitError) as e:
+        model.polr(X, y, w)
+    assert "O4" in message_of(e)
+
+
+def test_O3_fires_on_a_nan_weight_BEFORE_O5_can_delete_the_category():
+    X, y, w = nan_weight_frame()
+    w = w.copy()
+    w[0] = np.nan
+    with pytest.raises(model.FitError) as e:
+        model.polr(X, y, w)
+    assert "O3" in message_of(e) and "DELETES an outcome" in message_of(e)
+
+
+def test_WITHOUT_O3_one_nan_weight_DELETES_A_CATEGORY_and_moves_beta(monkeypatch):
+    """The ordering asserted as an ordering, and BOTH halves are required.
+
+    The first alone passes for an implementation that raises somewhere; this is what shows what it is
+    raising *instead of*. `np.nan > 0.0` is False, so the category's total weight is nan, the
+    positive-weight test drops it, and the fit comes back over a COARSER SCALE — finite, plausible,
+    with a clean iteration count and nothing raised.
+
+    Measured: four categories became three and beta moved from -1.6789 to +0.1949 on this frame.
+    """
+    X, y, w = nan_weight_frame()
+    clean = model.polr(X, y, w)
+    damaged = w.copy()
+    damaged[0] = np.nan
+
+    def without_O3(Xn, yv, wv, columns):
+        return _real_assert(Xn, yv, np.where(np.isfinite(wv), wv, 1.0), columns)
+
+    monkeypatch.setattr(model, "_assert_polr_fittable", without_O3)
+    with np.errstate(invalid="ignore"):
+        fit = model.polr(X, y, damaged)
+    assert len(fit.categories) == len(clean.categories) - 1
+    assert clean.categories == (0, 1, 2, 3) and fit.categories == (1, 2, 3)   # w[0] sits at y = 0
+    assert round(float(clean.beta[0]), 6) == 1.678900
+    assert round(float(fit.beta[0]), 6) == 0.194854
+    assert fit.converged_on == "likelihood"        # nothing looks wrong
+
+
+def test_O3_fires_on_a_NEGATIVE_weight_too():
+    X, y, w = nan_weight_frame()
+    w = w.copy()
+    w[0] = -0.5
+    with pytest.raises(model.FitError) as e:
+        model.polr(X, y, w)
+    assert "O3" in message_of(e) and "negative" in message_of(e)
+
+
+def test_O4_fires_on_a_non_integer_response():
+    with pytest.raises(model.FitError) as e:
+        model.polr(*noninteger_response_frame())
+    assert "O4" in message_of(e) and "non-integer" in message_of(e)
+
+
+def test_WITHOUT_O4_one_cutpoint_is_estimated_PER_DISTINCT_VALUE(monkeypatch):
+    """The generator is sized so the companion reaches a FIT: three distinct values over sixty
+    records, not the wider frame an earlier draft implied.
+
+    With O4 removed, six distinct half-integer values over 24 records makes the Hessian singular and
+    `np.linalg.solve` raises `LinAlgError` — which is not `FitError`, so the companion would assert
+    the wrong thing (measured).
+    """
+    monkeypatch.setattr(
+        model, "_assert_polr_fittable",
+        lambda Xn, y, w, columns: _real_assert(Xn, np.round(y * 2.0), w, columns))
+    X, y, w = noninteger_response_frame()
+    fit = model.polr(X, y, w)
+    assert len(fit.categories) == len(np.unique(y)) == 3
+    assert len(fit.alpha) == 2
+
+
+def test_O5_fires_on_a_response_with_ONE_weighted_category():
+    X = pd.DataFrame({config.TREATMENT: np.array([1., 0., 1., 0.])})
+    with pytest.raises(model.FitError) as e:
+        model.polr(X, np.array([2., 2., 2., 2.]), np.ones(4))
+    assert "O5" in message_of(e) and "1 response category" in message_of(e)
+
+
+def test_O6_fires_on_a_design_carrying_ITS_OWN_INTERCEPT():
+    """The asymmetry with `firth`, which PREPENDS one — the one place a reader will assume the two
+    functions agree. The cutpoints ARE the intercepts, so a design that carries one of its own is
+    over-parametrised.
+
+    **The witness is an intercept beside a COMPLETE set of arm dummies**, and that is a correction
+    found by running the check rather than by writing it: `matrix_rank` sees the DESIGN and not the
+    (alpha, beta) parameter vector, so it can only detect an intercept that is collinear with other
+    design columns. `[1, treated, control]` is rank 2 of 3 and fires; the companion below measures
+    what happens to `[1, treated]`, which does not.
+    """
+    y, a, w = hand_ordinal()
+    X = pd.DataFrame({"intercept": np.ones(len(y)), "treated": a, "control": 1.0 - a})
+    with pytest.raises(model.FitError) as e:
+        model.polr(X, y, w)
+    assert "O6" in message_of(e) and "rank 2 of 3" in message_of(e)
+    assert "opposite of the penalised logistic fit" in message_of(e)
+
+
+def test_what_O6_does_NOT_catch_and_what_it_costs_measured():
+    """An intercept beside ONE other column is full rank, so O6 passes and `polr` fits.
+
+    Recorded rather than repaired, because the measurement says what it costs and the answer is
+    "the cutpoints, not the estimate". The design `[1, a]` makes the intercept collinear with a
+    uniform SHIFT of all K cutpoints, which is a dependency in the (alpha, beta) parameter vector and
+    not in the design matrix — so `matrix_rank(Xn)` cannot see it. Measured: `np.linalg.solve` does
+    NOT raise on the resulting near-singular Hessian; the loop converges to an arbitrary point on the
+    ridge, the cutpoints come back shifted by the intercept coefficient, and **the treatment
+    coefficient is unchanged to every printed digit**.
+
+    So the failure is confined to parameters this pipeline does not report as effects, and the [§8]
+    path cannot reach it at all: `primary` builds its design through `model.design(sub, (TREATMENT,))`
+    and `_assert_exposure_survived` asserts the columns are exactly `(TREATMENT,)`, so an extra
+    intercept column raises G6 before `polr` is called. It is filed here so nobody reads O6's message
+    as a stronger guarantee than O6 gives.
+    """
+    y, a, w = hand_ordinal()
+    plain = model.polr(pd.DataFrame({config.TREATMENT: a}), y, w)
+    with_intercept = model.polr(
+        pd.DataFrame({"intercept": np.ones(len(y)), config.TREATMENT: a}), y, w)
+    assert float(with_intercept.beta[1]) == pytest.approx(float(plain.beta[0]), abs=1e-8)
+    shift = float(with_intercept.beta[0])
+    assert abs(shift) > 1e-3                                   # the ridge was travelled
+    assert np.allclose(with_intercept.alpha + shift, plain.alpha, atol=1e-8)
+
+
+def test_O6_does_NOT_fire_on_a_width_zero_design():
+    """Rank 0 of 0 is not rank-deficient — which is what makes `_assert_exposure_survived` necessary
+    on the caller's side rather than redundant.
+
+    A module that does not know what the exposure is cannot know that the missing column was the
+    estimand, so the check belongs where the specification does. `polr` on the width-0 design fits the
+    cutpoints alone, CONVERGES, and returns a beta of length zero.
+    """
+    y, a, w = hand_ordinal()
+    X = pd.DataFrame(index=range(len(y)))
+    fit = model.polr(X, y, w)                      # does not raise
+    assert fit.beta.shape == (0,)
+    assert len(fit.alpha) == 6 and fit.columns == ()
+
+
+def test_the_six_checks_raise_at_the_FIRST_failure_and_are_never_collected():
+    # Unlike D1-D4 and B1-B5: each one makes the next meaningless, and a rank computed over a design
+    # containing nan is not a rank. A frame failing O1 and O6 reports O1 only.
+    y, a, w = hand_ordinal()
+    X = pd.DataFrame({"intercept": np.ones(len(y)), config.TREATMENT: a})
+    X.loc[0, config.TREATMENT] = np.nan
+    with pytest.raises(model.FitError) as e:
+        model.polr(X, y, w)
+    assert "O1" in message_of(e)
+    assert "O6" not in message_of(e)
+
+
+@pytest.mark.parametrize("name", ["O1", "O2", "O3", "O4", "O5", "O6"])
+def test_no_polr_precondition_message_names_an_exposure_or_an_outcome(name):
+    # §14.13, parametrised over the six. `model.py` is outcome-agnostic and its raise strings are
+    # where that most easily stops being true.
+    ordinal_raises = [s for s in _raise_strings(SOURCE) if s.strip().startswith(name)]
+    assert ordinal_raises, f"{name} has no raise string to scan"
+    for text in ordinal_raises:
+        assert not [word for word in FORBIDDEN_IN_RAISES if word in text]

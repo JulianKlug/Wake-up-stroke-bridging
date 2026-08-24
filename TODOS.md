@@ -382,11 +382,22 @@ only at the workbook's.
 the estimator*, not to pinning it afterwards. Once the PI has seen the estimate and the analysis is
 locked, the numbers are legitimate pins and the objection has expired.
 
-**Depends on / blocked by.** Stage 8's T8, which computes the estimate for the first time, and then the
-PI. Do it as its own commit, touching `test_outcome.py` and the spec's §20, §14.12 and §15 together —
-and delete §15's first bullet in the same commit, since it describes a gap that will no longer exist.
+**Depends on / blocked by.** ~~Stage 8's T8, which computes the estimate for the first time~~ — **T8 has
+run, 2026-08-24**, and the estimate is in `out/logs/audit_v7_july26_with_abs_contra_indication.md`,
+which is gitignored and is the only place it exists. So the first half of this dependency is
+discharged and **the PI is now the whole of it.** Do it as its own commit, touching `test_outcome.py`
+and the spec's §20, §14.12 and §15 together — and delete §15's first bullet in the same commit, since
+it describes a gap that will no longer exist.
 
-**Status: blocked** until Stage 8 lands and the PI has read the estimate.
+**What T8 leaves for whoever picks this up.** §14.12's twelve property assertions are green on v7 and
+each of them can fail: the fit converged on the likelihood criterion in 3 iterations, all seven
+declared mRS levels are occupied so `fit.categories` is `MRS_LEVELS` and there are 6 cutpoints, `α` is
+strictly ascending, `|β|` is inside `POLR_MAX_ABS_BETA` so **G7 did not fire on the real data**,
+`odds_ratio` equals `exp(β)` to 1e-12, every `RD_k` is monotone in `k` within each arm, and the
+orientation agrees between the two scales through the weighted mean. What none of them does is pin a
+magnitude, which is exactly the hole this item closes.
+
+**Status: blocked on the PI**, and on nothing else.
 
 ---
 
@@ -396,24 +407,39 @@ and delete §15's first bullet in the same commit, since it describes a gap that
 `extended_bridging/specs/stage8_primary_outcome_estimator.md`, 2026-08-21 (§21.1 item 10; filed in
 §15 and handed to Stage 10 in §11 and in the roadmap's Stage 10 entry).
 
-**What.** Establish whether the empty band `(8.79, 18.81)` that `POLR_MAX_ABS_BETA = 14.0` sits inside
-still exists — and is still that band — when the fit has **five or four** cutpoints rather than six.
-Then either confirm the constant, or amend it with the measurement behind the change.
+**Amended 2026-08-24 — the synthetic half of this item is DONE and the answer is that the bound
+holds.** Stage 8 §6.3 re-measured across every cutpoint count a replicate can produce, 1800 fits each:
+the largest legitimate `|β|` reaches **11.04** rather than 8.79 and the smallest degenerate one falls
+to **18.98** rather than 18.81, so the safe interval is `(11.04, 18.98)` and 14.0 sits inside it with
+27% clearance below and 26% above. Every bound from 12 to 20 drops exactly the same replicates, so
+14.0 is a point on a plateau. **What this retired:** the claim that the region between the modes is
+*empty* — it is sparse, and legitimate fits do land in the old `(8.79, 18.81)` at odd cutpoint counts
+— and the value **10.0**, which is now positively excluded and which `test_config.py`'s
+`11.04 < POLR_MAX_ABS_BETA < 18.98` is written to reject. **What is left open is the rate**, below.
 
-**Why.** Every one of the 4800 fits behind that band is a **seven-category** frame (Stage 8 §6.3, §20).
-But Stage 8 §5.3 collapses the response to the levels carrying positive weight, so the number of
+**What.** Establish **how often [§10] actually meets each cutpoint count**, which decides whether the
+K-dependence above is theoretical on this cohort or is deciding which replicates get dropped. Then
+either close this item as theoretical, or amend `POLR_MAX_ABS_BETA` with the measurement behind the
+change.
+
+**Why.** Stage 8 §5.3 collapses the response to the levels carrying positive weight, so the number of
 cutpoints is a property of the *sample*, and [§10] draws 2000 samples. A replicate that happens to draw
-no death fits five cutpoints, and nothing establishes that a `|β|` of 12 on such a frame is degenerate
-rather than legitimate. `G7` is what turns a degenerate fit into a countable failure, so the bound
-partly decides **which replicates the percentile interval is computed from** — and a bound calibrated on
-frames unlike the ones being dropped is the kind of error that reads as rigour.
+no death fits five cutpoints — and the re-measurement above shows the legitimate maximum genuinely
+moves with the cutpoint count, from 8.82 at six to 11.04 at five. `G7` is what turns a degenerate fit
+into a countable failure, so the bound partly decides **which replicates the percentile interval is
+computed from**, and a bound calibrated on frames unlike the ones being dropped is the kind of error
+that reads as rigour.
 
-**Why it was not measured at Stage 8.** It needs a sampler that varies the occupied level set, which is
-a bootstrap, which is Stage 10. Stage 8 §11 therefore asks Stage 10 to report the **distribution of
-`len(fit.alpha)` across replicates** beside its two failure counters, so the question can be answered
-from replicates already drawn rather than by a second synthetic sweep. If that distribution turns out
-degenerate at six, this item closes as theoretical and should be closed explicitly rather than left
-open.
+**Why the rate cannot be measured at Stage 8.** The sweep above varies the occupied level set
+*synthetically*; how often **this cohort's own resamples** do it needs the replicate loop, which is
+Stage 10. **And T8 makes the question sharper rather than softer**: measured on v7, all seven declared
+mRS levels are occupied and the point fit has six cutpoints, so the collapse is inert on the full
+cohort and every replicate starts from a frame that has every level. Whether a 92-record stratified
+resample loses one is exactly what nobody knows. Stage 8 §11 therefore asks Stage 10 to report the
+**distribution of `len(fit.alpha)` across replicates** beside its two failure counters, so the question
+is answered from replicates already drawn rather than by a second synthetic sweep. If that
+distribution turns out degenerate at six, this item closes as theoretical and should be closed
+explicitly rather than left open.
 
 **Not the same as the Stage 12 gap.** Stage 8 §15 already files that the bound is calibrated on a
 one-column design while [§14a]'s standardisation model carries eight covariates. That one bites at

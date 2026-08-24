@@ -423,7 +423,7 @@ def test_the_r_package_versions_are_captured_and_non_empty(tmp_path):
 R_ONLY_NAMES = ("Rscript", "logistf", "PSweight")
 
 # Every committed script, so a fourth one joins both hygiene checks below by being declared here.
-R_SCRIPTS = ("firth_logistf.R", "ato_psweight.R", "balance_psweight.R")
+R_SCRIPTS = ("firth_logistf.R", "ato_psweight.R", "balance_psweight.R", "polr_clm.R")
 
 
 @pytest.mark.parametrize("name", R_ONLY_NAMES)
@@ -485,3 +485,164 @@ def test_the_scripts_name_no_covariate():
                         for line in (REFERENCE / script).read_text(encoding="utf-8").splitlines())
         words = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", code))
         assert words.isdisjoint(config.PS_COVARIATES), f"{script} names a covariate"
+
+
+# --- Stage 8 §18b — `ordinal::clm` with weights, the ONE independent check on the weighted fit --------
+#
+# Stage 8's estimator carries five oracles. Four of them check us against ourselves — integer weights
+# against row replication, `scipy` on our own objective, the analytic derivatives against central
+# differences — or against an unweighted special case, `statsmodels.OrderedModel`, which §2 measured
+# has no observation-weight support of any kind. **`clm` takes weights natively**, so it is the only
+# INDEPENDENT implementation of the quantity Stage 8 computes, and it is therefore the one that
+# matters most.
+#
+# It runs. An earlier draft of Stage 8 §18b recorded it as unrunnable on this machine, having measured
+# `Rscript --vanilla` FROM A BARE SHELL — where R genuinely segfaults during its own startup,
+# `system("uname -a")` returns status 139, `utils` and `stats` fail to load, and `requireNamespace`
+# then returns FALSE for packages that are present. All of that is real and reproducible, and it is
+# the PATH collision `_r_environment` above documents and repairs. The draft concluded that Stage 7's
+# repair "does not help", which is the opposite of what is measured: through `R_ENV` it helps
+# completely, and the fourteen R oracle tests of Stages 6 and 7 pass in this suite today. The evidence
+# was one `pytest -q` away.
+#
+# THE GATE IS ITS OWN, and not `reference_r`. Stage 8 needs `ordinal`; Stages 6 and 7 need `logistf`
+# and `PSweight`. Sharing one gate would skip this oracle on a machine that has `ordinal` and not
+# `PSweight`, and Stage 6 §16b.2's whole argument is that a silently-skipping oracle is worse than no
+# oracle.
+
+ORDINAL_PACKAGES = ("ordinal",)
+
+
+def _r_starts() -> bool:
+    """True if R's own startup completes — which is a DIFFERENT question from whether a package is
+    installed, and the skip reason below has to tell them apart.
+
+    A skip reason that misattributes the cause sends the next reader to install a package that is
+    already installed. The probe is `system()`, because that is what fails: R's startup runs
+    `system("uname -a", intern = TRUE)` through `sh`, and on a machine carrying a second toolchain
+    prefix those binaries can be linked against a different libc — measured status 139, a segfault
+    inside R's forked child, after which `utils` never loads and `requireNamespace` returns FALSE for
+    everything.
+    """
+    if RSCRIPT is None:
+        return False
+    try:
+        done = subprocess.run(
+            [RSCRIPT, "--vanilla", "-e", 'q(status = if (nzchar(R.version.string)) 0 else 1)'],
+            env=R_ENV, capture_output=True, timeout=180)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+reference_r_ordinal = pytest.mark.skipif(
+    RSCRIPT is None or not _r_has(ORDINAL_PACKAGES),
+    reason=(
+        "R oracle for Stage 8 §18b: needs Rscript and ordinal. "
+        + ("Rscript is not on PATH." if RSCRIPT is None else
+           ("`ordinal` did not load, and R itself started fine — install it into "
+            f"R_LIBS_USER={R_ENV.get('R_LIBS_USER', 'unset')} and it is found without editing this "
+            "file." if _r_starts() else
+            "AND R ITSELF DID NOT START — this is not a missing package. R's startup runs "
+            "system('uname -a') through sh; on a machine carrying a second toolchain prefix that "
+            "call segfaults (status 139), utils never loads, and requireNamespace then returns "
+            "FALSE for every package INCLUDING ones that are present. Do not install anything; see "
+            "_r_environment above, which puts /usr/bin:/bin first on PATH for exactly this."))))
+
+
+def _clm_weighted(y: np.ndarray, a: np.ndarray, w: np.ndarray, tmp_path: Path):
+    """(thresholds, coefficient, version) from `ordinal::clm(ordered(y) ~ a, weights = w)`."""
+    frame = pd.DataFrame({"y": y, "a": a, "w": w})
+    out = tmp_path / "clm.csv"
+    version = _run("polr_clm.R", _write(frame, tmp_path / "ordinal.csv"), out)
+    table = pd.read_csv(out)
+    thresholds = table.loc[table["kind"] == "threshold", "value"].to_numpy(dtype=float)
+    coefficient = float(table.loc[table["kind"] == "coefficient", "value"].iloc[0])
+    return thresholds, coefficient, version
+
+
+@reference_r_ordinal
+def test_clm_REPRODUCES_OUR_WEIGHTED_FIT_with_the_coefficient_NEGATED(tmp_path):
+    """Stage 8 §18b's fifth oracle, and the strongest one this stage has.
+
+    `clm` parametrises `logit P(Y <= k) = zeta_k - x'beta` where Stage 8 §5.1 uses [§14a]'s own
+    `alpha_k + x'beta`, so **the coefficient comes back negated and the thresholds do not**. Both
+    halves are asserted by name: a test asserting only that the two fits "agree" would pass on a
+    comparison of the thresholds alone, which is exactly how the sign mistake survives a review — a
+    reader sees six cutpoints agreeing to nine decimals and concludes the implementations agree.
+
+    The third assertion is what makes the first two able to fail: `|ours - clm|` is asserted LARGE, so
+    a frame on which both coefficients happened to be near zero cannot pass the sum test by having
+    nothing to negate.
+
+    Measured on `hand_ordinal()`: `|ours + clm|` 4.773e-12, `|ours - clm|` 1.739, and the thresholds
+    matching to 7.177e-10 unnegated. This is the WEIGHTED fit validated against an independent
+    implementation, which is the thing §18b says only this oracle can do.
+    """
+    from test_model import hand_ordinal
+    y, a, w = hand_ordinal()
+    thresholds, coefficient, version = _clm_weighted(y, a, w, tmp_path)
+    assert version.strip(), "the R package version must be captured, not assumed"
+
+    ours = model.polr(pd.DataFrame({config.TREATMENT: a}), y, w)
+    assert len(thresholds) == len(ours.alpha) == 6
+
+    assert abs(float(ours.beta[0]) + coefficient) < 1e-9        # NEGATED — measured 4.773e-12
+    assert float(np.max(np.abs(ours.alpha - thresholds))) < 1e-8   # and NOT — measured 7.177e-10
+    assert abs(float(ours.beta[0]) - coefficient) > 1e-2        # something to negate — measured 1.74
+
+
+@reference_r_ordinal
+def test_clm_agrees_on_a_SECOND_weighted_frame_so_the_agreement_is_not_one_fixtures(tmp_path):
+    # `hand_ordinal()` has integer weights by construction (§14.3's replication oracle needs them).
+    # This one has fractional weights, which is what the [§8] path actually passes — overlap weights
+    # are strictly interior — so the oracle covers the weighting regime the stage uses.
+    from test_model import replication_frame
+    X, y, w = replication_frame(n=200, levels=4)
+    a = X["x1"].to_numpy(dtype=float)
+    fractional = w / 7.0
+    thresholds, coefficient, _ = _clm_weighted(y, a, fractional, tmp_path)
+    ours = model.polr(pd.DataFrame({"a": a}), y, fractional)
+    assert abs(float(ours.beta[0]) + coefficient) < 1e-8
+    assert float(np.max(np.abs(ours.alpha - thresholds))) < 1e-7
+    assert abs(float(ours.beta[0])) > 1e-2
+
+
+@reference_r_ordinal
+def test_the_ordinal_gate_is_measured_OPEN_rather_than_assumed_open(monkeypatch):
+    """Stage 6 §16b's closing assertion, for this stage's own package.
+
+    The parent shell's `R_LIBS_USER` is removed, `_r_environment` is rebuilt, and `_r_has` is asked
+    whether `ordinal` loads under it. A gate that can only be opened by the caller exporting a
+    variable is a gate that is shut by default, on the machine where the package is installed — which
+    is the state this oracle was recorded as being permanently in.
+    """
+    monkeypatch.delenv("R_LIBS_USER", raising=False)
+    environment = _r_environment()
+    probe = ";".join(f'if(!requireNamespace("{p}",quietly=TRUE)) quit(status=1)'
+                     for p in ORDINAL_PACKAGES)
+    done = subprocess.run([RSCRIPT, "--vanilla", "-e", probe], env=environment,
+                          capture_output=True, timeout=180)
+    assert done.returncode == 0, done.stderr.decode()
+
+
+@reference_r_ordinal
+def test_R_ITSELF_STARTS_under_R_ENV_which_is_the_claim_an_earlier_draft_got_backwards():
+    # Recorded as a test rather than as a comment, because the failure it rules out is the one that
+    # made a working oracle look unavailable for three days. From a BARE shell R does segfault here;
+    # through `_r_environment` it does not.
+    assert _r_starts()
+
+
+def test_the_skip_reason_DISTINGUISHES_a_missing_package_from_an_R_THAT_DOES_NOT_START():
+    """Stage 6 §16b.2's rule: a silently-skipping oracle is worse than no oracle, and a skip reason
+    that misattributes the cause is a silently-skipping oracle with a misleading label.
+
+    Asserted unconditionally — it is a property of the reason string, not of this machine.
+    """
+    reason = reference_r_ordinal.kwargs["reason"]
+    assert "ordinal" in reason
+    if RSCRIPT is not None and not _r_has(ORDINAL_PACKAGES) and not _r_starts():
+        assert "R ITSELF DID NOT START" in reason
+        assert "Do not install anything" in reason
+    assert "Stage 8" in reason

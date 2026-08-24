@@ -311,6 +311,43 @@ FIRTH_ETA_CLIP: Final[float] = 500.0      # keeps exp() in range; reachable at t
 FIRTH_WEIGHT_FLOOR: Final[float] = 1e-10  # floors p(1-p) so the information matrix stays invertible
 
 
+# --- the weighted proportional-odds fit [§8, Stage 8 §5] ---------------------------------------
+#
+# Prespecified for FIRTH_*'s reason: [§10] refits this model in every one of N_BOOT replicates, so a
+# tolerance is a property of the sampling distribution and not a runtime knob, and the ORDER the two
+# convergence tests run in is prespecified for the same reason [Stage 8 §5.2].
+#
+# POLR_MAX_ABS_BETA is not a tolerance and is the one constant here that changes an ANSWER: a fit
+# reaching it raises, and [§10] drops and counts the replicate. Separation in this estimator does not
+# present as non-convergence — measured, it converges in 17 iterations on the score criterion with
+# every safeguard counter at zero and returns exp(beta) = 6.5e15 — so this bound is the only thing
+# that turns a degenerate fit into a countable failure [Stage 8 §6].
+#
+# Its value is chosen from a MEASURED SPARSE REGION and not from any estimate. Over 4800 fits of a
+# 92-record seven-category frame at twelve true effect sizes from 0 to 6, the largest non-degenerate
+# |beta| was 8.7873 and the smallest degenerate one 18.8055. Re-measured across every cutpoint count a
+# [§10] replicate can produce — 2 to 6 cutpoints, 1800 fits each — the legitimate maximum reaches
+# 11.04 and the degenerate minimum falls to 18.98, so the safe interval is (11.04, 18.98) and the
+# region between the modes is SPARSE rather than empty. 14.0 sits inside it with 27% clearance below
+# and 26% above, and every bound from 12 to 20 drops exactly the same replicates — so 14.0 is a point
+# on a plateau and not a tuned value. exp(14) = 1.2e6, five orders of magnitude above any reportable
+# stroke odds ratio, so a rejected fit is one whose point estimate no manuscript could print. An
+# earlier draft used 10.0, calibrated on 500 fits at a single true effect of 0.5; it is now positively
+# excluded, because it rejects the legitimate fits at 10.01 to 11.04 that appear at odd cutpoint
+# counts [Stage 8 §6.3, §20].
+#
+# The prefix is POLR_ and not OUTCOME_ because model.py reads them and model.py does not know what the
+# outcome is [Stage 6 §0.1, Stage 8 §14.13].
+
+POLR_MAX_ITER: Final[int] = 200          # measured: 4 to 5 on every frame in Stage 8 §20
+POLR_TOL: Final[float] = 1e-8            # |Δ weighted log-likelihood|
+POLR_SCORE_TOL: Final[float] = 1e-6      # max |score|; the route a SEPARATED fit returns on
+POLR_MAX_HALVINGS: Final[int] = 30       # exhausting them raises; not a convergence route
+POLR_MAX_STEP: Final[float] = 5.0        # trust radius, RELATIVE to ‖par‖ [Stage 6 §5.2a]
+POLR_ETA_CLIP: Final[float] = 500.0      # keeps exp() in range; measured never approached
+POLR_MAX_ABS_BETA: Final[float] = 14.0   # the separation guard [Stage 8 §6.3]
+
+
 # --- treatment and centres -----------------------------------------------------------------
 
 TREATMENT: Final[str] = "ivt"                       # 1 = IVT before EVT (bridging), 0 = EVT alone
@@ -431,6 +468,17 @@ OUTCOMES: Final[dict[str, Outcome]] = {
 DERIVED_DICHOTOMIES: Final[tuple[str, ...]] = tuple(
     key for key, o in OUTCOMES.items() if o.source is not None)
 
+# The [§5] primary outcome, computed from the registry rather than named a second time. OUTCOMES'
+# own comment states that exactly one entry is primary because [§8] rests on there being one primary
+# quantity with one test; this is that sentence made readable by code, so that outcome.py cannot
+# write the key as a literal and cannot drift from the registry. Declared immediately after
+# DERIVED_DICHOTOMIES, which is the first point at which OUTCOMES exists.
+#
+# `next` over a generator takes the FIRST primary entry, so it would be silent about a second one.
+# test_config.py asserts there is exactly one, which is the assertion that notices [Stage 8 §12, T1].
+PRIMARY_OUTCOME: Final[str] = next(
+    key for key, o in OUTCOMES.items() if o.family == "primary")
+
 
 # --- outcome-model overrides [§8 amendment, DECISION 3] --------------------------------------
 
@@ -549,6 +597,17 @@ SEX_LABELS: dict[int, str] | None = None
 
 
 # --- subgroups [§13] ----------------------------------------------------------------------------
+
+# The declared mRS level set, computed from the plausible range that already declares it, so the
+# level set and the range cannot disagree. MRS_THRESHOLDS below is the K = J - 1 cutpoints and
+# test_config.py asserts MRS_LEVELS[:-1] == MRS_THRESHOLDS: RD_k stops at 5 because P(Y <= 6) is 1 in
+# both arms by definition [Stage 8 §8.3], and a seventh threshold would be a structural zero.
+#
+# MRS_THRESHOLDS sits in this [§13] subgroups block, which is where it was declared and is not where
+# it belongs. It is deliberately NOT moved: six test modules import it, and the assertion above makes
+# the misfiling harmless [Stage 8 §12, §17].
+MRS_LEVELS: Final[tuple[int, ...]] = tuple(
+    range(PLAUSIBLE_RANGES["mrs_90d"][0], PLAUSIBLE_RANGES["mrs_90d"][1] + 1))
 
 MRS_THRESHOLDS: Final[tuple[int, ...]] = (0, 1, 2, 3, 4, 5)      # cumulative RD_k [§8]
 
