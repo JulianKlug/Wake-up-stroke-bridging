@@ -251,6 +251,15 @@ Overlap is reported **within each centre as well as pooled**: a pooled distribut
 acceptable while treatment is nearly determined by centre. Centres with structural non-positivity are
 reported as such, not given an overlap plot.
 
+**Amendment, 2026-08-24 — where the threshold is exceeded after weighting, the exceedance is named
+with its magnitude beside the primary estimate, not only tabulated.** A balance table in a supplement
+satisfies §16's "state realised balance" while leaving a reader free to adopt the odds ratio without
+meeting the number. On this cohort the exceedance is material and its cause is structural — treatment
+is nearly determined by centre, §7's Firth penalty is what that near-separation requires, and the
+penalty is why the exact balance property of overlap weights does not hold — so the reader needs it at
+the point of reading the estimate. §13's full-covariate sensitivity analysis is promoted in the same
+amendment and is what sizes it; `../out/stage0_data_inventory.md` carries DECISION 4.
+
 ## 10. Inference
 
 Nonparametric bootstrap, 2000 replicates, stratified by centre, refitting the propensity model in
@@ -319,10 +328,42 @@ onset is unwitnessed or on waking in 93 of the 126 records against 33 witnessed,
 split is balanced by construction. `penumbra_ml` keeps its §6 exclusion and its balance-table role,
 both of which stand independently of this subgroup.
 
-**Sensitivity analyses** on the primary outcome (Leave out for now), each reporting ESS and worst residual |SMD|:
+**Sensitivity analyses** on the primary outcome, each reporting ESS and worst residual |SMD|:
 full-covariate propensity model (adding the four vascular risk factors); propensity model without
 centre; unadjusted; largest centre alone; pre-stroke mRS ≤ 2; model-assisted augmented cumulative mRS
 risk differences (with a monotonicity check).
+
+**Amendment, 2026-08-24 — the full-covariate propensity model is promoted from deferred to
+prespecified; the other five stay deferred.** The original text parked the whole suite. §9's threshold
+is exceeded after weighting by `center = HUG` (0.211) and `center = Lugano` (−0.154), both of which are
+*in* the propensity model, and by three of the four vascular risk factors held out as negative
+controls (`diabetes` 0.380, `hyperlipidemia` −0.301, `hypertension` −0.139), two of them worse after
+weighting than before. Every other §6 covariate balances to 0.04 or better.
+
+The cause is one thing seen twice. Treatment is nearly determined by centre — 30 of 41 bridged at HUG
+against 2 of 31 at Lugano, with propensity ranges that barely touch — which is why §7 prescribes a
+Firth-penalised propensity model; and Firth is why centre remains imbalanced, because overlap weights
+balance every in-model covariate *exactly* only when the model is fitted by maximum likelihood, whose
+score equations are the weighted balance conditions. Firth solves those equations plus a penalty, and
+the deviation is largest exactly where the design is closest to separated. This is a trade-off this
+plan already made, not a defect, and it is not grounds to substitute an estimator: no estimate here is
+conditioned on a balance diagnostic.
+
+The full-covariate arm is promoted because it is the one that addresses the finding — it adjusts for
+the covariates whose residual imbalance raised it — and because it converts a caveat into a number
+that can be compared against the primary estimate. **Its cost is that it spends the negative
+controls**: once the four risk factors enter the propensity model they cannot be controls in that arm,
+leaving `penumbra_ml` as the only balance-table covariate outside every model. That is accepted
+because the controls have already served their purpose.
+
+**The without-centre arm stays deferred deliberately.** Removing centre would balance the clinical
+covariates nearly exactly while abandoning adjustment for the variable that most nearly determines
+treatment, so it is very likely a *more* confounded estimand; agreement between it and the primary
+must not be read as reassurance.
+
+**The primary estimate and the §7 specification are unchanged.** Established before any sensitivity
+estimate existed and before the §10 interval existed, as DECISION 1a and the subgroup withdrawal above
+were. `../out/stage0_data_inventory.md` carries DECISION 4.
 
 ## 14. Secondary analyses
 
@@ -414,8 +455,37 @@ centres that never used IVT is the declared purpose and is labelled as such.
 
 STROBE with the RECORD extension. State explicitly: the target trial protocol (§2); cohort flow with
 both design restrictions (§3); the estimand and who the ATO population comprises (§7); realised
-balance and within-centre overlap (§9); that inference is conditional on these centres (§10); the
-absent confounders with an E-value (§6); and the entry-conditioning selection effect (§2).
+balance and within-centre overlap (§9), **naming any covariate whose |SMD| exceeds the §9 threshold
+after weighting, with its magnitude, beside the primary estimate** (§9 amendment, 2026-08-24); that
+inference is conditional on these centres (§10); the absent confounders with an E-value (§6); and the
+entry-conditioning selection effect (§2).
 
 Wherever a §14 estimate appears beside the primary, state that they target different populations and
 are not a like-for-like comparison, and label the §14 estimates as model-based transported results.
+
+**Amendment, 2026-08-24 — two further statements are required of the primary report.** Both are
+wording; no estimator, population or estimand changes, and §8's primary quantity, its single test and
+its six cumulative risk differences are untouched.
+
+**(a) The common odds ratio rests on a constant-shift assumption, and that is stated.** §8's primary
+measure assumes treatment shifts the outcome distribution by the same amount at every cut. §8
+prescribes no test of it and §15 declines one, because a test of proportional odds would be a second
+estimator on the primary outcome. The mitigation §8 prescribes instead is the six threshold
+differences — and that mitigation only works if the reader is told what they are for. So: **state that
+the common odds ratio rests on a constant-shift assumption which is not tested, and, where the six
+threshold differences do not all point in the same direction, state that as well.** A single odds
+ratio near the null, summarising threshold differences that disagree in direction, is not a null
+result, and reporting it as though it were is the specific misreading this requires to be prevented.
+
+**(b) Raw pooled event rates by arm are descriptive and are not unadjusted estimates.** Any table
+carrying them says so. Where treatment is nearly determined by centre (§9 amendment) and centre is
+associated with outcome, a pooled unweighted comparison can differ from the within-centre comparison
+in **direction** and not only in magnitude, so a crude column read as an unadjusted estimate can carry
+the wrong sign. STROBE and RECORD both call for a table of crude counts; this governs how it is
+labelled, not whether it appears.
+
+Both are written as rules rather than as findings, deliberately: this file is version-controlled and
+§15 requires that no number on the primary effect be pinned before the analysis is locked. The
+measurements that prompted them are in `../out/stage0_data_inventory.md`, which carries DECISION 5.
+Established before the §10 interval existed, so that the choice to caveat is not a function of
+whether the result reached significance.

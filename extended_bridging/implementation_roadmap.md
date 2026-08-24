@@ -480,8 +480,36 @@ can return an estimate from a fallback estimator. And:
   spans the null** — feeding a null-crossing limit into the formula measures how far past the null the
   interval reaches and returns a large number that reads as robustness while meaning the opposite.
 
-**Deferred.** The sensitivity-analysis suite in [§13] is out of scope for now by decision. Leave the
-hook but do not build the specifications.
+- **The full-covariate propensity sensitivity analysis** [§13, DECISION 4]. Refit the [§7] propensity
+  model over `config.PS_COVARIATES_FULL` — the [§6] set plus the four vascular risk factors — re-derive
+  the overlap weights, and re-run the [§8] primary estimator on them. Report the common odds ratio and
+  the six `RD_k` beside the primary ones, **with ESS and worst residual |SMD|** as [§13] requires, which
+  is the axis that prompted the arm.
+  - **It reuses every landed stage and adds no estimator.** `propensity.fit` takes no covariate list —
+    Stage 6 §6.4 made that a prespecified choice rather than an option — so this arm needs a seam for
+    the covariate set, and that seam is the one design decision here. `outcome.primary` then runs
+    unchanged on the resulting `Propensity`, because it reads `e`, `w` and `in_model` and nothing else.
+  - **It spends the negative controls, by construction and not by accident.**
+    `config.NEGATIVE_CONTROLS` is computed as `PS_COVARIATES_FULL` minus `PS_COVARIATES`, so the four
+    covariates this arm adjusts for are exactly the four that stop being controls in it. Say so where
+    the arm's balance table is rendered; `penumbra_ml` is the only balance-table covariate left outside
+    every model.
+  - **Its own balance table has the same 19 rows with four of them re-roled**, which is what Stage 7
+    §4.1's role column exists for.
+
+**Accept when.** The arm's `in_model` population, ESS and worst residual |SMD| are reported beside the
+primary's, and the two estimates appear together with the statement that they differ in the propensity
+specification and in nothing else. **Balance is still judged against the full [§6] confounder set**
+[§9], so the arm's table is comparable with the primary's row for row.
+
+**Still deferred.** The other **five** [§13] sensitivity rows — propensity model without centre;
+unadjusted; largest centre alone; pre-stroke mRS ≤ 2; model-assisted augmented cumulative mRS risk
+differences. Leave the hook but do not build the specifications. **The without-centre row is deferred
+deliberately rather than by omission** (DECISION 4): dropping centre removes the near-separation at its
+source and would balance the clinical covariates nearly exactly, while abandoning adjustment for the
+variable that most nearly determines treatment — 30 of 41 bridged at HUG against 2 of 31 at Lugano — so
+it is very likely a *more* confounded estimand and agreement with the primary must not be read as
+reassurance.
 
 ## Stage 12 — All-centre standardisation [§14a]
 
@@ -530,6 +558,22 @@ seed, replicate count, and bootstrap failure counts.
 - Safety outcomes are labelled descriptive.
 - Every estimate carries its own denominator [§11].
 - The manuscript checklist from [§16] is emitted as a file, not left implicit.
+- **Any output carrying `exp(β)` carries the constant-shift statement** [§16 amendment, DECISION 5].
+  The primary measure is a *common* odds ratio; the assertion is that the assumption is untested, and
+  — computed from `Primary.rd`, not asserted by hand — that the six `RD_k` do not all share a sign
+  where that is true of the run. Deriving it from the result object is what stops the statement and
+  the table disagreeing after an edit.
+- **Any table of raw event rates by arm is labelled descriptive and not an unadjusted estimate**
+  [§16 amendment, DECISION 5]. Treatment is nearly determined by centre in this cohort, so a pooled
+  crude comparison can differ from the within-centre one in **direction**; a reader taking the crude
+  column as an unadjusted estimate can get the sign backwards. The table still appears — STROBE and
+  RECORD require it — and the guardrail is on its label.
+
+**Accept when.** Both statements are emitted from the result objects rather than written into a
+template, and a test constructs a run in which the `RD_k` **do** all share a sign and asserts the
+one-directional clause is absent — so the sentence is known to track the data rather than being
+printed unconditionally.
+
 ---
 
 ## Invariants worth asserting in the test suite
