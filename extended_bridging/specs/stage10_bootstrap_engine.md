@@ -74,18 +74,20 @@ symptom is present, in the direction predicted, and §7.5 says what it does and 
   +------------------------------------------------------------------------------------+
   |  bootstrap.run(cohort, ps, est, sec, audit)                                        |
   |                                                                                    |
-  |    _assert_run_inputs(cohort, ps, est, sec)      R1-R7, collected         (§4.4)   |
+  |    _assert_run_inputs(cohort, ps, est, sec)      R1-R8, collected         (§4.4)   |
   |    paths = {k: e.augmented_path for k, e in sec.estimates.items()}        (§6.3)   |
   |                                    READ off the point estimate, never re-derived   |
   |                                                                                    |
-  |    for b in range(N_BOOT):              rng = default_rng(SEED), ONE stream (§4.3) |
+  |    replicates(cohort, body, N_BOOT, SEED, BOOT_STRATUM)                  (§3.2)   |
+  |      owns the loop -- ONE default_rng(SEED), consumed in order           (§4.3)   |
   |        draw = resample(cohort, rng, BOOT_STRATUM)   renames each row      (§5.3)   |
-  |        _replicate(draw, paths, source)          the body, below          (§6.1)    |
+  |        body(draw) = _replicate(draw, paths, source)  -> Replicate        (§6.1)    |
   |          ├─ propensity.fit(draw, throwaway Audit)                        (§6.2)   |
+  |          │    a FitError here fails the WHOLE replicate                  (§7.1)   |
   |          ├─ outcome.primary(...)      -> beta, six RD_k, len(alpha)      (§6.1)   |
   |          └─ per outcome, in BINARY_OUTCOMES order:                       (§6.4)   |
-  |                 rd, odds_ratio, augmented, max_abs_beta                           |
-  |                 each independently droppable                            (§7.3)   |
+  |                 rd, odds_ratio, augmented, max_abs_beta, or_corrected             |
+  |                 the outcome's three estimands are ONE group             (§7.3)   |
   |                                                                                    |
   |    per estimand:  draws -> percentile_ci(...)                            (§8)     |
   |                          -> bootstrap_p(...)  where [§10] prescribes one (§9)     |
@@ -150,15 +152,15 @@ definition, and the argument is identical.
 
 | Path | Contents |
 |---|---|
-| `extended_bridging/bootstrap.py` | **new.** `Draws`, `Interval`, `Diagnostics`, `Bootstrap`; `resample`, `replicates`, `percentile_ci`, `bootstrap_p`, `run`; and **the privates §3.2 lists and counts** — the count is stated there and nowhere else |
+| `extended_bridging/bootstrap.py` | **new.** `Replicate`, `Draws`, `Interval`, `Diagnostics`, `Bootstrap`; `resample`, `replicates`, `percentile_ci`, `bootstrap_p`, `run`; and **the privates §3.2 lists and counts** — the count is stated there and nowhere else |
 | `extended_bridging/config.py` | **amended.** `CI_LEVEL`, `BOOT_STRATUM`, `PERCENTILE_METHOD`, `FAILURE_BUCKETS`, and `ci_min_draws()`; each with its comment block, which is shipping text and not commentary (§13) |
 | `extended_bridging/outcome.py` | **amended, and these are the two Stage 9 changes this stage's requirement licenses.** S8 becomes `FitError` (§5.4); `secondary` gains `collect` so a per-outcome failure is captured rather than raised past the other six (§7.3). No other function changes |
 | `extended_bridging/tests/fixtures_stage10.py` | **new.** §15.0's constructions as code — **six functions and five constants**, enumerated in §13 and counted there and nowhere else, for §3.2's reason |
 | `extended_bridging/tests/test_bootstrap.py` | **new.** The §15 sections, banner-commented `# --- 15.x` |
 | `extended_bridging/tests/test_outcome.py` | **amended.** S8's reclassification and `collect`'s branches (§15.5, §15.7) |
 | `extended_bridging/tests/test_config.py` | **amended.** Six assertions (§13) |
-| `extended_bridging/implementation_roadmap.md` | **amended.** Stage 10 gains its `**Spec:**` line, five corrections and two additions (§22) |
-| `TODOS.md` | **amended.** Two items close, three are answered and rewritten, two are new (§16) |
+| `extended_bridging/implementation_roadmap.md` | **amended.** Stage 10 gains its `**Spec:**` line, six corrections and two additions (§22) |
+| `TODOS.md` | **amended.** Two items close, three are answered and rewritten, **eight** are new (§16) |
 
 `out/logs/audit_<label>.md` is an **output, not a deliverable**, and for this stage it is the *only*
 place any interval exists (§4.5). It is gitignored.
@@ -200,8 +202,12 @@ takes 18.12 ms to 4.50 ms. Stage 9 §2 estimated this at "roughly 22 s"; measure
 **27.2 s**. §6.4 states the condition under which the four designs are equal, which Stage 9 asserted
 without one, and §15.9 asserts it rather than assuming it.
 
-**Total, serial, single-threaded: about 145 s** for the whole engine with §6.4's optimisation in place.
-That is small enough that §18's refusal to parallelise costs nothing worth having.
+**Total, serial, single-threaded: of the order of 130 to 145 s** for the whole engine with §6.4's
+optimisation in place — the component medians above give 79.6 ms per replicate, or 159.2 s, less the
+27.2 s the shared design saves. The one end-to-end figure actually measured is §21's **236.8 s for
+2000 replicates running BOTH secondary routes**, which is what the probe round timed; the single-route
+total is stated as a range rather than a pin because no run produced it directly. Either way it is
+small enough that §18's refusal to parallelise costs nothing worth having.
 
 ---
 
@@ -210,6 +216,39 @@ That is small enough that §18's refusal to parallelise costs nothing worth havi
 ### 3.1 What the stage returns
 
 ```python
+@dataclass(frozen=True)
+class Replicate:
+    """What ONE replicate produced: every estimand it reached, and every one it lost.
+
+    **`values` and `failures` PARTITION the attempted keys** — a key is in exactly one of them,
+    never both and never neither. That partition is the whole of §15.4's reconciliation property:
+    `_collect` sums over replicates key by key, and if a replicate can lose a key silently the
+    three numbers in `Draws` stop adding up. A dict-of-value plus a dict-of-bucket makes the
+    partition a property of the type rather than of the loop that fills it.
+
+    It is declared here and not left to the implementation because `_collect` and `_diagnostics`
+    both destructure it, and every other structure this stage carries is a documented frozen
+    dataclass. This one carries every number the stage reports.
+
+    The five diagnostic fields are `None` when the replicate died before `outcome.primary` ran —
+    which is exactly the propensity-fit failure §7.1 describes — so a `None` is "we never got
+    there" and is dropped from the distribution rather than counted as a zero.
+
+    `max_abs_beta` holds entries only for outcomes with an `m_a(X)`, so `sich` and `ph2` are
+    ABSENT rather than present with a nan (§10.2). `or_corrected` is keyed by all seven, because
+    the correction is a property of the odds ratio and every outcome has one (§9.2).
+    """
+
+    values:          dict[str, float]   # estimand key -> the draw            — §3.3's keys
+    failures:        dict[str, str]     # estimand key -> C.FAILURE_BUCKETS value — §7.2
+    n_alpha:         int | None         # len(fit.alpha)                      — §7.4
+    polr_iterations: int | None         # the primary fit's iteration count   — §7.5
+    sum_w:           float | None       # Σw over in_model                    — §7.5
+    n_in_model:      int | None         # |in_model|                          — §7.5
+    max_abs_beta:    dict[str, float]   # outcome -> max|beta| of m_a(X); AUGMENTED ONLY — §10.2
+    or_corrected:    dict[str, bool]    # outcome -> §6.3's correction fired  — §9.2
+
+
 @dataclass(frozen=True)
 class Draws:
     """One estimand's replicate draws, and the counters that explain its denominator.
@@ -229,11 +268,18 @@ class Draws:
     assertion and not a comment** (§15.4). A replicate is either a draw or exactly one counted
     failure; an implementation that drops silently anywhere makes the three numbers stop reconciling,
     which is the one property of this dataclass that no wrong implementation satisfies by accident.
+
+    **`n_attempted` is `C.N_BOOT` for every key this stage produces**, and §7.1 is why: a
+    `propensity.fit` failure fails the whole replicate and is counted against EVERY estimand rather
+    than making those replicates disappear from every denominator uncounted. The field is kept
+    rather than derived because `replicates` is general (§12.2) and Stage 12's bodies may attempt
+    an estimand selectively; on [§10]'s body the equality `n_attempted == C.N_BOOT` is itself an
+    assertion (§15.4) and not a definition.
     """
 
-    quantity: str                  # "beta", "rd_2", "sich.rd", ... — the estimand's key
+    quantity: str                  # "beta", "rd_2", "sich.rd", ... — §3.3 enumerates all 26
     draws: np.ndarray              # (n,) float64, finite, in replicate order — §7.1
-    n_attempted: int               # replicates in which this estimand was ATTEMPTED — §7.3
+    n_attempted: int               # replicates in which this estimand was ATTEMPTED — §7.1, §7.3
     failures: dict[str, int]       # bucket -> count; sums with len(draws) to n_attempted — §7.2
 
 
@@ -273,6 +319,17 @@ class Diagnostics:
     not measured there, that nothing was expected to move, and that the visible symptom if it did
     would be `polr`'s iteration count dropping. Both are measured in §7.5 and both moved, so the
     pair is reported rather than the reassurance.
+
+    **`or_corrected` is a FIELD and not only a rendered cell**, and §9.2 is the reason: Stage 9 §6.3
+    requires the correction named *"wherever the estimate appears"*, §12.3 establishes that a
+    bootstrap interval is somewhere it appears, and the only interface that satisfies that rule is a
+    typed one. Every other number Stage 14 needs travels as a field; routing this one through
+    `data._md_table` would make Stage 14 parse a markdown cell it printed itself. It is still
+    rendered in the grid (§10.1) — the field is what Stage 14 reads.
+
+    Every distribution here is over the replicates that REACHED it. `n_alpha`, `polr_iterations`,
+    `sum_w` and `n_in_model` therefore sum to the live-replicate count and not to `C.N_BOOT`; the
+    replicates §7.1 kills before `outcome.primary` contribute a `None` and are dropped (§15.15).
     """
 
     n_alpha: dict[int, int]               # cutpoint count -> replicates — §7.4
@@ -280,6 +337,8 @@ class Diagnostics:
     sum_w: np.ndarray                     # (n,) Sw over in_model per replicate — §7.5
     max_abs_beta: dict[str, np.ndarray]   # outcome -> max|beta| of m_a(X); AUGMENTED ONLY — §10.2
     n_in_model: dict[int, int]            # in_model size -> replicates — §7.5
+    or_corrected: dict[str, int]          # outcome -> replicates the correction fired in — §9.2
+                                          #   denominator is that outcome's Draws.n_attempted
 
 
 @dataclass(frozen=True)
@@ -308,7 +367,7 @@ class Bootstrap:
 def resample(df: pd.DataFrame, rng: np.random.Generator, stratum: str) -> pd.DataFrame: ...
 def replicates(df: pd.DataFrame, body: Callable[[pd.DataFrame], object],
                n: int, seed: int, stratum: str) -> tuple[object, ...]: ...
-def percentile_ci(draws: np.ndarray, level: float) -> tuple[float, float]: ...
+def percentile_ci(draws: np.ndarray, level: float = C.CI_LEVEL) -> tuple[float, float]: ...
 def bootstrap_p(draws: np.ndarray) -> float: ...
 def run(df: pd.DataFrame, ps: propensity.Propensity, est: outcome.Primary,
         sec: outcome.Secondary, audit: Audit) -> Bootstrap: ...
@@ -319,13 +378,57 @@ stratum column, `replicates` takes a callable, `percentile_ci` and `bootstrap_p`
 §0.1's argument as a signature — Stages 12 and 13 call these four and supply their own body (§12.2).
 `run` is the [§10] instantiation and is the only one of the five that names an estimator.
 
-Privates in `bootstrap.py` are `_assert_run_inputs`, `_replicate`, `_bucket`, `_collect`,
-`_estimand_keys`, `_shared_design`, `_counters_table`, `_diagnostics_table`, `_replicates_detail`,
-`_record_replicates` — **ten**, against the fourteen Stage 9 added. **This count is stated once, here,
-and §1 and §13 cite this sentence rather than repeating the number**, because Stage 9 §22.3 item 5
-records three drafts carrying three different counts of its own.
+**And `run` CALLS `replicates` rather than writing the loop again** (§11). A general function whose
+only in-repository caller declines to use it is a function nothing exercises: the loop would exist
+twice, a seeding fix would land in one copy, and Stages 12 and 13 would inherit the copy [§10] never
+ran. `replicates` owns the `Generator`, the `resample` call and the ordering; `run` owns nothing about
+looping. This is §0.1's generality claim discharged rather than asserted.
 
-### 3.3 The numerical facts this stage turns on
+Privates in `bootstrap.py` are `_assert_run_inputs`, `_replicate`, `_bucket`, `_collect`,
+`_diagnostics`, `_tested`, `_estimand_keys`, `_shared_design`, `_counters_table`,
+`_diagnostics_table`, `_replicates_detail`, `_record_replicates` — **twelve**, against the fourteen
+Stage 9 added. **This count is stated once, here, and §1 and §13 cite this sentence rather than
+repeating the number**, because Stage 9 §22.3 item 5 records three drafts carrying three different
+counts of its own. An earlier draft of this document said ten, listing three table-builders and
+omitting `_diagnostics` and `_tested`, both of which its own §11 fence calls — which is the failure
+this sentence exists to prevent, found by reading the fence against the list.
+
+### 3.3 The estimand keys, and there are twenty-six
+
+Every `Draws`, every `Interval` and every `_tested` decision is keyed by one of these. **The set is
+enumerated here and nowhere else**, for §3.2's reason: §15.8 asserts *"all six `RD_k` keys"* and
+§9.2 asserts *"no key pairs a p-value with an `odds_ratio` or an `augmented`"*, and neither test is
+writable against three examples.
+
+```
+  key                        n    derived from                              tested?
+  -------------------------------------------------------------------------------------
+  beta                       1    the [§8] treatment coefficient              YES  §9.1
+  rd_<k>                     6    the keys of `est.rd`, which are
+                                  C.MRS_THRESHOLDS = (0,1,2,3,4,5)             no  §9.3
+                                  -> rd_0 rd_1 rd_2 rd_3 rd_4 rd_5
+  <outcome>.rd               7    C.BINARY_OUTCOMES, in registry order        YES  §9.2
+  <outcome>.odds_ratio       7    the same seven                               no  §9.2
+  <outcome>.augmented        5    ONLY where augmented_path != "unaugmented"   no  §9.2
+                                  -> sich and ph2 are ABSENT, not present-and-None
+  -------------------------------------------------------------------------------------
+  total                     26                            of which TESTED:      8
+```
+
+`_estimand_keys(est, sec)` builds this, and **it takes `est` because the six `RD_k` keys live on the
+point estimate and not on the configuration**: `Primary.rd` is `dict[int, float]` and its keys are
+what the primary actually fitted. An earlier draft passed only `sec`, which left `est` an unused
+parameter of `run` and the six keys unsourced.
+
+`_tested(key)` is `key == "beta" or key.endswith(".rd")` — **8 of 26**, and that 8 is §9.4's "8 of 8".
+It is a function and not a set literal so that adding an eighth binary outcome to the [§5] registry
+adds its p-value in the same edit, exactly as `C.BINARY_OUTCOMES` does for the estimate (§7.3).
+
+`Bootstrap.intervals` may hold FEWER than 26 keys and `Bootstrap.draws` always holds exactly 26:
+§8.3's floor drops an estimand's interval while keeping its `Draws`. §12.1 is why that asymmetry
+matters downstream.
+
+### 3.4 The numerical facts this stage turns on
 
 ```
   * np.percentile's DEFAULT method is "linear", and it interpolates between order statistics.
@@ -572,10 +675,14 @@ def resample(df: pd.DataFrame, rng: np.random.Generator, stratum: str) -> pd.Dat
       * THE STRATUM TOTALS ARE FIXED. `size=len(g)` per stratum, never a draw over the whole frame,
         because [§10]'s inference is "conditional on the participating centres" and a replicate that
         lost a centre would not be (§4.1).
-      * THE ORDER IS `sorted(unique)`, NOT frame order and not `groupby`'s default. The draw is a
-        function of the seed AND of the order the strata are visited in; frame order would make it a
-        function of how the workbook happened to be sorted, which is the property Stage 2's shuffle
-        test exists to deny (§4.3).
+      * THE ORDER IS THE STRATUM COLUMN'S OWN SORT ORDER -- `groupby(sort=True)` -- and NOT frame
+        order. The draw is a function of the seed AND of the order the strata are visited in; frame
+        order would make it a function of how the workbook happened to be sorted, which is the
+        property Stage 2's shuffle test exists to deny (§4.3). **There is no second sort on top of
+        `groupby`'s**, and an earlier draft had one keyed on `str(label)`: that is a no-op on this
+        study's `string` centre labels and WRONG for a general resampler, because it visits an
+        integer stratum column as 1, 10, 2, 9 -- measured. `resample` is general (§12.2), so the
+        contract is the column's own ordering and pandas is the one thing defining it.
       * EACH DRAWN ROW GETS A DISTINCT case_id, and §5.2 is the whole argument. The k-th appearance
         of a patient becomes `case_id#k` counting from 1, so the FIRST appearance is `id#1` and not
         the bare id -- uniform, because a mixed scheme makes "was this row drawn once" a question
@@ -584,21 +691,32 @@ def resample(df: pd.DataFrame, rng: np.random.Generator, stratum: str) -> pd.Dat
     The index is reset before the rename. **This is NOT because a duplicated index breaks anything**
     -- measured, `propensity.fit`, `outcome.primary` and `outcome.secondary` all run correctly on a
     replicate with 59 distinct labels over 93 rows, because every read of `e` and `w` is boolean
-    (§3.3). It is reset because this function is general and Stages 12 and 13's bodies are unwritten,
+    (§3.4). It is reset because this function is general and Stages 12 and 13's bodies are unwritten,
     and a frame with a duplicated index is a frame on which a future label-based `.loc` is wrong in a
     way that returns a number.
 
     Deterministic given `rng`'s state. Adds no column, and the frame it returns has the same columns
-    and dtypes as the frame it was given -- asserted in §15.3, because a resampler that quietly
+    and dtypes as the frame it was given -- asserted in §15.2, because a resampler that quietly
     changes a dtype changes `model.design` (TODOS' Stage 1 dtype item).
+
+    **THE CAST BACK TO `case_id`'S OWN DTYPE IS NOT COSMETIC, AND WITHOUT IT §15.2 FAILS.**
+    `case_id` is declared `dtype="string"` in `COLUMN_CONTRACT`, and assigning a plain Python list
+    to a column returns `object` -- measured, `string[python]` in and `dtype('O')` out on the fence
+    as an earlier draft wrote it. `data.py:442` already carries this warning verbatim for the same
+    reason one stage up: *"The cast back to `string` is not cosmetic: `.map` returns object dtype"*.
+    The cast reads the INPUT frame's dtype rather than naming `"string"`, because this function is
+    general and Stage 12's identifier column is not this study's.
     """
     parts = [
         g.iloc[rng.integers(0, len(g), size=len(g))]
-        for _, g in sorted(df.groupby(stratum, sort=True, observed=True), key=lambda kv: str(kv[0]))
+        for _, g in df.groupby(stratum, sort=True, observed=True)
     ]
     out = pd.concat(parts, axis=0).reset_index(drop=True)
     occurrence = out.groupby("case_id", sort=False, observed=True).cumcount() + 1
-    out["case_id"] = [f"{cid}#{k}" for cid, k in zip(out["case_id"], occurrence)]
+    out["case_id"] = pd.Series(
+        [f"{cid}#{k}" for cid, k in zip(out["case_id"], occurrence)],
+        index=out.index,
+    ).astype(df["case_id"].dtype)
     return out
 ```
 
@@ -650,7 +768,7 @@ five events in ninety-two having none in a resample is the definition of a spars
 **S6 and S7 stay `SchemaError` and only S8 moves.** S6 is an empty population and S7 is an arm with no
 record or no weight; Stage 9 §4.4 argues both mean the mask and the weights disagree about the same
 rows, which is a bug. Neither fired in 2000 replicates, which is not evidence for that argument but does
-establish that neither is a third blocker (§3.3).
+establish that neither is a third blocker (§3.4).
 
 ### 5.5 What stays unchanged in Stage 6, and that is the point
 
@@ -753,7 +871,7 @@ replicates with its scratchpad renaming and a different stream, these over 1998 
 
 Stage 9 §2 and §14 item 5: *"The four full-list outcomes share an **identical** design matrix, so
 building it once per replicate is worth roughly 22 s."* Measured over `N_BOOT`, the saving is **27.2 s**
-of about 145 s, which makes it the one optimisation worth taking.
+of about 130-145 s (§2), which makes it the one optimisation worth taking.
 
 **But "share an identical design matrix" is a claim with a condition, and Stage 9 stated it without
 one.** `model.design` is called on `df.loc[in_estimate]`, and `in_estimate` is `ps.in_model &
@@ -778,11 +896,21 @@ the optimisation rests on something that fails loudly if it stops being true.
 Measured anyway, because an invariant cited is not an invariant checked at this call site: over 300
 replicates the four masks differ in **0**, and the four design matrices compare equal with
 `DataFrame.equals`. §15.9 asserts both — the equality *and* a companion in which one outcome's
-missingness is perturbed and the shared design is shown to be wrong, because an optimisation whose
-precondition is never violated in a test is an optimisation nobody has tested.
+missingness is perturbed, because an optimisation whose precondition is never violated in a test is an
+optimisation nobody has tested.
 
 `_shared_design` builds it once for the four and lets `tici_2b_3` build its own. It is a cache keyed by
 nothing: one design, one replicate, discarded.
+
+**And when the four masks are NOT identical it raises `C.SchemaError` rather than falling back.** An
+earlier draft had it detect the mismatch and quietly build four designs, which is the opposite of
+this section's own "fails loudly if it stops being true": the run would finish, every number would be
+right, and nobody would learn that a Stage 3 guarantee had stopped holding. Resampling copies whole
+rows and cannot break invariant 6 by itself, so a mismatch inside a replicate means a derived
+dichotomy has stopped carrying its ordinal source's missingness — upstream, and a bug. That is
+`SchemaError` by §7.1's taxonomy and explicitly **not** `FitError`: it is not a sparse replicate, and
+making it droppable would let 2000 replicates absorb a broken invariant one at a time. The message
+names the outcomes whose masks differ and the row counts they differ by.
 
 ---
 
@@ -805,6 +933,28 @@ was about honouring:
 §5.4's reclassification of S8 is what makes this rule *satisfiable* rather than merely stated: before
 it, 1.0% of replicates raised a `SchemaError` that no correct implementation could catch and no correct
 resampler could prevent.
+
+**A `FitError` from `propensity.fit` fails the WHOLE replicate, and it is counted against every
+estimand rather than against none.** Measured at 2 of 2000 (§7.5), and **DECISION 7's own arithmetic
+already assumes this rule**: it records that *"under this decision the primary keeps 1998 draws"*,
+which is `C.N_BOOT` less exactly those two. A reading in which the two simply vanish uncounted would
+make the primary's denominator 2000 and DECISION 7's number wrong. Nothing downstream runs without
+`e`, `w` and `in_model`, so there is no estimand the failure does not affect — and the reading a
+first draft invited, that those replicates were simply never *attempted* for any estimand and so
+appear in no denominator and no counter, is precisely the silent drop §15.4 exists to make impossible.
+So:
+
+```
+  propensity.fit raises FitError in replicate b
+    -> `Replicate.values` is empty
+    -> `Replicate.failures` carries _bucket(message) for EVERY key in _estimand_keys(est, sec)
+    -> the five diagnostic fields are None and drop out of every distribution (§3.1, §15.15)
+    -> n_attempted stays C.N_BOOT on every key, and the reconciliation holds unchanged
+```
+
+**The granularity below that is per estimand GROUP and never per replicate**, which is §7.3: a
+`FitError` from `outcome.primary` costs `beta` and the six `RD_k` together; a `FitError` anywhere in
+one binary outcome costs that outcome's three keys together and no other outcome's.
 
 ### 7.2 The buckets, and why prefix classification needs a scan test
 
@@ -861,6 +1011,23 @@ and six `RD_k` are one group —
 they come from one `polr` fit and a comparison across them is [§16]'s constant-shift statement, so they
 must share draws. Each binary outcome's `rd`, `odds_ratio` and `augmented` are one group, which is Stage
 9's rule satisfied exactly. Different outcomes do not share a set.
+
+**A group is ATOMIC, and that includes `augmented`.** An earlier draft said "one group" here and then
+wrote a §15.10 companion asserting that a nuisance-model failure drops `augmented` alone while `rd`
+survives — which is the same two numbers taken over different replicate sets, and is exactly what
+Stage 9 §14 prohibits: *"never take percentiles of `tau` and of `rd` from different replicate sets,
+since the two are reported as a comparison."* [§10.3] draws precisely that comparison. So an
+`m_a(X)` `FitError` costs that outcome's `rd`, `odds_ratio` **and** `augmented` for that replicate,
+and costs no other outcome anything. The price is measured and it is one replicate:
+
+```
+  m_a(X) FitError, over 1998 replicates:   death_90d  1     every other  0     [§10.2]
+  -> death_90d's three keys each lose 1 draw; the other six outcomes lose nothing
+```
+
+The alternative — `{rd, odds_ratio}` and `{augmented}` as two groups — buys one draw on two keys and
+costs the one prespecified constraint Stage 9 left this stage. §15.10 asserts the atomicity in both
+directions: the three fall together, and the neighbouring outcome does not move.
 
 Measured over 1998 live replicates, this is what the choice is worth:
 
@@ -1199,8 +1366,14 @@ So each binary outcome gets **one p-value, from its `rd` draws**, by §9.1's for
   one scale. PI decision, §17.
 - **The correction's own firing rate travels with the interval**, because Stage 9 §6.3 requires the
   correction *"flagged and printed beside the estimate ... wherever the estimate appears"* and a
-  bootstrap interval is somewhere it appears. `Draws` carries no `or_corrected` count field; the rate
-  goes in the audit entry (§10.1), and §12.3 records it as Stage 14's to print.
+  bootstrap interval is somewhere it appears. It is **`Diagnostics.or_corrected`**, keyed by outcome
+  (§3.1), and it is also rendered in the audit grid (§10.1) — but the **field** is the interface.
+  An earlier draft put it in the grid alone, which would have left Stage 14 satisfying a prespecified
+  reporting rule by parsing a markdown cell it printed itself, while every other number it needs
+  arrives as a typed field. `BinaryEstimate.or_corrected` is already a `bool` on every replicate's
+  estimate (`outcome.py:744`), so only the aggregation was missing. The denominator is that outcome's
+  `Draws.n_attempted`, not `C.N_BOOT`, because the correction can only fire in a replicate that
+  produced an odds ratio.
 
 ### 9.3 No p-value on the cumulative `RD_k`
 
@@ -1336,8 +1509,10 @@ def run(df: pd.DataFrame, ps: propensity.Propensity, est: outcome.Primary,
 
     Takes the point estimate's `Primary` and `Secondary` and does not recompute them. It reads
     exactly two things from them -- `sec.estimates[k].augmented_path` for §6.3's frozen map, and the
-    estimand keys -- and no estimate, because a percentile limit is an order statistic of the draws
-    and is not a function of the point value (§8.1, §15.8).
+    estimand keys, whose `rd_<k>` half comes from `est.rd` -- and no estimate, because a percentile
+    limit is an order statistic of the draws and is not a function of the point value (§8.1, §15.8).
+    `est` is a parameter BECAUSE of that second read: an earlier draft passed only `sec` to
+    `_estimand_keys`, which left `est` unused and the six `RD_k` keys sourced from nowhere (§3.3).
 
     Takes no `n`, no `seed` and no `level`: C.N_BOOT, C.SEED and C.CI_LEVEL are the prespecified
     ones and [§10] refits this in every replicate, so they are not runtime knobs. This is Stage 6
@@ -1345,18 +1520,25 @@ def run(df: pd.DataFrame, ps: propensity.Propensity, est: outcome.Primary,
     specification is not an option -- and `replicates` below IS parameterised, because that one is
     general and this one is [§10].
 
-    Five things about the order below, each of which is a failure if moved:
+    Six things about the order below, each of which is a failure if moved:
 
       * `_assert_run_inputs` runs FIRST, so a caller passing a `Secondary` over a different frame
         reports R3/R5 rather than producing 2000 replicates of a misalignment (§4.4).
       * `paths` is built ONCE, before the loop, from `sec`. Building it inside would make it a
         function of the replicate, which is §6.3's whole prohibition.
-      * ONE Generator, created once, consumed in order. Not one per replicate (§4.3).
-      * The per-replicate `Audit` is constructed INSIDE the loop and discarded at the end of it, so
-        the process's memory is not a function of N_BOOT (§6.2).
+      * THE LOOP IS `replicates`' AND NOT THIS FUNCTION'S. One Generator, created once inside
+        `replicates`, consumed in order; not one per replicate (§4.3). `run` writing its own loop
+        would put the seeding and the ordering in two places, and Stages 12 and 13 would inherit
+        the copy [§10] never ran (§3.2).
+      * The per-replicate `Audit` is constructed INSIDE `_replicate` and discarded when it returns,
+        so the process's memory is not a function of N_BOOT (§6.2).
       * `_record_replicates` runs AFTER the loop and before the intervals are built, so a log exists
         naming the counters even if a percentile call then raises on an estimand nobody expected to
         be empty.
+      * An estimand below §8.3's floor keeps its `Draws` and gets NO `Interval`. `draws` therefore
+        always holds 26 keys and `intervals` may hold fewer (§3.3) -- asserted, both halves, because
+        an implementation emitting a pair of extremes under a percentile's name passes any test that
+        only checks the `Draws` side (§15.8).
 
     NO SchemaError IS CAUGHT ANYWHERE IN THIS FUNCTION, and that is §7.1 as code. The only `except`
     is on `model.FitError`, inside `_replicate`, per estimand group.
@@ -1366,26 +1548,41 @@ def run(df: pd.DataFrame, ps: propensity.Propensity, est: outcome.Primary,
     """
     _assert_run_inputs(df, ps, est, sec)                         # R1-R8
     paths = {key: e.augmented_path for key, e in sec.estimates.items()}
-    rng = np.random.default_rng(C.SEED)
 
-    collected = [
-        _replicate(resample(df, rng, C.BOOT_STRATUM), paths, audit.source)
-        for _ in range(C.N_BOOT)
-    ]
+    collected = replicates(                                      # §3.2 -- ONE loop, one home
+        df,
+        lambda draw: _replicate(draw, paths, audit.source),
+        C.N_BOOT, C.SEED, C.BOOT_STRATUM,
+    )
 
-    draws = _collect(collected, _estimand_keys(sec))             # §7.3, per group
-    diagnostics = _diagnostics(collected)                       # §7.4, §7.5, §10.2
-    _record_replicates(draws, diagnostics, audit)               # §10.1
+    keys = _estimand_keys(est, sec)                              # §3.3 -- 26 of them
+    draws = _collect(collected, keys)                            # §7.1, §7.3, per group
+    diagnostics = _diagnostics(collected)                        # §7.4, §7.5, §9.2, §10.2
+    _record_replicates(draws, diagnostics, audit)                # §10.1
 
     intervals = {}
     for key, d in draws.items():
-        if len(d.draws) < C.ci_min_draws():                     # §8.3
+        if len(d.draws) < C.ci_min_draws():                      # §8.3 -- no Interval, Draws kept
             continue
         lo, hi = percentile_ci(d.draws, C.CI_LEVEL)
-        p = bootstrap_p(d.draws) if _tested(key) else None       # §9.1, §9.3
+        p = bootstrap_p(d.draws) if _tested(key) else None       # §9.1, §9.3 -- 8 of 26
         intervals[key] = Interval(lo, hi, C.CI_LEVEL, C.PERCENTILE_METHOD, len(d.draws), p)
 
     return Bootstrap(C.SEED, C.N_BOOT, draws, intervals, diagnostics)
+
+
+def _tested(key: str) -> bool:
+    """Does [§10] prescribe a p-value for this estimand? TRUE for 8 of §3.3's 26 keys.
+
+    `beta` by §9.1 and each `<outcome>.rd` by §9.2. NOT the six `rd_<k>` ([§8] gives them intervals
+    only, §9.3), NOT any `odds_ratio` ([§10] refuses to condition on the replicates where the ratio
+    exists, §9.2) and NOT any `augmented` (one test per outcome; a second is a multiplicity [§13] is
+    not told about, §9.2).
+
+    A function and not a frozen set, so that an eighth outcome added to the [§5] registry gains its
+    p-value in the same edit that gains its estimate -- Stage 9 §4.1's move, one stage on.
+    """
+    return key == "beta" or key.endswith(".rd")
 ```
 
 And the two arithmetic functions, which are the whole of §8 and §9 and are separate from `run` so that
@@ -1400,8 +1597,10 @@ def percentile_ci(draws: np.ndarray, level: float = C.CI_LEVEL) -> tuple[float, 
     at exactly the tail count that decides significance -- measured, 4.707% of constructed draw sets
     (§8.2). The two functions are one decision and this argument is where it is recorded.
 
-    Raises on fewer than `ci_min_draws(level)` draws rather than returning an extreme under a
+    Raises on fewer than `C.ci_min_draws(level)` draws rather than returning an extreme under a
     percentile's name (§8.3). `run` checks the count before calling, so the raise is a caller bug.
+    The call is QUALIFIED: `ci_min_draws` lives in `config.py`, which this module imports as `C`,
+    and an earlier draft of this fence called it bare -- a NameError in the shipped module.
 
     **THE QUANTILES ARE SNAPPED AND `100.0 * ((1.0 - level) / 2.0)` IS WRONG.** That expression
     returns 2.500000000000002 at level 0.95, not 2.5, because `1.0 - 0.95` is
@@ -1412,9 +1611,9 @@ def percentile_ci(draws: np.ndarray, level: float = C.CI_LEVEL) -> tuple[float, 
     -- opposite signs, so opposite verdicts, at exactly the tail count §8.2 chose this method for.
     An earlier form of this fence had it, and §21b is where running the fence found it.
     """
-    if len(draws) < ci_min_draws(level):
+    if len(draws) < C.ci_min_draws(level):
         raise C.SchemaError(
-            f"percentile_ci: {len(draws)} draw(s) against a floor of {ci_min_draws(level)} at level "
+            f"percentile_ci: {len(draws)} draw(s) against a floor of {C.ci_min_draws(level)} at level "
             f"{level:g}. Below the floor the lower limit is the sample minimum and np.percentile "
             "returns it while still calling it a percentile [Stage 10 §8.3].")
     q_lo = round(50.0 * (1.0 - level), 9)          # 2.5 EXACTLY at level 0.95 -- see the docstring
@@ -1537,7 +1736,7 @@ three test modules, and both shipped changes are in `outcome.py`.**
 | `tests/test_outcome.py` | S8's reclassification, and `collect` at both settings | §15.7. Stage 9's S8 assertions change error class; its other sections are untouched |
 | `tests/test_config.py` | **six** assertions | `0.0 < CI_LEVEL < 1.0`; `BOOT_STRATUM` is a column the [§6] balance set knows about; `PERCENTILE_METHOD` is one numpy accepts, asserted by calling `np.percentile` with it rather than against a string list that can drift from numpy; `ci_min_draws(CI_LEVEL) == 40` and `N_BOOT >= ci_min_draws(CI_LEVEL)`, which is R8 as a static check; and `FAILURE_BUCKETS`' values are exactly the four §7.2 names, because a fifth bucket appearing by typo would silently collect the counts Stage 8 §11 asked to be separated |
 | `tests/fixtures_stage10.py` | **new file, and this row is the one place its contents are enumerated.** Six functions — `two_centre_frame`, `separable_ordinal_frame`, `constant_outcome_frame`, `unfittable_nuisance_frame`, `boundary_draws`, `known_effect_population` — and five constants: `COVERAGE_SEED`, `M_OUTER`, `B_INNER`, `BETA_TRUE`, `ALPHA_TRUE` | §15.0. Every constructed fixture in this document, as code, for Stage 9 §22.3 item 1's reason: three of its fixtures were pinned to ten decimals and described rather than given, which made its acceptance criteria unperformable |
-| `implementation_roadmap.md` | Stage 10 gains its `**Spec:**` line, five corrections and two additions | §22. Lands with this document |
+| `implementation_roadmap.md` | Stage 10 gains its `**Spec:**` line, six corrections and two additions | §22. Lands with this document |
 | `TODOS.md` | two items close, three are answered and rewritten, two are new | §16 |
 
 **Five things that look like they need amending and do not.**
@@ -1594,8 +1793,8 @@ PERCENTILE_METHOD: Final[str] = "inverted_cdf"
 # The FitError buckets Stage 8 §11 requires reported separately, keyed by the leading token of the
 # raised message [Stage 10 §7.2]. `model.FitError` carries no code -- it is a bare RuntimeError
 # subclass (model.py:89) -- and all SIXTEEN raise sites -- fourteen in model.py, two in outcome.py --
-# themselves by that token, so classification is textual and test_bootstrap.py §15.6 SCANS both
-# modules and asserts every token found is a key here. A reworded message is then a test failure
+# IDENTIFY themselves by that token, so classification is textual and test_bootstrap.py §15.6 SCANS
+# both modules and asserts every token found is a key here. A reworded message is then a test failure
 # rather than a counter that silently reads zero.
 #
 # "polr:" covers two failures -- step-halving exhausted and no convergence in POLR_MAX_ITER -- and
@@ -1619,9 +1818,12 @@ def ci_min_draws(level: float = CI_LEVEL) -> int:
     DERIVED, not chosen. Under PERCENTILE_METHOD the lower limit is order statistic
     ceil((1-level)/2 * n), one-based; for that index to exceed 1 -- for the limit to be interior
     rather than the sample minimum -- n must exceed 2/(1-level), which is 40 at CI_LEVEL = 0.95.
-    At exactly the floor the two limits ARE the sample extremes, which is the weakest interval the
-    definition can produce; below it np.percentile returns an extreme while still calling it a
-    percentile [Stage 10 §8.3].
+    **AT EXACTLY THE FLOOR THE LOWER LIMIT IS THE SAMPLE MINIMUM AND THE UPPER IS THE SECOND-LARGEST
+    DRAW, NOT THE MAXIMUM**, and the asymmetry is the point: ceil(0.025 * 40) = 1 gives index 0
+    while ceil(0.975 * 40) = 39 gives index 38. Measured on np.arange(40.0): (0.0, 38.0). The floor
+    is a statement about the LOWER limit, which is the one that stops carrying information first;
+    below it np.percentile returns the minimum while still calling it a percentile
+    [Stage 10 §8.3, §15.8].
 
     A function rather than a constant so it cannot disagree with CI_LEVEL. N_BOOT = 2000 against a
     floor of 40 means an estimand needs 98% of its replicates to fail before it loses its interval:
@@ -1664,7 +1866,8 @@ def ci_min_draws(level: float = CI_LEVEL) -> int:
     59.54 / 52.70    max|beta| of m_a(X) on death_90d / mrs_5_6_90d, the two
                      outcomes the tail is actually on                        [§10.2]
     31               audit entries, taking the ledger 30 -> 31               [§10.1]
-    ~145 s           serial wall-clock with §6.4's shared design             [§2]
+    ~130-145 s       serial wall-clock with §6.4's shared design; the one
+                     measured end-to-end figure is 236.8 s over BOTH routes  [§2]
 
     every interval limit and every p-value on the workbook is DELIBERATELY
     ABSENT from this ledger and from this document. They are in the
@@ -1793,8 +1996,14 @@ def known_effect_population(n: int, rng: np.random.Generator, confounded: bool) 
   R5        1    a Secondary missing one BINARY_OUTCOMES key      SchemaError naming R5
   R6        2    a frame with a NaN stratum label                SchemaError naming R6
   R7        2    a Secondary with augmented_path = "partial"      SchemaError naming R7
-  R8        2    level such that ci_min_draws exceeds N_BOOT      SchemaError naming R8
+  R8        2    monkeypatch C.CI_LEVEL so ci_min_draws(it)
+                 exceeds C.N_BOOT                                SchemaError naming R8
 ```
+
+**R8's mechanism is stated because `run` takes no `level` argument** (§11: `C.CI_LEVEL` is
+prespecified, not a knob), so the only way to reach the branch is to move the constant. That is also
+why `test_config.py` carries `N_BOOT >= ci_min_draws(CI_LEVEL)` as a static assertion (§13): R8 is
+the runtime restatement, and the static one is what actually guards the shipped configuration.
 
 **R3's frame is permuted-but-equal and not merely different**, for Stage 9 §22.3 item 19's reason: Stage
 9 §12 measured that an order mismatch pairs each record's weight with another record's fitted value and
@@ -1823,9 +2032,18 @@ first satisfies every single-branch test above.
   than pinned, because the fixture's rate is a property of its stratum sizes and pinning it makes the
   test brittle for nothing.
 - **Determinism**: the same seed gives a frame equal under `DataFrame.equals`; a different seed does not.
-- **The frame's columns and dtypes are unchanged** from the input, asserted column by column. A
-  resampler that silently promotes an `Int64` to `float64` changes `model.design` and hence every
+- **The frame's columns and dtypes are unchanged** from the input, asserted column by column — and
+  **`case_id` is the one that fails without §5.3's cast**, so it is named rather than left to the
+  column-by-column loop to happen to reach: `case_id` is declared `dtype="string"` and a list
+  assignment returns `object`. Measured on the pre-cast fence: `string[python]` in, `dtype('O')` out.
+  A resampler that silently promotes an `Int64` to `float64` changes `model.design` and hence every
   estimate, which is `TODOS.md`'s Stage 1 dtype item arriving by another route.
+- **The stream is a function of the seed alone and not of whether a replicate succeeded.** Driving
+  `replicates` with a body that returns, and again with a body that raises `model.FitError` on every
+  call, gives the **same sequence of drawn frames** — asserted frame by frame. `resample` is called
+  before `body` and never inside its `try`, so this holds by construction; it is asserted because
+  an edit that moved the draw inside the failure path would make the seed stop identifying the
+  replicates, and nothing else in §15 would notice (§4.3).
 
 ### 15.3 The replicate body, and what it may not read
 
@@ -1844,6 +2062,15 @@ first satisfies every single-branch test above.
   property no wrong implementation satisfies by accident: a silent drop anywhere makes the three numbers
   stop reconciling. Asserted over a synthetic replicate sequence with a known number of injected
   failures, so the expected counts are known rather than read back from the thing under test.
+- **`n_attempted == C.N_BOOT` on all 26 keys**, asserted positively (§3.1, §7.1). The equality is a
+  consequence of the propensity rule below and not a definition, so it can fail.
+- **A `propensity.fit` `FitError` is counted against EVERY key** (§7.1). Injected on a known number
+  of replicates: every one of the 26 keys' `failures` sums rises by exactly that number, no key's
+  `n_attempted` moves, and the reconciliation still holds. **The companion is what makes it a test**:
+  an implementation that simply skips those replicates passes the reconciliation check and fails this
+  one, and skipping is the reading a first draft of §3.1 invited.
+- **`Replicate.values` and `Replicate.failures` are disjoint and their union is the attempted keys**,
+  asserted per replicate. The partition is what `_collect` sums over (§3.1).
 - **`assert not issubclass(model.FitError, C.SchemaError)`**, and the converse. The whole taxonomy is one
   `except` clause away from collapsing.
 - **A `SchemaError` raised inside a replicate propagates out of `run`.** Asserted with a body that raises
@@ -1916,8 +2143,17 @@ zero on data that is degenerate throughout."*
   upper, and **both halves are asserted positively** — on `np.arange(40.0)` the answer is `(0.0, 38.0)`
   and not `(0.0, 39.0)`. A test asserting the maximum passes on a wrong percentile definition and fails
   on the pinned one (§8.3).
-- **The six `RD_k` carry `p is None`**, asserted on all six keys positively (§9.3). And no key anywhere
-  in `intervals` pairs a p-value with an `odds_ratio` or an `augmented` estimand (§9.2).
+- **And `run`'s below-floor branch is reached separately, because `percentile_ci` raising is not it.**
+  On a fixture where one estimand's surviving draws fall below `C.ci_min_draws()`: that key **is** in
+  `boot.draws` carrying its counters, and **is not** in `boot.intervals`. Both halves asserted — an
+  implementation that emits an `Interval` of extremes satisfies the first, and an implementation that
+  drops the estimand entirely satisfies the second. This is the shape Stage 14 must handle (§12.1,
+  §3.3), and §8.3's claim that "§15.8 reaches it with a fixture" was true only of the arithmetic
+  function until this assertion existed.
+- **The six `RD_k` carry `p is None`**, asserted on all six keys by name — `rd_0` through `rd_5`,
+  from `C.MRS_THRESHOLDS` (§3.3) — positively (§9.3). And **`_tested` is true on exactly 8 of the 26
+  keys**, asserted over the full key set rather than as an absence: no `odds_ratio` and no `augmented`
+  key anywhere in `intervals` carries a non-`None` `p` (§9.2).
 
 ### 15.9 The shared design, and the companion that makes it a test
 
@@ -1925,19 +2161,28 @@ zero on data that is degenerate throughout."*
   their `in_estimate` masks are identical. Measured over 300 replicates of the cohort `[data-gated]`: 0
   differ.
 - **And the companion is what makes it a test**: on a frame where one of the four has an extra missing
-  value — violating roadmap invariant 6 rather than relying on it — the shared design is **shown to be
-  wrong**, and `_shared_design` is required to detect the mask mismatch and fall back to per-outcome
-  designs rather than silently reusing one. An optimisation whose precondition is never violated in a
-  test is an optimisation nobody has tested.
+  value — violating roadmap invariant 6 rather than relying on it — `_shared_design` **raises
+  `C.SchemaError` naming the outcomes whose masks differ**, and that raise propagates out of `run`
+  uncaught (§7.1, §15.4). An optimisation whose precondition is never violated in a test is an
+  optimisation nobody has tested. **Asserted as a raise and not as a fallback**: an earlier draft
+  required a silent fall-back to per-outcome designs, which finishes the run with correct numbers and
+  never tells anyone a Stage 3 invariant stopped holding (§6.4).
+- **And it is `SchemaError` and not `FitError`**, asserted by class. Resampling copies whole rows and
+  cannot break invariant 6, so a mismatch is upstream and a bug; making it droppable would let 2000
+  replicates absorb it one at a time.
 - **`tici_2b_3` builds its own design**, asserted, because its covariate list is the [§8] override and
   sharing the full-list design would silently estimate the wrong nuisance model.
 
 ### 15.10 No fallback estimator, ever `[roadmap invariant 5]`
 
 - **A replicate whose augmented fit fails contributes nothing to that outcome's `augmented` draws and is
-  not substituted with its unaugmented `rd`.** Asserted by injecting a nuisance failure and checking the
-  `augmented` draw count fell by exactly one while the `rd` count did not — which also asserts §7.3's
-  granularity in the one place it is observable.
+  not substituted with its unaugmented `rd`.** Asserted by injecting a nuisance failure on one outcome
+  and checking that **all three** of that outcome's keys — `rd`, `odds_ratio` and `augmented` — fell by
+  exactly one, and that a neighbouring outcome's three did not move. Both halves: the group is atomic
+  (§7.3, Stage 9 §14's same-set rule) *and* the granularity is per outcome. **An earlier draft asserted
+  the opposite on the first half** — `augmented` falling while `rd` held — which is `tau` and `rd` taken
+  over different replicate sets, exactly what Stage 9 §14 forbids for two numbers [§10.3] reports as a
+  comparison.
 - **A replicate whose `polr` hits G7 contributes nothing to `beta` and nothing to the six `RD_k`.** The
   primary is one group (§7.3), so all seven counts fall together, and that is asserted as a group rather
   than key by key.
@@ -2003,26 +2248,54 @@ zero on data that is degenerate throughout."*
 - Both are `M_OUTER` × `B_INNER` = 90 000 fits and take about 270 s each, so both are marked slow and
   gated behind the same mechanism the R oracles use. §16 files the reduction from `C.N_BOOT`.
 
+### 15.15 `_diagnostics`, and what a `None` means
+
+`_diagnostics` was absent from an earlier draft's private list and therefore from this section index
+(§3.2). It aggregates `Replicate`'s eight fields into `Diagnostics`' six, and every one of those
+aggregations has a way to be wrong that nothing else here would catch.
+
+- **The four scalar distributions sum to the LIVE replicate count, not to `C.N_BOOT`.** `n_alpha`,
+  `polr_iterations` and `n_in_model` are `dict[int, int]` and their values sum to the number of
+  replicates that reached `outcome.primary`; `len(sum_w)` equals that same number. Asserted against
+  an injected count of propensity failures, because a `None` counted as a `0` would put a spurious
+  mode at zero in three distributions at once (§3.1, §7.1).
+- **`max_abs_beta` holds exactly the five augmented outcomes.** Asserted both ways: the five keys are
+  present, and **`sich` and `ph2` are absent from the dict** rather than present with an empty array —
+  §10.2's distinction between "we looked and found none" and "there is nothing here to look at".
+- **`or_corrected` is keyed by all seven outcomes** and each value is at most that outcome's
+  `Draws.n_attempted`. Asserted against a frame where the correction is forced to fire a known number
+  of times, because the natural wrong denominator is `C.N_BOOT` (§9.2).
+- **Every array is finite** and `sum_w` carries no `nan`: a replicate that produced a `Σw` produced a
+  fit, and Stage 6 §9's `nan`-off-`in_model` rule means the sum is over the mask.
+
 ### Coverage map
 
 ```
-  resample                    15.2, 15.3
-  replicates                  15.2 (determinism), 15.4 (the injected-failure sequence)
+  resample                    15.2 (totals, rename, determinism, DTYPES incl. case_id), 15.3
+  replicates                  15.2 (determinism; the stream is unaffected by a raising body),
+                              15.4 (the injected-failure sequence)
   percentile_ci               15.8 (definition, boundary, floor, order-statistic property)
   bootstrap_p                 15.8 (formula, floor-on-surviving-count, ties)
-  run                         15.3, 15.4, 15.10, 15.12, 15.13; 15.14 for the whole loop
-  _assert_run_inputs          15.1, one frame per branch R1-R8, plus the two-failure frame
-  _replicate                  15.3, 15.5, 15.10
+  run                         15.3, 15.4, 15.8 (the below-floor branch: Draws kept, Interval
+                              absent), 15.10, 15.12, 15.13; 15.14 for the whole loop
+  _assert_run_inputs          15.1, one frame per branch R1-R8 (R8 by monkeypatching CI_LEVEL),
+                              plus the two-failure frame
+  _replicate                  15.3, 15.5, 15.10; 15.4 for the whole-replicate propensity failure
   _bucket                     15.6, including the unrecognised-token raise
-  _collect                    15.4 (reconciliation), 15.10 (granularity)
-  _estimand_keys              15.8 (the RD_k keys carry no p), 15.12 (the ledger)
-  _shared_design              15.9, both the equality and the violated-precondition companion
+  _collect                    15.4 (reconciliation, n_attempted == N_BOOT, the Replicate
+                              partition), 15.10 (group atomicity and per-outcome granularity)
+  _diagnostics                15.15, all four aggregations plus the None-is-not-zero rule
+  _tested                     15.8 (true on exactly 8 of the 26 keys, asserted over the full set)
+  _estimand_keys              15.8 (26 keys; the six RD_k by name carry no p), 15.12 (the ledger)
+  _shared_design              15.9, the equality AND the violated-precondition companion, which
+                              asserts a C.SchemaError raise and not a fallback
   _counters_table             15.13
   _diagnostics_table          15.13
   _replicates_detail          15.13
   _record_replicates          15.13, 15.12
 
-  config.ci_min_draws         15.8 (39 raises, 40 returns the extremes), test_config.py
+  config.ci_min_draws         15.8 (39 raises; 40 gives the minimum and the SECOND-largest),
+                              test_config.py
   outcome._assert_estimable   15.7 (S8 reclassified; S6, S7 unchanged)
   outcome.secondary           15.7 (collect at both settings)
 
@@ -2049,10 +2322,15 @@ zero on data that is degenerate throughout."*
 | The point estimate's `Propensity` closed over instead of refit | 15.3 | none | **Silent, and every interval collapses toward zero width** |
 | A single "failures" counter instead of the pair | 15.5, 15.6 | none | **Silent: it reads zero on a frame that is separated throughout** (Stage 8 §6.1) |
 | `_bucket` defaults an unrecognised token to a catch-all | 15.6 | raises | Visible, and the scan is what keeps it so |
-| The shared design reused when the four masks differ | 15.9 | detects and falls back | Would be **silent**: four outcomes estimated on one wrong design |
+| The shared design reused when the four masks differ | 15.9 | raises `SchemaError` | Would be **silent**: four outcomes estimated on one wrong design. A fall-back would be silent too — the run finishes and the broken Stage 3 invariant is never reported (§6.4) |
 | Design C's coverage scored against `BETA_TRUE` | 15.14 | none | **Silent, and it reads as a bootstrap defect at about 88%** (§8.4) |
 | An `Interval` emitted below the draw floor | 15.8 | raises | Visible |
 | A pipe in a rendered cell | 15.13 | none | **Silent: byte-identical and broken** (§10.3) |
+| A `propensity.fit` `FitError` skipped instead of counted against every key | 15.4 | none | **Silent: 2 replicates in 2000 leave every denominator with no counter naming them**, and the reconciliation still passes (§7.1) |
+| `augmented` dropped alone while `rd` survives | 15.10 | none | **Silent, and it puts `tau` and `rd` on different replicate sets** — the two numbers [§10.3] reports as a comparison (§7.3) |
+| `case_id` demoted to `object` by the rename | 15.2 | none | **Silent, until a dtype-sensitive read downstream**; `data.py:442` documents the identical trap one stage up (§5.3) |
+| `_diagnostics` counting a `None` as a `0` | 15.15 | none | **Silent: a spurious mode at zero in three distributions at once** (§3.1) |
+| `run` writing its own loop instead of calling `replicates` | 15.2 | none | Silent divergence: Stages 12 and 13 inherit a resampler [§10] never ran (§3.2) |
 
 ---
 
@@ -2087,11 +2365,30 @@ zero on data that is degenerate throughout."*
 7. **`propensity.py:413` cites `data.py:255` for a normalisation now at `data.py:271`.** §5.5. Left
    deliberately: it is in the one module §5 claims is untouched. **Trigger:** the next commit that edits
    `propensity.py` for any reason. → `TODOS.md`.
-8. **No parallelism.** §18. At ~145 s serial the gap is not worth the determinism risk. **Trigger:**
+8. **No parallelism.** §18. At ~130-145 s serial the gap is not worth the determinism risk. **Trigger:**
    Stage 12's bootstrap, which resamples a larger population, or the [§13] sensitivity suite, which is
    five more `run` calls.
+9. **`_diagnostics`' distributions have a denominator that is not `N_BOOT` and no reader is told so.**
+   §15.15 asserts they sum to the live replicate count, but nothing in the rendered grid (§10.1)
+   labels which denominator each row is over. Stage 14 prints them. **Trigger:** the first replicate
+   that dies before `outcome.primary` on a real run — measured at 2 of 2000, so it has already
+   fired once and the grid was read by nobody. → `TODOS.md`.
 
-**Two items close and three are rewritten** (§22). `TODOS.md` gains items 1, 3, 4, 6, 7 and 8 above,
+**No cross-model gap is filed, and that is a judgement rather than an omission.** §21c records that the
+outside voice died on a Codex auth refresh, and re-running it was considered and declined: the pass
+truncates the plan to 30 KB against this document's ~190 KB, so it reads §0 through §4.4 and stops —
+**every decision a second reader would be wanted for is past the cut.** A reviewer given the first
+sixth of a document reviews the preamble. The two defects this stage's own review found that would
+have shipped came from *executing* the fences and reading `COLUMN_CONTRACT`, which is §21b's lesson a
+second time and is not what a truncated outside voice does. Of the three calls a second reader might
+have been pointed at, **one turned out not to be a call at all** — group atomicity is DECISION 7's own
+wording, checked against `../out/stage0_data_inventory.md` and not against a second model (§17) — and
+the other two, §7.1's bookkeeping and §3.3's key scheme, are engineering and are recorded as
+reversible in §17. **The instrument that settled the one question that looked open was reading the
+decision record**, which is cheaper than a second model and is the only thing that could have been
+authoritative about it.
+
+**Two items close and three are rewritten** (§22). `TODOS.md` gains items 1, 3, 4, 6, 7, 8 and 9 above,
 loses "Make the pipeline resamplable" and "Decide whether a constant outcome on a replicate is
 `SchemaError` or `FitError`", and rewrites "Establish whether `sich`'s `max|beta|` tail leaves its
 interval usable" against the two outcomes that have one and "Re-measure the separation band at fewer
@@ -2111,6 +2408,22 @@ than seven occupied mRS categories" against §7.4's measurement.
   outcomes rather than across the one that failed, and costs 8.4 ms per replicate more (§2). Reversing
   it would also remove the need for `secondary`'s `collect` parameter entirely, leaving S8 as the only
   change to `outcome.py`.
+- **Whether the group a failure drops is atomic, `augmented` included. NOT OPEN — DECISION 7 already
+  says it, and an earlier draft of this document mistook it for an open question.** DECISION 7's own
+  text is *"each binary outcome's risk difference, marginal odds ratio and augmented risk difference
+  **are one group**"*, and it goes on: *"Stage 9 §14 constrains exactly one thing — that `tau` and
+  `rd` for a single outcome must come from the same replicate set, since the two are reported as a
+  comparison — **and that constraint is satisfied by construction here**."* So atomicity is what the
+  PI decided, §7.3 restates it, and §15.10's companion contradicted it in a draft — a spec bug
+  against a recorded decision, not a judgement this document got to make. Recorded here because a
+  reader who finds the contradiction in git history should find the resolution too.
+- **What a whole-replicate failure does to the counters.** §7.1 counts a `propensity.fit` `FitError`
+  against every estimand and holds `n_attempted` at `C.N_BOOT`. [§10]'s "dropped and counted" fixes
+  that it must be counted somewhere and is silent on where. The alternative considered and declined
+  was a separate `Bootstrap.replicate_failures` naming whole-replicate losses once instead of
+  twenty-six times: it reads better in a log and makes `n_attempted` differ per key for a reason that
+  has nothing to do with the estimand, which is the field's only purpose. **PI-reversible**, at 2
+  replicates in 2000.
 - **Whether the augmented estimate gets its own p-value.** §9.2 gives it an interval and no p. [§10]
   names the risk-difference scale and one test per outcome; two would be a multiplicity [§13] is not
   told about. **PI decision, PI-reversible**, and the pilot's implementation did give it one (§19).
@@ -2135,7 +2448,7 @@ than seven occupied mRS categories" against §7.4's measurement.
 | BCa and bootstrap-t intervals | [§10] prescribes percentile intervals and one interval. BCa needs an acceleration constant from a jackknife over 93 patients and a bias correction from the same draws; bootstrap-t needs a standard error per replicate, which Stage 8 §5.6 establishes cannot be had from the fitter's information matrix — *"no standard error and no interval leaves this stage"*. Both would be second estimators of the same quantity, and [§10] prescribes one |
 | An analytic or sandwich standard error | Stage 8 §5.6, and it is a correctness claim rather than a preference: the weights are a tilting function of an *estimated* propensity score, so the inverse observed information omits the variability of estimating `e`, which [§7] states enters the interval |
 | A centre-level cluster bootstrap | [§10] declines it explicitly: *"a handful of centres cannot support cluster-bootstrap consistency"*, and inference is conditional on these centres |
-| Parallelism across replicates | §16 item 8. ~145 s serial. Every parallel implementation makes the stream a function of the scheduling unless each replicate is separately seeded, which §4.3 declines for its own reason. Deferred, not refused |
+| Parallelism across replicates | §16 item 8. ~130-145 s serial. Every parallel implementation makes the stream a function of the scheduling unless each replicate is separately seeded, which §4.3 declines for its own reason. Deferred, not refused |
 | Bootstrapping the balance diagnostics | §0.2. [§9] is a statement about the realised sample |
 | An interval on the E-value | Stage 11's, and [§13] prescribes the E-value at the point estimate and at the limit nearest the null — both functions of numbers that already have intervals |
 | Caching the draws to disk | The whole `Bootstrap` is about 60 000 floats. Persisting it would create a second source for numbers the log already carries, and `out/` is where the log goes |
@@ -2201,12 +2514,15 @@ the only evidence for that, and §8.4 states its own limits.
 - [ ] **T4 (P2)** `bootstrap.py`: `percentile_ci`, `bootstrap_p`, `ci_min_draws`'s caller; §15.8. Pure
       arithmetic over arrays, so it needs only T0 and T2.
 - [ ] **T5 (P2)** `outcome.py`: `secondary`'s `collect` parameter; §15.7. Depends on T1.
-- [ ] **T6 (P2)** `bootstrap.py`: `_bucket`, `_collect`, the `Draws`/`Interval` dataclasses; §15.4,
-      §15.6. The reconciliation property is the one to write first.
+- [ ] **T6 (P2)** `bootstrap.py`: `_bucket`, `_collect`, `_estimand_keys`, `_tested`, and the
+      `Replicate`/`Draws`/`Interval` dataclasses; §15.4, §15.6, §15.8. **`Replicate` first** — it is
+      what `_collect` sums over and the reconciliation property is a statement about its partition
+      (§3.1). Then the 26 keys (§3.3), then the reconciliation, then the propensity-failure companion.
 - [ ] **T7 (P2)** `bootstrap.py`: `_replicate`, `_shared_design`, `replicates`; §15.3, §15.9, §15.10.
-      Depends on T3 and T5.
-- [ ] **T8 (P3)** `bootstrap.py`: `run`, `_assert_run_inputs`, the diagnostics; §15.1, §15.5, §15.11,
-      §15.12.
+      Depends on T3 and T5. `_shared_design` **raises** on a mask mismatch (§6.4) and `_replicate`
+      catches `model.FitError` **per estimand group, atomically** (§7.3).
+- [ ] **T8 (P3)** `bootstrap.py`: `run` — which **calls `replicates`** and does not write its own loop
+      (§3.2) — plus `_assert_run_inputs`, `_diagnostics`; §15.1, §15.5, §15.11, §15.12, §15.15.
 - [ ] **T9 (P3)** `bootstrap.py`: the audit entry and its grid; §15.13, including the byte-identity
       heredoc.
 - [ ] **T10 (P3)** §15.14's coverage tests, marked slow.
@@ -2238,14 +2554,24 @@ Complete when all of the following hold, and not before.
 7. **The reconciliation property has been seen to fail**: dropping a replicate without incrementing a
    bucket fails §15.4.
 8. **The shared-design companion has been seen to fail**: reusing one design when the four masks differ
-   fails §15.9.
+   fails §15.9, and falling back silently instead of raising also fails it.
 9. The audit log is **byte-identical across two hash seeds**, by §15.13's heredoc.
 10. The audit ledger reads **31** and `data.KINDS` is nine.
 11. `_bucket` raises on an unrecognised token, and §15.6's scan finds **sixteen** raise sites and no
     token outside `C.FAILURE_BUCKETS`.
 12. **Every count stated in this document has been re-derived before the commit** — the five public
-    names, the ten privates, the six fixture functions, the five constants, the sixteen raise sites,
-    the thirty-one audit entries.
+    names, the **twelve** privates, the **twenty-six** estimand keys of which **eight** are tested,
+    the six fixture functions, the five constants, the sixteen raise sites, the thirty-one audit
+    entries.
+12a. **`run` contains no `for` and no comprehension over `range(C.N_BOOT)`** — the loop is
+    `replicates`', by scan (§3.2). A second loop is the DRY failure this review removed.
+12b. **The propensity-failure companion has been seen to fail**: an implementation that skips a
+    whole-replicate failure instead of counting it against all 26 keys passes §15.4's reconciliation
+    and fails §15.4's `n_attempted == C.N_BOOT` assertion (§7.1).
+12c. **The group-atomicity companion has been seen to fail**: dropping `augmented` alone while `rd`
+    survives fails §15.10 (§7.3).
+12d. **`resample` returns a frame whose dtypes equal the input's, `case_id` included** — the
+    assertion fails without §5.3's cast, and it was measured failing before the cast was added.
 13. **§21 has no row reading `stated` that a run could have produced.**
 14. `TODOS.md`'s two closed items are closed with their measured rates, and the three rewritten items
     name the outcomes and numbers §16 gives.
@@ -2269,9 +2595,9 @@ and not re-derive the number.
 | renaming resampler: 0 of 400, and 0 of `N_BOOT` = 2000 | §5.2, §7.5 | yes, run |
 | a replicate holds 93 rows, 93 distinct `case_id`, `is_unique` True | §5.2, §15.2 | yes, run |
 | same seed → identical frame; different seed → different | §4.3, §15.2 | yes, run |
-| a duplicated index passes `propensity.fit`, `primary` and `secondary` unchanged (59 distinct labels over 93 rows) | §3.3, §5.3 | yes, run — **this refuted an earlier draft's claim** |
+| a duplicated index passes `propensity.fit`, `primary` and `secondary` unchanged (59 distinct labels over 93 rows) | §3.4, §5.3 | yes, run — **this refuted an earlier draft's claim** |
 | S8 raises on 16 `sich` and 3 `tici_2b_3` replicates of 1998; 19 replicates, 1.0% | §5.4, §7.3 | yes, run |
-| S6 and S7 fire 0 times in 2000 replicates | §3.3, §5.4 | yes, run |
+| S6 and S7 fire 0 times in 2000 replicates | §3.4, §5.4 | yes, run |
 | `secondary` whole loses all seven on 19 S8 + 1 Firth `FitError` = 20 of 1998 | §7.3 | yes, run |
 | `outcome.py:897` already names S8's classification as open | §5.4 | yes, read (`outcome.py:897`) |
 | G7 = 0, nonconvergence = 0, degenerate_design = 0, `SchemaError` = 0 on the primary over 1998 | §7.5 | yes, run |
@@ -2283,8 +2609,8 @@ and not re-derive the number.
 | `n in_model` across replicates: 88:1, 89:26, 90:120, 91:374, 92:741, 93:736 | §7.5 | yes, run |
 | separated 20v20: 17 iterations on the score criterion, rescales 0, halvings 0, β = 36.4058, exp(β) = 6.469e15, α = −18.2029, all finite | §15.0, §15.5 | yes, run — reproduces Stage 8 §6.1 |
 | G7 fires on it, message prefix `'G7  '` | §7.2, §15.5 | yes, run |
-| `model.FitError` has no attributes beyond `RuntimeError`; **sixteen** raise sites (14 `model.py`, 2 `outcome.py`); tokens G6, G7, O1-O6, F3, F4, F6, `polr:`, `Firth:` | §3.3, §7.2, §13, §15.6 | yes, read (`model.py:89`) + run — **the count and G6 both corrected by the scan** |
-| percentile sweep, 30 000 sets at B = 2000: linear 4.707%, higher 4.707%, nearest 4.707%, midpoint 0.117%, inverted_cdf 0.000%, lower 0.000% | §3.3, §8.2 | yes, run |
+| `model.FitError` has no attributes beyond `RuntimeError`; **sixteen** raise sites (14 `model.py`, 2 `outcome.py`); tokens G6, G7, O1-O6, F3, F4, F6, `polr:`, `Firth:` | §3.4, §7.2, §13, §15.6 | yes, read (`model.py:89`) + run — **the count and G6 both corrected by the scan** |
+| percentile sweep, 30 000 sets at B = 2000: linear 4.707%, higher 4.707%, nearest 4.707%, midpoint 0.117%, inverted_cdf 0.000%, lower 0.000% | §3.4, §8.2 | yes, run |
 | every disagreement is at a smaller-tail count of exactly 50 | §8.2 | yes, run |
 | tail counts 49 / 50 / 51 give p = 0.0490 / 0.0500 / 0.0510, and only 50 splits the methods | §8.2, §15.0 | yes, run |
 | ties at exactly 0.0: `Pr(≤0)+Pr(≥0) > 1`, interval contains 0 in all five constructions | §8.2, §9.1 | yes, run |
@@ -2314,6 +2640,16 @@ and not re-derive the number.
 | `data._md_table` sizes widths from `rows[0]` and does no escaping | §10.3 | yes, read (`data.py:242-245`) |
 | the pilot catches bare `Exception`, uses two buckets, `continue`s on a per-replicate rare-outcome rule, uses `1 − Pr(≤0)`, defaults `np.percentile`, and floors at a magic 50 | §19 | yes, read (`pilots/analysis.py:535-630`) |
 | `C.SEED` = 20260807, `C.N_BOOT` = 2000 | §4.3 | yes, read (`config.py:269-270`) |
+| `case_id` is declared `dtype="string"` in `COLUMN_CONTRACT` | §5.3, §15.2 | yes, run (`config.COLUMN_CONTRACT['CaseID'].dtype`) |
+| the pre-cast rename returns `object`: `string[python]` in, `dtype('O')` out | §5.3, §15.2 | yes, run — **this refuted an earlier draft's fence** |
+| the cast form preserves dtypes, columns, stratum totals, `case_id` uniqueness, `id#1`, and determinism | §5.3, §15.2 | yes, run |
+| `sorted(groupby(...), key=str)` visits an integer stratum as 1, 10, 2, 9 | §5.3 | yes, run — **why the second sort is removed** |
+| `MRS_THRESHOLDS` = (0, 1, 2, 3, 4, 5), so the `RD_k` keys are `rd_0`..`rd_5` | §3.3 | yes, read (`config.py:653`) + run |
+| `BINARY_OUTCOMES` is seven, in registry order; 26 estimand keys, 8 tested | §3.3, §9.4 | yes, run |
+| `BinaryEstimate.or_corrected` is a `bool` field on every estimate | §3.1, §9.2 | yes, read (`outcome.py:744`) |
+| `outcome.secondary` already takes `paths`; only `collect` is new | §7.3, §13 | yes, read (`outcome.py:1379-1380`) |
+| AST re-scan of the raise sites: **sixteen**, tokens `G6 G7 O1-O6 F3 F4 F6 polr: Firth:` — thirteen distinct, +`S8` = the fourteen `FAILURE_BUCKETS` keys exactly | §3.4, §7.2, §13, §15.6 | yes, run — independent re-derivation |
+| `ci_min_draws` 40 / 20 / 29 at 0.95 / 0.90 / 0.93; `arange(40.0)` → `(0.0, 38.0)`; tail 49/50/51 → p 0.0490 / 0.0500 / 0.0510 with `linear` and the pin splitting at 50 alone | §8.2, §8.3, §13 | yes, run — reproduces §21b pass 3 |
 
 ### 21b. This document's own code, executed — 2026-08-25
 
@@ -2322,12 +2658,13 @@ and processed in four passes.
 
 ```
   pass 1 — extract and parse                                    9 / 9 fences parse
-    fence 0  Draws, Interval, Diagnostics, Bootstrap                              §3.1
+                                            re-run after the eng review: 9 / 9   §21c
+    fence 0  Replicate, Draws, Interval, Diagnostics, Bootstrap                   §3.1
     fence 1  resample, replicates, percentile_ci, bootstrap_p, run  (stubs)       §3.2
     fence 2  resample                                                             §5.3
     fence 3  paths                                                                §6.3
     fence 4  secondary                                             (signature)    §7.3
-    fence 5  run                                                                  §11
+    fence 5  run, _tested                                                         §11
     fence 6  percentile_ci, bootstrap_p                                           §11
     fence 7  ci_min_draws, BOOT_STRATUM, CI_LEVEL, PERCENTILE_METHOD,
              FAILURE_BUCKETS                                                      §13
@@ -2366,6 +2703,38 @@ specified to catch, caught by the scan, before the scan existed as a test.
 identities hold is a fence that is internally consistent; §15's criteria are what make it checkable
 against an implementation, and the implementation does not exist yet.
 
+### 21c. The engineering review — 2026-08-25
+
+`/plan-eng-review`, against the landed Stages 1-9 rather than against the document alone. **Nine
+findings, all folded in; none touched the statistics.** Every arithmetic claim in §8.2, §8.3 and §13
+was independently re-derived and reproduced exactly — the pin, the snap, the floor and the tail-50
+boundary all stand. What the review found was in the seams between this document and the code it
+drives, and **two of the nine were defects that would have shipped**:
+
+| # | Finding | Where it landed |
+|---|---|---|
+| 1 | `_replicate`'s return value had no declared type, and the privates count was ten against a real twelve | §3.1's `Replicate`, §3.2 |
+| 2 | §7.3's "one group" contradicted §15.10's "augmented falls alone" — `tau` and `rd` on different replicate sets. **§15.10 was contradicting DECISION 7 itself**, whose text is *"rd, marginal odds ratio and augmented risk difference are one group"*; a spec bug against a recorded decision, not an open question | §7.3, §15.10, §17 |
+| 3 | A `propensity.fit` `FitError` had no defined effect on `n_attempted` or `failures`: 2 replicates in 2000 leaving every denominator uncounted | §7.1, §3.1, §15.4 |
+| 4 | `or_corrected` reached Stage 14 only as a cell in a rendered markdown grid | §3.1's `Diagnostics`, §9.2, §12.3 |
+| 5 | `run` took `est` and never read it; the 26 estimand keys were never enumerated, so §15.8's own assertions were unwritable | §3.3, §11 |
+| 6 | **`resample` demoted `case_id` from `string` to `object`** — measured — so §15.2's own dtype assertion failed on the specified implementation. `data.py:442` documents the identical trap | §5.3, §15.2 |
+| 7 | Six internal-consistency defects in shipping text, including `ci_min_draws`'s docstring carrying the exact sentence §8.3 corrects, and **`percentile_ci` calling `ci_min_draws` unqualified — a NameError** | §13, §11, §3.2, §0, §5.3 |
+| 8 | `_shared_design` was told to fall back silently when the invariant §6.4 says "fails loudly" breaks | §6.4, §15.9 |
+| 9 | Four uncovered branches, including `run`'s below-floor path — the one Stage 14 consumes — which §8.3 believed §15.8 already reached | §15.1, §15.2, §15.8, §15.15 |
+
+**And one scope reduction**: `replicates` was a public function `run` declined to call, so the loop
+existed twice and Stages 12 and 13 would have inherited the copy [§10] never ran. `run` now calls it
+(§3.2, §11).
+
+**The outside voice did not run, and is not owed.** Codex authenticated at preflight and died mid-run
+on a token refresh (`401 Unauthorized` after five retries). Re-running it was considered and declined
+rather than filed: the pass truncates the plan to 30 KB against this document's ~190 KB — the echo
+shows the cut landing mid-sentence in §4.4 — so it reads the preamble and reaches none of the
+decisions it would be wanted for. §16 carries the argument. This document has now been read by one
+reviewer other than its author, and by no second model, and the one call that a second reader could
+not settle better than the PI is in §17 as the open half of DECISION 7.
+
 ---
 
 ## 22. What this spec changed elsewhere
@@ -2379,7 +2748,8 @@ against an implementation, and the implementation does not exist yet.
 | 5 | The "Accept when" clause gains the per-outcome-replicate-set rule and the pinned percentile definition | `implementation_roadmap.md` | Two things [§10] left open that an implementer would otherwise decide silently |
 | 6 | **An addition, not an amendment**: the entry gains a note that `Σw` moves by a factor of 5.7 across replicates and `polr`'s iteration count runs down to 1 — Stage 8 §11's predicted symptom, measured | `implementation_roadmap.md` | Stage 8 asked for this and the roadmap had nowhere to record the answer |
 | 7 | **And one roadmap addition that is not an amendment**: Stage 10 gains its `**Spec:**` line, as Stages 1-9 have | `implementation_roadmap.md` | It was the only stage of 1-10 without one |
-| 8 | Two items closed, three rewritten, six added | `TODOS.md` | §16 |
+| 8 | Two items closed, three rewritten, **seven** added | `TODOS.md` | §16 |
+| 9 | **The `model.design` cost bullet gains its measurement and its condition.** It read *"worth roughly 22 s"*, which was Stage 9's estimate; measured over `N_BOOT` it is **27.2 s**. And it asserted the four designs are identical without stating why — the bullet now names invariant 6 as the reason and records that Stage 10 raises rather than falling back if the masks differ | `implementation_roadmap.md` | Whether the one optimisation worth taking rests on an invariant or on luck, and what happens when the invariant breaks (§2, §6.4). Added by the engineering review, §21c |
 
 **No SAP amendment.** Every substantive rule above is already [§10]'s; what changed is the roadmap's
 transcription of it and two gaps [§10] leaves by silence. The percentile *definition* (§8.2) is the one
@@ -2441,37 +2811,63 @@ The two that did not: Stage 9's `max|beta|` attribution (§22 item 3, the measur
 attribution does not) and Stage 8's expectation that `Σw` would not move (§7.5, it moved).
 
 ---
-
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
 | Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 0 | **not run** | — |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | issues_found | 9 issues, 0 critical gaps; all 9 folded in, plus 1 scope reduction |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+| Outside Voice | `/codex` (auto) | Cross-model challenge | 1 | **unavailable, not owed** | Died mid-run on a `401`; re-running declined — the 30 KB truncation reaches §4.4 of a ~190 KB document (§16) |
 | Probe round | twelve probes before drafting (§22.1) | Whether the handovers hold and the rules are implementable | 1 | issues_found | 12 probes; 4 changed the document, 2 changed a number |
 | Fence execution | §21b, after drafting | Executability of the document's own code | 1 | issues_found | 3 defects, all in this document's fences; all fixed and recorded |
+
+**Eng review, by section** (§21c carries the full table): Architecture 5, Code Quality 2, Tests 2,
+Performance 0. Scope: reduced by one — `replicates` was public and uncalled, so `run` now uses it
+rather than carrying a second copy of the loop.
 
 **Findings by origin.** Ten of the twelve probe findings in §22.1 came from running the landed code
 against frames it had never seen. Five were the author's own errors caught before or just after they
 reached a section: P5's wrong hypothesis, P6's vacuous first measurement, and §21b's three fence
-defects. **The three fence defects are the ones worth noting**, because two of them — an off-by-one in a
-derived constant and an inexact quantile — would have shipped as code and are exactly the class of thing
-a document that only *described* its fixtures would have carried into the implementation.
+defects. The eng review adds two more of that class, both measured rather than argued: **`resample`
+demoting `case_id` from `string` to `object`**, which made §15.2's own dtype assertion fail on the
+specified implementation, and **`percentile_ci` calling `ci_min_draws` unqualified**, a `NameError` in
+the shipped module. Both would have shipped as code. Its other seven were contract gaps rather than
+defects — an undeclared type, a wrong count, two internal contradictions, an unusable parameter, a
+missing interface, and four uncovered branches.
 
-**Verification performed rather than asserted.** §21 carries 48 rows and every one reads `yes, run` or
+**What the eng review did NOT change.** No statistical claim. §8.2's percentile pin, §8.3's floor,
+§9.1's p-value and §13's snapping were independently re-derived and reproduced exactly (§21, new
+rows): `ci_min_draws` 40 / 20 / 29, `arange(40.0)` → `(0.0, 38.0)`, and the tail-49/50/51 sweep
+splitting the methods at 50 alone. The sixteen raise sites were re-scanned by AST and the fourteen
+`FAILURE_BUCKETS` keys match the tokens found exactly.
+
+**Verification performed rather than asserted.** §21 carries 62 rows and every one reads `yes, run` or
 `yes, read`; §20's Definition of done item 13 forbids a row reading `stated` that a run could have
-produced. Two claims in an earlier draft were refuted by their own verification and are recorded as such
-rather than deleted: the duplicated-index claim (§3.3) and P5's `nan` hypothesis (§22.1).
+produced. Three claims in earlier drafts were refuted by their own verification and are recorded as
+such rather than deleted: the duplicated-index claim (§3.4), P5's `nan` hypothesis (§22.1), and the
+pre-cast `resample` fence (§5.3, §21c item 6).
 
 **What is still not established.** Coverage at this cohort's size and at `N_BOOT`; coverage under
 near-separation, which is this cohort's actual condition; that the loop is right in any sense beyond
 coverage; and everything §15 asserts, since the implementation does not exist yet.
 
-**VERDICT: SPEC COMPLETE, ENG REVIEW NOT RUN.** The document is implementable from itself — every
-fixture is code, every pin is measured against a fixture in the repository, every number cites a §21 row
-— and it has not been read by anyone but its author.
+**VERDICT: ENG REVIEW CLEARED — ready to implement.** The document is implementable from itself: every
+fixture is code, every pin is measured against a fixture in the repository, every number cites a §21
+row, and the twelve privates, the twenty-six estimand keys and the eight tested keys are each stated
+once and counted. CEO, design and DX reviews are not applicable to a statistical engine with no user
+surface. **The cross-model tier is not owed** and §16 says why: the pass truncates to 30 KB of ~190 KB
+and reaches none of the decisions.
+
+**And the one question this review first recorded as open turned out not to be.** Group atomicity was
+flagged for the next PI round and then closed by reading `../out/stage0_data_inventory.md`: DECISION 7
+already says *"each binary outcome's risk difference, marginal odds ratio and augmented risk
+difference are one group"* and that Stage 9 §14's same-set constraint *"is satisfied by construction
+here"*. §15.10's draft was contradicting a recorded PI decision, which makes it a spec bug of the same
+class as the other eight rather than a judgement call. The same record confirms §7.1 independently:
+DECISION 7's *"the primary keeps 1998 draws"* is `N_BOOT` less the two propensity failures, so those
+two are counted against the primary and not dropped from its denominator.
 
 NO UNRESOLVED DECISIONS

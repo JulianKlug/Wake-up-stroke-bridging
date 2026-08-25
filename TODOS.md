@@ -690,7 +690,8 @@ overclaims.
 
 ## The bootstrap draw depends on the stratum label alphabet (Stage 10 §4.3)
 
-**What.** `bootstrap.resample` visits strata in `sorted(unique)` order, so the sequence in which the
+**What.** `bootstrap.resample` visits strata in the stratum column's own `groupby(sort=True)` order,
+so the sequence in which the
 generator is consumed — and therefore the entire set of replicates — is a function of the seed **and** of
 the stratum labels. Renaming a centre through `C.CENTER_RECODE` produces different, equally valid
 replicates.
@@ -740,3 +741,27 @@ design is a seed *sequence* — `SeedSequence.spawn(N_BOOT)` — which is reprod
 and is a different decision from the one §4.3 declined.
 
 **Status: open**, deferred with a named trigger.
+
+## Label the denominator on each row of the bootstrap audit grid (Stage 10 §16 item 9)
+
+**What.** `_diagnostics_table`'s block in the `bootstrap_replicates` audit entry renders four
+distributions and one per-outcome counter, over **three different denominators**, none of them labelled.
+
+**Why it is a trap.** Stage 10 §15.15 asserts that `n_alpha`, `polr_iterations`, `n_in_model` and
+`sum_w` sum to the **live** replicate count and not to `N_BOOT`, because a replicate killed by a
+`propensity.fit` failure never reaches `outcome.primary` and contributes a `None` that is dropped rather
+than counted as a zero. `or_corrected`'s denominator is that outcome's `Draws.n_attempted`, which is
+different again. A reader comparing the six-cutpoint count of 1907 against `N_BOOT` = 2000 concludes 93
+replicates fitted something else; the answer is 91 at five cutpoints plus however many never reached
+`polr`.
+
+**Why it is invisible today.** The propensity `FitError` rate is 2 of 2000 — 0.1% — so the three
+denominators currently differ by 2. That is exactly the condition under which the first run where they
+differ materially gets misread.
+
+**Cost.** One column of labels. Stage 10 §10.3's constraints apply to it: no `|` in any cell, and every
+row of the concatenated grid keeps the same cell count (§15.13).
+
+**Depends on / blocked by.** Stage 10 T9, the audit entry and its grid.
+
+**Status: open**, cheap, filed so the grid is not shipped ambiguous.

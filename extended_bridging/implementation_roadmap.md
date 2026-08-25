@@ -608,7 +608,14 @@ never substituted with a different estimator.** Surface the failure count and ra
 - **Stage 9 is the cost centre, not Stage 8 — and `model.design` is 72% of Stage 9.** Measured:
   24.05 ms per replicate for the five augmented outcomes against `propensity.fit`'s 13.39 ms and
   `primary`'s 4.73 ms; 71 ms wall-clock, about 142 s over `N_BOOT`. The four full-list outcomes share
-  an **identical** design matrix, so building it once per replicate is worth roughly 22 s.
+  an **identical** design matrix, so building it once per replicate is the one optimisation worth
+  taking. Stage 9 estimated it at roughly 22 s; **measured at Stage 10 it is 27.2 s** — 18.12 ms built
+  four times against 4.50 ms built once — of a serial total of about 130 to 145 s. And Stage 9
+  asserted the four designs are identical without stating the condition: it holds because all four
+  derive from `mrs_90d` and invariant 6 makes their `notna()` masks identical, which is asserted in
+  the suite rather than true by luck. Stage 10 checks it at the call site and **raises** if the masks
+  ever differ, rather than falling back to per-outcome designs and absorbing a broken invariant
+  silently [Stage 10 §2, §6.4].
 
 **And one thing Stage 10 found that neither earlier stage could.** Stage 8 §11 wrote that a replicate's
 `Σw` "is not measured here", that nothing was expected to move, and that if it did *"the visible symptom
