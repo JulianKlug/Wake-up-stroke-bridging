@@ -519,10 +519,28 @@ names them distinctly. This is the first thing Stage 10 will hit [Stage 9 §12.3
 
 ## Stage 10 — Bootstrap engine [§10]
 
+**Spec:** `specs/stage10_bootstrap_engine.md`.
+
 **Build.** Patient-level resampling stratified by centre, 2000 replicates, recorded seed. In every
 replicate refit the propensity model *and* the outcome regression, recompute weights, recompute every
 estimate. Percentile 95% intervals. **Replicates whose prespecified fit fails are dropped and counted;
 never substituted with a different estimator.** Surface the failure count and rate in the run log.
+
+- **The resampler gives each drawn row a distinct `case_id`, and Stage 6 is not amended.** That is the
+  fix for the blocker below: the guard's premise is about names, a replicate's rows are distinct draws,
+  and naming them distinctly is true rather than a concession. Measured: 26.0% of replicates raising
+  before, **0 of 2000** after, with the guard keeping its full strength on the point estimate
+  [Stage 10 §5.2, §5.3].
+- **The percentile definition is prespecified and is not numpy's default.** [§10] claims its p-value
+  agrees with its interval by construction; that is true of the empirical-CDF quantile and **false of
+  `method="linear"`**, which disagrees in 4.707% of constructed draw sets — every disagreement at the
+  exact tail count where p is 0.0500. And the quantile *argument* must be snapped: `100*((1−0.95)/2)`
+  is `2.500000000000002`, which moves the order-statistic index by one and flips the limit's sign at
+  that same tail count [Stage 10 §8.2].
+- **Each estimand group keeps its own replicate set.** The primary's `β` and six `RD_k` share one;
+  each binary outcome's `rd`, `OR` and `tau` share one, which is Stage 9's rule. Measured: calling
+  `secondary` whole loses all seven outcomes on 20 of 1998 replicates, and the per-outcome route is
+  also **cheaper** — 61.5 ms against 69.9 ms [Stage 10 §7.3].
 
 **p-values.**
 - Primary outcome: from the bootstrap distribution of `β`,
@@ -538,8 +556,13 @@ never substituted with a different estimator.** Surface the failure count and ra
   unpenalised ordinal fit on a separated sample converges rather than failing. **A failure counter
   reading zero is therefore not evidence that no replicate was degenerate** unless the G7 count is
   reported beside it.
-- **The distribution of `len(fit.alpha)` across replicates**, alongside those counters. The number of
-  fitted cutpoints is a property of the replicate — Stage 8 collapses the response to the levels
+- **The distribution of `len(fit.alpha)` across replicates**, alongside those counters. **Measured: it
+  is NOT degenerate — 1907 replicates fit six cutpoints and 91 fit five, 4.6%.** So 4.6% of the
+  primary's draws are on a coarser scale, which is [§8]'s proportional-odds assumption doing work in the
+  interval as well as in the point estimate, and is a second clause for [§16]'s constant-shift statement.
+  The consequence Stage 8 feared does *not* follow, because the drop rate is **zero**: a bound that
+  drops nothing at any cutpoint count cannot have a drop rate that is a function of its calibration
+  [Stage 10 §7.4]. The number of fitted cutpoints is a property of the replicate — Stage 8 collapses the response to the levels
   carrying positive weight — so a replicate missing a declared mRS level contributes a `β` on a coarser
   scale, and percentiles are taken across them. Under proportional odds they are the same parameter,
   which is [§8]'s own untested assumption. **And Stage 8's separation bound was calibrated at seven
@@ -554,25 +577,61 @@ never substituted with a different estimator.** Surface the failure count and ra
 **And four things Stage 9 hands over** [Stage 9 §14].
 - **`propensity.fit` raises `SchemaError` on 26.0% of stratified replicates as landed**, and by the rule
   immediately above, Stage 10 may not catch it. Fix the resampler or the guard before anything else;
-  Stage 9's own replicate measurements had to work around it and say so.
+  Stage 9's own replicate measurements had to work around it and say so. **Resolved by the resampler's
+  rename; 0 of 2000 after** [Stage 10 §5.2].
+- **And it is not the only one: `outcome._assert_estimable`'s S8 is a second `SchemaError` on the
+  path.** It raises when a binary outcome is constant on its [§11] population, which for `sich` — five
+  events in ninety-two — is a sparse replicate rather than a bug. Measured: **1.0% of replicates**,
+  `sich` 0.8% and `tici_2b_3` 0.2%, and the rename does not touch it because it is about data and not
+  about names. **S8 becomes a `FitError`**, which is the classification `outcome.py:897` already names
+  as open and `TODOS.md` set the trigger for. S6 and S7 stay `SchemaError` [Stage 10 §5.4].
 - **The augmentation paths are passed in, not recomputed** — `ph2` crosses the rare-minority threshold
-  in 46.1% of replicates.
+  in 46.1% of replicates as Stage 9 measured it, and in **40.6%** as Stage 10 measures it over 1998
+  replicates of the landed resampler. Same phenomenon, different stream; neither supersedes the other
+  [Stage 10 §6.3].
 - **The distribution of `max_abs_beta` from `m_a(X)`, per outcome, reported beside the failure counters.**
   The name is ASCII deliberately: it becomes a column in a rendered markdown table, `data._md_table` does
   no escaping, and a literal pipe in a cell breaks the table in a way byte-identity checks do not catch
   [Stage 9 §10.4, §15.14].
-  Stage 9 prescribes no bound, so nothing turns a separated nuisance fit into a countable failure: the
-  `FitError` rate is 0.3% for `sich` and 0% elsewhere while 15.1% of `sich`'s fits exceed `|β| = 14`. The
-  counters will read near-zero on outcomes whose nuisance models are degenerate a sixth of the time.
+  Stage 9 prescribes no bound, so nothing turns a separated nuisance fit into a countable failure, and
+  the counters will read near-zero on outcomes whose nuisance models are degenerate a sixth of the time.
   Same move as `len(fit.alpha)` above, same reason.
+  **An earlier form of this bullet attributed that tail to `sich`, and `sich` is unaugmented** — the
+  specified estimator fits it no `m_a(X)` at all, so it has no nuisance coefficient to be degenerate.
+  Stage 9's measurement reproduces exactly (41.8% above 8 against its 42.7%) but is of a model the
+  analysis does not fit. Measured on the five outcomes that *do* have one: the tail is on **`death_90d`
+  (max 59.54, 8.4% above 8) and `mrs_5_6_90d` (max 52.70, 11.6%)**, and the `m_a(X)` `FitError` rate is
+  0.05% and not 0.3%. The diagnostic is still required, for exactly Stage 9's reason, on those two
+  names [Stage 10 §10.2].
 - **Stage 9 is the cost centre, not Stage 8 — and `model.design` is 72% of Stage 9.** Measured:
   24.05 ms per replicate for the five augmented outcomes against `propensity.fit`'s 13.39 ms and
   `primary`'s 4.73 ms; 71 ms wall-clock, about 142 s over `N_BOOT`. The four full-list outcomes share
   an **identical** design matrix, so building it once per replicate is worth roughly 22 s.
 
+**And one thing Stage 10 found that neither earlier stage could.** Stage 8 §11 wrote that a replicate's
+`Σw` "is not measured here", that nothing was expected to move, and that if it did *"the visible symptom
+would be `iterations` dropping rather than anything failing"*. **Measured: `Σw` runs 4.90 to 37.48
+against the point estimate's 27.74, and `polr`'s iteration count runs down to 1 against Stage 8's
+measured 4-to-5 on every frame it had.** The symptom is present in the direction predicted. Nothing
+failed and no `β` is shown to be wrong — but `POLR_TOL` and `POLR_SCORE_TOL` are absolute, so at
+`Σw` = 4.90 the same tolerance is 5.7× looser relative to the objective. Not changed at Stage 10,
+because a convergence tolerance is part of [§8]'s estimator; filed with its trigger
+[Stage 10 §7.5].
+
 **Accept when.** On synthetic data with a known effect the interval covers the truth at roughly the
-nominal rate; the failure counter is exercised by a deliberately degenerate input; and no code path
-can return an estimate from a fallback estimator. And:
+nominal rate — measured 0.9600 (MC se 0.0113) unconfounded and 0.9400 (se 0.0137) confounded, both
+bracketing nominal, with the confounded arm scored against the **estimand** and not the generating
+coefficient, since a logistic model is not collapsible; the failure counter is exercised by a
+deliberately degenerate input; and no code path can return an estimate from a fallback estimator. And:
+
+- **Every estimand group's interval is taken over that group's own surviving draws**, and the surviving
+  count is reported beside every interval. An interval is not emitted at all below `ci_min_draws` — 40
+  at level 0.95, derived rather than chosen — which needs 98% of replicates to fail and is unreachable
+  on v7 [Stage 10 §7.3, §8.3].
+- **The percentile definition and the p-value are one decision, and the pin is tested at the
+  boundary.** A test asserts that at a smaller-tail count of exactly 50 the pinned method includes the
+  null while `method="linear"` excludes it — the one tail count that distinguishes them
+  [Stage 10 §8.2, §15.8].
 
 - **The separation count and the convergence count are both surfaced, and the separation one is
   exercised.** A test drives a replicate loop over a deliberately separable frame and asserts the G7

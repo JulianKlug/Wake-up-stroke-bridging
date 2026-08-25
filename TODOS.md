@@ -469,7 +469,26 @@ Stage 12; this one bites at Stage 10, which is next.
 
 **Depends on / blocked by.** Stage 10's replicate loop and its cutpoint-count report.
 
-**Status: open**, blocked on Stage 10.
+**ANSWERED IN PART 2026-08-25 — the cutpoint-count report exists (Stage 10 §7.4) and the distribution is
+NOT degenerate: 1907 replicates of 1998 fit six cutpoints and 91 fit five, 4.6%.** Stage 8 §11's stated
+consequence was that *"if that distribution is not degenerate at six cutpoints, the drop rate is partly a
+function of a bound measured on frames unlike the ones being dropped"*. **That half is closed and the
+answer is that it does not bite: the drop rate is zero.** G7 fired 0 times in 1998 replicates and so did
+non-convergence, so the bound drops nothing at any cutpoint count and there is no rate for its
+calibration to be a function of.
+
+What is *not* closed is the comparability question, which is a different one and is [§8]'s rather than
+this item's: 4.6% of the primary's draws are a `β` on a five-cutpoint scale, and percentiles are taken
+across them. Under proportional odds they are the same parameter; [§8] prescribes no test of that and
+[§15] declines one. It is filed as Stage 10 §16 item 5 and it reaches a reader through [§16]'s
+constant-shift statement, not through a re-measurement of the band.
+
+**Trigger, for what remains.** A cohort or a Stage 12 design on which G7 actually fires. Then the band's
+calibration decides which replicates are dropped and the cutpoint-count distribution becomes load-bearing
+rather than descriptive.
+
+**Status: open**, narrowed — the measurement is done and the consequence it was filed against did not
+occur.
 
 ## Make the pipeline resamplable: `propensity.fit` raises on 26.0% of stratified replicates
 
@@ -502,7 +521,18 @@ on the strength of a rule nobody has written down.
 
 **Depends on / blocked by.** Nothing. This is actionable now and is the first thing Stage 10 hits.
 
-**Status: open**, and it is a blocker.
+**RESOLVED 2026-08-25 by the Stage 10 spec (§5.2, §5.3), and the second candidate was chosen against.**
+The resampler gives each drawn row a distinct `case_id`; `propensity.py` is not amended and
+`_record_exclusion` keeps its full strength on the point estimate. The deciding argument is that the
+guard protects a log somebody reads, and a replicate's `Audit` is a throwaway that is never written — so
+weakening it there would weaken it where it does real work, while renaming satisfies it truthfully: the
+k-th draw of a patient *is* a distinct row. Measured: 26.0% of replicates raising before, **0 of 400 and
+0 of 2000** after. Recorded as a PI decision in Stage 10 §17 with its reversible alternative.
+
+**And it was not the only blocker.** Stage 10 §5.4 found a second `SchemaError` on the same path — S8 —
+which the rename does not touch; see the item below.
+
+**Status: closed.**
 
 ## Decide whether a constant outcome on a replicate is `SchemaError` or `FitError` (Stage 9 S8)
 
@@ -519,9 +549,17 @@ understates it.
 **Trigger.** The first Stage 10 replicate that hits it. If the rate is non-negligible, `FitError` is
 almost certainly right and the change is one line plus Stage 9 §4.4 and §15.1.
 
-**Status: open**, blocked on Stage 10.
+**RESOLVED 2026-08-25 by the Stage 10 spec (§5.4): the trigger fired and the rate is not negligible.**
+Measured over 1998 replicates: `sich` 16 (0.8%), `tici_2b_3` 3 (0.2%), **19 replicates in total, 1.0%**
+— and by Stage 8 §11 a `SchemaError` may not be caught, so as landed this was a second blocker of the
+same shape as the one above. S8 becomes a `FitError`. Stage 9's own reason for the other choice is what
+settles it: it objected to *returning* a plausible number, and `FitError` returns nothing — it drops the
+replicate and counts it, which is [§10]'s mechanism for exactly this. S6 and S7 stay `SchemaError`;
+neither fired in 2000 replicates.
 
-## Establish whether `sich`'s `max|beta|` tail leaves its interval usable (Stage 9 §9.6)
+**Status: closed.**
+
+## Establish whether `death_90d`'s and `mrs_5_6_90d`'s `max|beta|` tail leaves their intervals usable (Stage 9 §9.6)
 
 **What.** Stage 9 prescribes **no bound** on the `m_a(X)` coefficient, on two grounds: there is no empty
 band to calibrate one from — `sich`'s `max|β|` runs continuously from 0.8558 to 80.9825 across
@@ -536,12 +574,23 @@ study**: its `max|β|` reached only 9.458, 11.475 and 3.466, because independent
 covariates carry none of the centre structure that drives the workbook's near-separation. So the RMSE
 table is measured on frames unlike the ones the tail comes from.
 
-**Trigger.** Stage 10 reporting the `max|β|` distribution per outcome (Stage 9 §14 item 3), which is when
-the question becomes answerable from replicates already drawn rather than from a second synthetic sweep.
-If `sich`'s replicate-level `tau` is uncorrelated with its `max|β|`, this closes as theoretical — and
-should be closed explicitly.
+**AMENDED 2026-08-25 — this item named the wrong outcome, and Stage 10 §10.2 is why.** `sich` is
+**unaugmented**: the specified estimator fits it no `m_a(X)`, so it has no nuisance coefficient and no
+tail. Stage 9's measurement reproduces almost exactly — 41.8% above 8 and 16.2% above 14, against its
+42.7% and 15.1% — but it is a measurement of a model the analysis does not fit, obtained by fitting one
+anyway. The real tail is on the two augmented **safety** outcomes: `death_90d` reaches 59.54 with 8.4%
+above 8, and `mrs_5_6_90d` reaches 52.70 with 11.6%. The `m_a(X)` `FitError` rate is 0.05%, not 0.3%.
 
-**Status: open**, blocked on Stage 10.
+Stage 9's structural argument is untouched and is still why no bound is added: `m_a(X)`'s *predictions*
+enter `tau`, predictions are bounded in [0, 1], so there is no `exp(β)`-style tail in the estimate
+however large the coefficient gets. What is unestablished is unchanged too — a separated `m_a` is
+over-fitted, so its correction term removes signal rather than residual confounding.
+
+**Trigger.** The replicate-level correlation between an outcome's `tau` draws and its `max_abs_beta`,
+per outcome, computable from draws Stage 10 already takes. If `death_90d`'s and `mrs_5_6_90d`'s `tau` is
+uncorrelated with their `max_abs_beta`, this closes as theoretical — and should be closed explicitly.
+
+**Status: open**, and now actionable: Stage 10 reports the distribution (Stage 10 §10.2).
 
 ## TICI's reduced `m_a(X)` is five parameters only while USZ contributes no records
 
@@ -561,3 +610,131 @@ test rather than living in a paragraph, but nothing prevents it.
 The response is a PI decision about the reduced specification, not a code change.
 
 **Status: open**, contingent.
+
+## Make `POLR_TOL` and `POLR_SCORE_TOL` relative to the weight total (Stage 10 §7.5)
+
+**Surfaced by:** the Stage 10 spec's probe round, 2026-08-25. Stage 8 §11 predicted this exactly and
+could not measure it: *"A stratified resample of 92 records has a similar `Σw` by construction, so
+nothing is expected to move — but 'expected' is not 'measured' ... If a replicate's `Σw` came in an order
+of magnitude low, the same absolute tolerance would be an order of magnitude looser relative to the
+objective, and the visible symptom would be `iterations` dropping rather than anything failing."*
+
+**Measured** (Stage 10 §7.5): `Σw` over `in_model` runs from **4.9045** to 37.4814 across 1998
+replicates, median 23.5118, against the point estimate's 27.736623 — a factor of 5.7 at the low end, not
+an order of magnitude but well outside "similar by construction". And `polr`'s iteration count runs
+**1** to 4, where Stage 8 measured 4 to 5 on every frame it had. The predicted symptom is present in the
+predicted direction.
+
+**What is and is not established.** Nothing shows any replicate's `β` is wrong: every fit reported
+`converged_on`, the score criterion is on the gradient, and a one-iteration Newton step from a good start
+value is normal on a smooth small problem. What is established is that "nothing is expected to move" was
+wrong as stated, and that a relative-tolerance form is now a question with evidence rather than a style
+preference.
+
+**Why it was not done at Stage 10.** A convergence tolerance is part of [§8]'s estimator and is refit in
+every replicate; changing it changes every estimate. That is a [§8] decision, not a [§10] one.
+
+**Trigger.** A replicate that fails to converge, or a Stage 12 design where `Σw` is materially larger —
+[§14a] uses unit weights over a bigger population, so its objective is on a different scale again.
+
+**Status: open**, and it is a PI/[§8] decision rather than a code change.
+
+## Give `model.FitError` a `code` field instead of classifying by message prefix (Stage 10 §7.2)
+
+**What.** Stage 8 §11 requires the separation count reported separately from the convergence count, so
+Stage 10 must classify a caught `FitError`. `FitError` carries nothing to classify by: it is
+`class FitError(RuntimeError)` with no attributes (`model.py:89`), and all **sixteen** raise sites —
+fourteen in `model.py`, two in `outcome.py` — identify themselves by the first token of the message
+(`G6`, `G7`, `O1`-`O6`, `F3`, `F4`, `F6`, `polr:`, `Firth:`, plus `S8`). So `C.FAILURE_BUCKETS` maps
+prefixes and `test_bootstrap.py` §15.6 scans both modules to assert every token found is in the map.
+
+**Why the scan is a mitigation and not a fix.** It makes a *reworded* message fail loudly, which is the
+failure mode that matters. It does not make the classification structural, and a stage that needed to
+branch on a failure kind rather than count it would still be parsing English.
+
+**That this is a real risk and not a hypothetical:** an earlier draft of the Stage 10 spec stated fourteen
+raise sites and omitted `G6` from the bucket map entirely. The scan found it — before the scan existed as
+a test, while it was still a paragraph being checked.
+
+**Why it was not done at Stage 10.** Sixteen raise sites across `model.py` — the module Stages 6, 8, 9
+and 12 all depend on — amended on the strength of a diagnostic.
+
+**Trigger.** The first bucket that is wrong, or the first stage that needs to branch on a failure kind.
+
+**Status: open.**
+
+## Measure bootstrap coverage under near-separation (Stage 10 §8.4, §16 item 4)
+
+**What.** Stage 10 §8.4 measures percentile-interval coverage on two synthetic designs — 0.9600
+(MC se 0.0113) unconfounded and 0.9400 (se 0.0137) confounded — both bracketing nominal. Neither design
+has **strata**, so `resample`'s stratification is unexercised by the coverage test, and neither is
+**near-separated**.
+
+**Why that is the gap that matters.** [§13]'s amendment of 2026-08-24 establishes that treatment in this
+cohort is nearly determined by centre — 30 of 41 bridged at HUG against 2 of 31 at Lugano — which is why
+[§7] prescribes a Firth-penalised propensity model and why overlap weights do not balance exactly. So the
+one condition that most characterises what the [§7] model is actually fitting is the one condition the
+coverage measurement does not reproduce. A percentile bootstrap over a near-separated propensity model
+is where coverage would degrade if it degrades anywhere.
+
+**Cost.** Stage 10's two designs are 90 000 fits each and 270 s each. A stratified, near-separated design
+is the same order.
+
+**Trigger.** Before the primary interval is reported, if anyone wants a coverage claim about *this*
+analysis rather than about the procedure. Stage 10 §8.4 states its own limits, so nothing currently
+overclaims.
+
+**Status: open.**
+
+## The bootstrap draw depends on the stratum label alphabet (Stage 10 §4.3)
+
+**What.** `bootstrap.resample` visits strata in `sorted(unique)` order, so the sequence in which the
+generator is consumed — and therefore the entire set of replicates — is a function of the seed **and** of
+the stratum labels. Renaming a centre through `C.CENTER_RECODE` produces different, equally valid
+replicates.
+
+**Why it is not guarded.** The alternative is to range over `C.CENTER_ORDER`, a declared tuple, which is
+what `data.py`'s byte-identity rules prescribe for column loops. But `resample` is general in its stratum
+because [§14a] and [§14b] resample the same way over a population this stage never sees, and a general
+function cannot name this study's centres.
+
+**Consequence.** The run summary records the seed, and [§16] requires it. After a `CENTER_RECODE` edit
+the seed alone no longer identifies the draw.
+
+**Trigger.** Any change to `CENTER_RECODE` or `CENTER_ORDER`. The cheap response is to record the sorted
+stratum labels in the run summary beside the seed.
+
+**Status: open**, low consequence, stated so it is not rediscovered as a reproducibility failure.
+
+## Fix the stale `data.py:255` citation in `propensity.py`
+
+**What.** `propensity.py:413`, inside `_record_exclusion`'s docstring, cites `data.py:255` for
+`Audit.record`'s identifier normalisation. That normalisation is at `data.py:271`. `data.py` is unchanged
+since the Stage 9 spec commit (`5fe1750`), so the reference drifted between Stage 6 and now.
+
+**Why it was not fixed at Stage 10.** Stage 10 §5's central claim is that `propensity.py` has a
+**zero-line diff** — the blocker was fixed in the resampler precisely so that Stage 6's guard keeps its
+meaning and its strength untouched — and Stage 10's Definition of done item 2 checks it. Spending that
+claim on a comment is a bad trade.
+
+**Trigger.** The next commit that edits `propensity.py` for any reason.
+
+**Status: open**, trivial, deliberately deferred.
+
+## Parallelise the bootstrap (Stage 10 §18)
+
+**What.** Stage 10's engine is serial and single-threaded: about **145 s** for `N_BOOT` = 2000 with the
+shared-design optimisation, of which the seven binary outcomes are 123 s and `model.design` was 27.2 s
+before it was shared once per replicate.
+
+**Why not now.** 145 s does not justify the determinism risk. Every parallel implementation makes the
+stream a function of the scheduling unless each replicate is separately seeded, and Stage 10 §4.3
+declines per-replicate seeding for its own reason: it makes the draw a function of an index a later edit
+to the loop can renumber, and the failure is silent.
+
+**Trigger.** Stage 12's bootstrap, which resamples a larger population; or the [§13] sensitivity suite,
+which is five more `run` calls and turns 145 s into something over ten minutes. At that point the right
+design is a seed *sequence* — `SeedSequence.spawn(N_BOOT)` — which is reproducible under any scheduling
+and is a different decision from the one §4.3 declined.
+
+**Status: open**, deferred with a named trigger.
