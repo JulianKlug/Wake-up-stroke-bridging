@@ -522,6 +522,8 @@ on the strength of a rule nobody has written down.
 **Depends on / blocked by.** Nothing. This is actionable now and is the first thing Stage 10 hits.
 
 **RESOLVED 2026-08-25 by the Stage 10 spec (§5.2, §5.3), and the second candidate was chosen against.**
+Recorded as a PI decision in Stage 10 §17; it is not a numbered DECISION, because it is a choice about
+this stage's own code rather than about the analysis.
 The resampler gives each drawn row a distinct `case_id`; `propensity.py` is not amended and
 `_record_exclusion` keeps its full strength on the point estimate. The deciding argument is that the
 guard protects a log somebody reads, and a replicate's `Audit` is a throwaway that is never written — so
@@ -549,7 +551,7 @@ understates it.
 **Trigger.** The first Stage 10 replicate that hits it. If the rate is non-negligible, `FitError` is
 almost certainly right and the change is one line plus Stage 9 §4.4 and §15.1.
 
-**RESOLVED 2026-08-25 by the Stage 10 spec (§5.4): the trigger fired and the rate is not negligible.**
+**RESOLVED 2026-08-25 — DECISION 6 (PI): the trigger fired and the rate is not negligible.**
 Measured over 1998 replicates: `sich` 16 (0.8%), `tici_2b_3` 3 (0.2%), **19 replicates in total, 1.0%**
 — and by Stage 8 §11 a `SchemaError` may not be caught, so as landed this was a second blocker of the
 same shape as the one above. S8 becomes a `FitError`. Stage 9's own reason for the other choice is what

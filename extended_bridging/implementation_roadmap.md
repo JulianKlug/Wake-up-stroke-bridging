@@ -537,7 +537,8 @@ never substituted with a different estimator.** Surface the failure count and ra
   exact tail count where p is 0.0500. And the quantile *argument* must be snapped: `100*((1−0.95)/2)`
   is `2.500000000000002`, which moves the order-statistic index by one and flips the limit's sign at
   that same tail count [Stage 10 §8.2].
-- **Each estimand group keeps its own replicate set.** The primary's `β` and six `RD_k` share one;
+- **Each estimand group keeps its own replicate set** — DECISION 7 (PI, 2026-08-25). The primary's `β`
+  and six `RD_k` share one;
   each binary outcome's `rd`, `OR` and `tau` share one, which is Stage 9's rule. Measured: calling
   `secondary` whole loses all seven outcomes on 20 of 1998 replicates, and the per-outcome route is
   also **cheaper** — 61.5 ms against 69.9 ms [Stage 10 §7.3].
@@ -583,8 +584,9 @@ never substituted with a different estimator.** Surface the failure count and ra
   path.** It raises when a binary outcome is constant on its [§11] population, which for `sich` — five
   events in ninety-two — is a sparse replicate rather than a bug. Measured: **1.0% of replicates**,
   `sich` 0.8% and `tici_2b_3` 0.2%, and the rename does not touch it because it is about data and not
-  about names. **S8 becomes a `FitError`**, which is the classification `outcome.py:897` already names
-  as open and `TODOS.md` set the trigger for. S6 and S7 stay `SchemaError` [Stage 10 §5.4].
+  about names. **S8 becomes a `FitError`** — DECISION 6 (PI, 2026-08-25) — which is the
+  classification `outcome.py:897` already names as open and `TODOS.md` set the trigger for. S6 and S7
+  stay `SchemaError` [Stage 10 §5.4].
 - **The augmentation paths are passed in, not recomputed** — `ph2` crosses the rare-minority threshold
   in 46.1% of replicates as Stage 9 measured it, and in **40.6%** as Stage 10 measures it over 1998
   replicates of the landed resampler. Same phenomenon, different stream; neither supersedes the other

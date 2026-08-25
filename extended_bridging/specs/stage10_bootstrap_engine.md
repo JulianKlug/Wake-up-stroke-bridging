@@ -16,7 +16,10 @@ Stage 9 handed over is one of *two*, and the second is not a resampler problem a
 second symptom Stage 8 predicted and could not measure), §8.2 (`numpy`'s default percentile definition
 breaks [§10]'s own claim that the p-value agrees with the interval) and §10.2 (Stage 9's `max|beta|`
 tail is real, reproducible, and attributed to an outcome the specified estimator fits no model for).
-§21 names each. Every number below was produced by running code; none is carried — where a Stage 8 or
+§21 names each. **Two of its decisions were put to the PI and confirmed on 2026-08-25 — DECISION 6
+(S8 becomes a `FitError`) and DECISION 7 (per-outcome replicate sets) — and the same round answered a
+standing open decision: the drop rate a penalised ordinal fit would reduce is measured at zero.**
+Every number below was produced by running code; none is carried — where a Stage 8 or
 Stage 9 number is quoted for comparison it is labelled as theirs and re-measured here. It is the **sole
 source for the Stage 10 implementation**: everything the implementer needs is here, and anything not
 here is not to be invented.
@@ -628,7 +631,8 @@ Measured over 1998 live replicates:
 by the rule immediately above, **Stage 10 may not catch it** — so as landed, the three options are the
 same three Stage 9 enumerated for the first blocker, and all three are still prohibited.
 
-**S8 becomes `FitError`, and the argument for it is one Stage 9 wrote itself.** `_assert_estimable`'s
+**S8 becomes `FitError` — DECISION 6 (PI, 2026-08-25) — and the argument for it is one Stage 9 wrote
+itself.** `_assert_estimable`'s
 docstring already names this as open: *"S8 is `SchemaError` and §16 item 3 is the open question about
 whether it should be FitError"* (`outcome.py:897`). `TODOS.md` states the criterion and the trigger —
 *"The first Stage 10 replicate that hits it. If the rate is non-negligible, `FitError` is almost
@@ -852,7 +856,8 @@ a failure drops that replicate for every estimand or only for the one that faile
 is a decision, and Stage 9 §14 constrains it in exactly one place: *"never take percentiles of `tau` and
 of `rd` from different replicate sets, since the two are reported as a comparison."*
 
-**Each estimand group keeps its own replicate set.** The primary's `β` and six `RD_k` are one group —
+**Each estimand group keeps its own replicate set** — DECISION 7 (PI, 2026-08-25). The primary's `β`
+and six `RD_k` are one group —
 they come from one `polr` fit and a comparison across them is [§16]'s constant-shift statement, so they
 must share draws. Each binary outcome's `rd`, `odds_ratio` and `augmented` are one group, which is Stage
 9's rule satisfied exactly. Different outcomes do not share a set.
@@ -2101,17 +2106,21 @@ than seven occupied mRS categories" against §7.4's measurement.
   amend `propensity._record_exclusion`, and the consequence of reversing is that the guard weakens on
   the point estimate too, where §5.2 argues it is doing real work.
 - **Whether a failure drops a replicate for one estimand or for all.** §7.3 keeps per-outcome sets.
-  [§10] is silent and Stage 9 §14 constrains only that `tau` and `rd` share a set. **PI decision,
-  2026-08-25. PI-reversible**: reversing costs 20 replicates in 1998 — 1.0% — across all seven binary
-  outcomes rather than across the one that failed, and costs 8.4 ms per replicate more (§2).
+  [§10] is silent and Stage 9 §14 constrains only that `tau` and `rd` share a set. **DECISION 7 (PI,
+  2026-08-25). PI-reversible**: reversing costs 20 replicates in 1998 — 1.0% — across all seven binary
+  outcomes rather than across the one that failed, and costs 8.4 ms per replicate more (§2). Reversing
+  it would also remove the need for `secondary`'s `collect` parameter entirely, leaving S8 as the only
+  change to `outcome.py`.
 - **Whether the augmented estimate gets its own p-value.** §9.2 gives it an interval and no p. [§10]
   names the risk-difference scale and one test per outcome; two would be a multiplicity [§13] is not
   told about. **PI decision, PI-reversible**, and the pilot's implementation did give it one (§19).
-- **Whether S8 should exist at all rather than be reclassified.** §5.4 makes it a `FitError`. The third
-  option — estimate the constant outcome and report a risk difference of exactly 0 — is not taken,
-  because Stage 9 §6.2 measured that the correction then returns a finite odds ratio near 1 for an
-  outcome with no contrast in it. **PI decision, [§8]-adjacent, PI-reversible**, and §8.2 records that
-  reversing it makes exact-zero draws reachable and the tie behaviour live.
+- **Whether S8 should exist at all rather than be reclassified.** §5.4 makes it a `FitError`. Two
+  alternatives were put and both declined: estimating the constant outcome, because Stage 9 §6.2
+  measured that the correction then returns a finite odds ratio near 1 for an outcome with no contrast
+  in it; and rejecting-and-redrawing such replicates, which conditions the resample on the outcome and
+  biases every estimate rather than only the affected one. **DECISION 6 (PI, 2026-08-25).
+  PI-reversible**, and §8.2 records that reversing it makes exact-zero draws reachable and the tie
+  behaviour live.
 - **How Stages 12 and 13 stratify.** §12.2. [§14a]'s population includes a centre with no treated
   patients, and whether such a stratum is resampled is that stage's question.
 - **Nothing about the balance diagnostics.** No interval on an SMD, and DECISION 4's exceedance is
@@ -2381,7 +2390,10 @@ with the measurement beside it is the [§8]-amendment-free way to keep it correc
 rule (§7.3), the identifier scheme (§5.2), the augmented estimate's lack of a p-value (§9.2) and S8's
 reclassification (§5.4) are recorded as **PI decisions in §17** rather than as protocol changes, because
 [§10] and [§8] delegate all four by silence rather than specifying them wrongly — which is Stage 9 §22's
-own test for the difference.
+own test for the difference. **Two of the four were put to the PI and confirmed on 2026-08-25** and are
+now **DECISION 6** (S8's reclassification) and **DECISION 7** (per-outcome replicate sets) in
+`../out/stage0_data_inventory.md`. The other two — the identifier scheme and the augmented estimate's
+lack of a p-value — stand as this document's decisions and remain PI-reversible.
 
 ### 22.1 The probe round — 2026-08-25
 
