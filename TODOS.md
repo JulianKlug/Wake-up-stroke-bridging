@@ -355,10 +355,10 @@ run, so nothing there is owed either. The separate `TODOS` item above asking for
 
 ---
 
-## Pin the primary estimate once the analysis is locked
+## Pin the primary AND the secondary estimates once the analysis is locked
 
 **Surfaced by:** writing `extended_bridging/specs/stage8_primary_outcome_estimator.md`, 2026-08-21
-(§4.3 and §15 there).
+(§4.3 and §15 there). **Extended to Stage 9, 2026-08-25** — see the Stage 9 half at the end.
 
 **What.** Add the workbook's `β`, `exp(β)` and six `RD_k` as literal regression pins in
 `extended_bridging/tests/test_outcome.py` §14.12, and to that spec's §20 verification table, replacing
@@ -397,7 +397,29 @@ strictly ascending, `|β|` is inside `POLR_MAX_ABS_BETA` so **G7 did not fire on
 orientation agrees between the two scales through the weighted mean. What none of them does is pin a
 magnitude, which is exactly the hole this item closes.
 
-**Status: blocked on the PI**, and on nothing else.
+### The Stage 9 half, added 2026-08-25 (Stage 9 §4.3, §16 item 5)
+
+**The same hole, seven more estimates.** Stage 9 inherits Stage 8 §4.3's position and narrows it: no
+*weighted* quantity appears in `specs/` — no weighted proportion, no risk difference, no odds ratio, no
+`tau` — so there is no pinned regression number on any of the **seven binary** estimates either. The
+marginal counts in Stage 9 §4.2 do appear, because they do not decompose by arm.
+
+**What to add when the analysis locks.** For each of `C.BINARY_OUTCOMES`: the two weighted proportions,
+`RD_w`, `OR_w`, and `tau` on the five augmented outcomes, as literal pins in `test_outcome.py`'s §15
+sections and in Stage 9's §21 table.
+
+**The mitigation that exists today, and its limit.** Stage 9 §15.0.2's golden vector is a 24-record
+constructed frame — round 3 wrote it into the spec as code, so it is reproducible — pinning `RD_w`
+0.2850627657, `OR_w` 3.2404025938 and `tau` 0.2233300473 / 0.0402879733 across two covariate lists.
+Like Stage 8's, it exercises the same arithmetic at a different scale: 24 records against 92, a minority
+cell of 11 against six values from 5 to 42, and a written-out propensity score against a fitted one. It
+cannot witness a defect that appears only at the workbook's scale.
+
+**Why the two halves are one item.** Both are the same decision by the same person at the same moment —
+the PI seeing the estimates and locking the analysis — and both are discharged by one commit over
+`test_outcome.py`. Splitting them would put two entries in this file whose triggers are identical.
+
+**Status: blocked on the PI**, and on nothing else. Both halves.
 
 ---
 
@@ -448,3 +470,94 @@ Stage 12; this one bites at Stage 10, which is next.
 **Depends on / blocked by.** Stage 10's replicate loop and its cutpoint-count report.
 
 **Status: open**, blocked on Stage 10.
+
+## Make the pipeline resamplable: `propensity.fit` raises on 26.0% of stratified replicates
+
+**What.** `propensity._record_exclusion` (`propensity.py:400-432`) compares the number of **distinct**
+excluded `case_id`s against the number of excluded rows and raises `SchemaError` when they differ. Its
+docstring states the premise: *"a duplicated or missing case_id is forbidden by Stage 2's A2, so this is
+a belt over those braces."* A2 forbids duplicates **in the workbook**. A patient-level bootstrap
+replicate contains duplicates by construction, so the premise does not hold for the population of frames
+[§10] feeds this function.
+
+**Measured** (Stage 9 §12.3): the cohort has exactly one covariate-incomplete record, in Lugano's stratum
+of 31. Over 400 stratified replicates, **104 raised — 26.0%** — against an analytic 26.4% for the
+probability of drawing a given row at least twice from 31. The match identifies the cause exactly.
+
+**Why it blocks.** Stage 8 §11 hands over to Stage 10 that *"`FitError` is the droppable failure and
+`SchemaError` is NOT — a `SchemaError` from `primary` or `propensity.fit` is a bug in the resampler, not
+a sparse replicate, and catching it would drop replicates for a reason that is not about the data."* So
+Stage 10's three options as landed are all prohibited: crash on a quarter of its replicates, catch a
+`SchemaError` it has prespecified it must not catch, or drop 26% of replicates for a reason that is not
+about the data.
+
+**Two candidate fixes**, and choosing between them is a decision about what a replicate's log means:
+teach the guard that a replicate's rows are distinct draws, or give each drawn row a distinct name. Stage
+9's replicate measurements adopted the second **provisionally, in a scratchpad**, which is why four rows
+of its §21 carry a caveat.
+
+**Not fixed at Stage 9** because it is a Stage 6 amendment justified by a Stage 10 requirement that is
+not yet specified, and putting it in the Stage 9 commit would land a change to Stage 6's audit contract
+on the strength of a rule nobody has written down.
+
+**Depends on / blocked by.** Nothing. This is actionable now and is the first thing Stage 10 hits.
+
+**Status: open**, and it is a blocker.
+
+## Decide whether a constant outcome on a replicate is `SchemaError` or `FitError` (Stage 9 S8)
+
+**What.** Stage 9 §4.4's precondition S8 raises `SchemaError` when a binary outcome is constant on its
+[§11] population. Stage 9 §16 item 3 calls this *"the sharpest open question the stage leaves"*.
+
+**The case both ways.** For `FitError`: a constant outcome on a resample is a sparse replicate, not a
+bug, and [§10] already has the mechanism — drop and count. `sich` has 5 events in 92 and is where it
+would happen. For `SchemaError`, which is what Stage 9 chose: a constant outcome makes the odds ratio
+undefined at both ends simultaneously, and Stage 9 §6.2 measured that `0/0` and `inf/inf` both come back
+as `nan` from numpy **silently**, so the frame produces no estimate by any route and calling it sparse
+understates it.
+
+**Trigger.** The first Stage 10 replicate that hits it. If the rate is non-negligible, `FitError` is
+almost certainly right and the change is one line plus Stage 9 §4.4 and §15.1.
+
+**Status: open**, blocked on Stage 10.
+
+## Establish whether `sich`'s `max|beta|` tail leaves its interval usable (Stage 9 §9.6)
+
+**What.** Stage 9 prescribes **no bound** on the `m_a(X)` coefficient, on two grounds: there is no empty
+band to calibrate one from — `sich`'s `max|β|` runs continuously from 0.8558 to 80.9825 across
+replicates, 42.7% above 8, 15.1% above 14 — and none is needed, because `m_a(X)` is a nuisance whose
+*predictions* enter `tau` and predictions are bounded in [0, 1], so there is no `exp(β)`-style tail.
+
+**What is unestablished.** A separated `m_a` is an over-fitted one: its fitted values reproduce `Y`, so
+the correction term removes signal rather than residual confounding. Stage 9 measured the cost on
+synthetic frames — augmentation raised RMSE by 1.06x to 1.19x against the unaugmented estimator on a
+constant-risk-difference truth — but **that construction did not reproduce the condition it was built to
+study**: its `max|β|` reached only 9.458, 11.475 and 3.466, because independent standard-normal
+covariates carry none of the centre structure that drives the workbook's near-separation. So the RMSE
+table is measured on frames unlike the ones the tail comes from.
+
+**Trigger.** Stage 10 reporting the `max|β|` distribution per outcome (Stage 9 §14 item 3), which is when
+the question becomes answerable from replicates already drawn rather than from a second synthetic sweep.
+If `sich`'s replicate-level `tau` is uncorrelated with its `max|β|`, this closes as theoretical — and
+should be closed explicitly.
+
+**Status: open**, blocked on Stage 10.
+
+## TICI's reduced `m_a(X)` is five parameters only while USZ contributes no records
+
+**What.** The [§8] amendment of 2026-08-07 specifies TICI 2b–3's reduced model as *"treatment + `center`
++ `atrial_fib` — five parameters"*. Measured (Stage 9 §7.2), that is correct — and correct by accident.
+`center` has **four** declared levels (`FACTOR_LEVELS["center"]`, reference `HUG`), which is three
+dummies; `model.design` then drops `center_USZ` as constant on every design because USZ contributes no
+records to the ATO population (strata: HUG 41, Lugano 31, CHUV 21). So the fitted design is 4 columns
+plus the intercept `firth` prepends = 5.
+
+**Why it matters.** If USZ ever contributes a single record, the same declared model becomes **6
+parameters against 6 non-events** — saturated — and the amendment's stated arithmetic silently stops
+holding. Stage 9 §15.9's companion asserts the count against both frames so the contingency fails a
+test rather than living in a paragraph, but nothing prevents it.
+
+**Trigger.** Any workbook revision that adds a USZ record, or any change to `FACTOR_LEVELS["center"]`.
+The response is a PI decision about the reduced specification, not a code change.
+
+**Status: open**, contingent.

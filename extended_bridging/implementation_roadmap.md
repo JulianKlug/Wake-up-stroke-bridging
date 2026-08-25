@@ -391,9 +391,20 @@ git — is stated rather than minimised, with the trigger under which the pins b
 
 ## Stage 9 — Secondary binary estimators [§8]
 
+**Spec:** `specs/stage9_secondary_binary_estimators.md`.
+
 **Build.**
 - Weighted risk difference: difference of weighted means.
-- Weighted marginal odds ratio, kept finite when a weighted proportion reaches 0 or 1.
+- Weighted marginal odds ratio, **and "kept finite" is a rule and not an instruction**: when a weighted
+  proportion reaches 0 or 1, `OR_CONTINUITY` = 0.5 is added to all four weighted pseudo-counts —
+  Haldane–Anscombe — and the correction is **flagged and printed beside the estimate**, with the two
+  uncorrected proportions, wherever the estimate appears. It fires only on a degenerate proportion, so
+  an interior estimate is bit-for-bit uncorrected, and it is never applied to a `nan` proportion: an
+  arm carrying no positive weight has no cell to correct. Measured: the branch is **unreachable on v7**
+  and fires in 17.0% of stratified replicates for `sich` and 13.0% for `tici_2b_3`, so this is
+  materially a choice about two *intervals* and barely one about any point estimate. The alternative —
+  report the odds ratio as undefined — is the [§8] convention this repository follows elsewhere and is
+  recorded as PI-reversible [Stage 9 §6.3, §6.4, §17].
 - An outcome regression `m_a(X)`: treatment main effect plus **the [§6] covariate set**, linear terms,
   Firth logistic. Take the covariate list from the same configuration entry the propensity model uses,
   so the two cannot drift apart.
@@ -407,20 +418,104 @@ git — is stated rather than minimised, with the trigger under which the pins b
       tau = Σ₁ w(Y − m₁)/Σ₁ w  −  Σ₀ w(Y − m₀)/Σ₀ w  +  Σ h(m₁ − m₀)/Σ h
 
   with `h = e(1 − e)`, the same tilting function as the weights.
-- A guard: **outcomes whose minority cell — `min(events, non-events)` — is below 10 are not
-  augmented** [§8, as amended]. Keying this on the event count alone would let TICI 2b–3 through with
-  6 non-events.
+- A guard: **outcomes whose minority cell — `min(events, non-events)` — is below 10 *and which declare
+  no override* are not augmented** [§8, as amended]. Keying this on the event count alone would let
+  TICI 2b–3 through with 6 non-events. **An earlier form of this bullet said "below 10 are not
+  augmented" and that was wrong**: the [§8] amendment's item 2 says such an outcome is augmented with a
+  declared reduced `m_a(X)` *"rather than dropped from augmentation"*, and **the roadmap contradicted
+  itself twice over**: the override bullet above requires TICI's reduced list to be printed beside its
+  estimate, which is an instruction about an augmented estimate this bullet had removed — and Stage 0's
+  DECISION 3 already states the rule correctly, that TICI *"is augmented with a reduced `m_a(X)` ...
+  rather than dropped from augmentation"*. So an override is a route **in**, and the two paths are
+  disjoint: TICI is reduced-and-augmented, `sich` and `ph2` are unaugmented [Stage 9 §7.2, §9.2].
+- The guard is applied on **that outcome's own [§11] population**, not the workbook — it is the
+  population the nuisance model is fitted on. The two differ: `tici_2b_3`'s events are 114 on the
+  workbook and 85 on the ATO population, while its non-event count is 6 on both, which is exactly the
+  coincidence that would let a wrong choice go unnoticed [Stage 9 §9.1].
+- **The augmentation path is decided ONCE, on the point estimate, and passed into the bootstrap.** A
+  minority cell is a property of the sample, so a replicate can cross the threshold — measured, `ph2`
+  crosses in **46.1%** of stratified replicates and `sich` in 3.8%. A rule re-evaluated per replicate
+  would make `ph2`'s percentile interval a quantile over a near-even mixture of two estimators, which
+  is [§10]'s "never substituted with a different estimator" violated by a different route. A replicate
+  whose declared model then fails to fit is a `FitError`, dropped and counted, and never a silent
+  downgrade to the unaugmented form [Stage 9 §9.5].
+- **And the mechanism for passing them in is Stage 9's, not Stage 10's**: `outcome.secondary` takes an
+  optional `paths` map, complete or absent and never partial, so the contract above is expressible as a
+  call rather than as an instruction. Stage 10 reads `augmented_path` off the point estimate's seven
+  estimates and hands the map back; it never re-derives the rule. A function whose signature could not
+  express this left Stage 10 only two options, both prohibited: recompute the paths, or reimplement the
+  seven-outcome loop [Stage 9 §11.1].
+- **No bound on the nuisance coefficient, and Stage 8's reason for having one does not transfer.**
+  Separation in `model.firth` converges silently exactly as it does in `polr` — measured, a separated
+  40-record frame converges in 6 iterations with every safeguard counter at zero and returns
+  `exp(β_treatment) = 441.005397`, while the *unpenalised* MLE on the same frame has no maximum at all
+  and raises `LinAlgError: Singular matrix` — but Stage 8 could calibrate a bound from an *empty band*
+  and there is none here: `sich`'s `max_abs_beta` runs continuously from 0.8558 to 80.9825 across
+  replicates, 42.7% above 8, with no gap. A bound is not needed anyway, because `m_a(X)` is a nuisance
+  whose *predictions* enter `tau` and predictions are probabilities: every term is bounded, so there is
+  no `exp(β)`-style tail. What is lost instead is precision, and the replacement for a guard is a
+  diagnostic — Stage 10 reports the `max_abs_beta` distribution [Stage 9 §9.6].
+- **The augmentation tilt has one home and the call site is tested.** `h = e(1 − e)` is `outcome._tilt`
+  and not a sub-expression: every test that distinguishes `h` from `w` calls the estimator directly with
+  its own arrays, so without an assertion on what `secondary` *passes*, tilting by `w` at the call site
+  ships the wrong estimand with the whole suite green [Stage 9 §8.2a, §15.8 item 6].
+- **`model.predict` is the fitter's own expression evaluated elsewhere**: the intercept is prepended as a
+  column and the linear predictor is clipped at `FIRTH_ETA_CLIP`, so `predict(fit, X) == fit.p` **exactly**
+  on the design the fit was made from. A scalar-intercept form is `allclose` but not equal, and an
+  unclipped one diverges from the fitter above `|η| = 500` [Stage 9 §7.3, §15.6].
+- **The odds-ratio correction can cross the null, not merely widen.** The four pseudo-counts are
+  weight-sums and the arms' totals differ, so an empty cell in the *heavier* arm can carry the estimate
+  past 1 — measured, `Sw` 17.007 against 22.768 with `p0 = 0.00647` returns 1.0201 where the uncorrected
+  value is 0.0, in about 0.9% of empty-cell replicates. Roughly 3 replicates in `N_BOOT` = 2000 report a
+  safety outcome with no bridging events as favouring EVT alone. PI-reversible [Stage 9 §6.4, §17].
 
-**Accept when.** Two tests pass:
-1. With the outcome model set to a constant, the augmented estimate equals the unaugmented weighted
-   risk difference exactly. If it does not, the augmentation is not built on the weights' tilting
-   function and is targeting a different estimand.
-2. A heterogeneous-effect scenario with a **correct** outcome model and a **misspecified** propensity
-   model does *not* recover the true ATO. This must be asserted, not merely allowed: the estimator is
-   not doubly robust [§8], and a test built on a homogeneous effect will appear to show that it is,
-   because every weighted average treatment effect coincides in that case.
+**Accept when.** Three tests pass, and the first one's original rationale was wrong:
+1. With the outcome model set to **two different constants**, the augmented estimate equals the
+   unaugmented weighted risk difference exactly. **This checks that the correction term is normalised
+   and cancels — it does *not* check the tilting function**, and an earlier form of this item claimed it
+   did. For constants `m₁ ≡ c₁`, `m₀ ≡ c₀` and any normalised weight `u`, `Σu(c₁−c₀)/Σu = c₁−c₀`
+   independently of `u`, so the identity holds whether the augmentation tilts by `h`, by `w` or by unit
+   weights — measured, all three at ~2e-16. The constants must **differ**: with `c₁ = c₀` a dropped
+   correction term passes at +0.000000, where with `c₁ = 0.62, c₀ = 0.23` it returns `rd − 0.39`
+   [Stage 9 §8.4].
+2. **The tilting function is pinned by two tests and neither is test 1.** With a *non-constant* `m_a(X)`,
+   the estimate under `h` is asserted and the estimate under `w` is computed and shown to differ —
+   measured `1.030664e-02` against a `1e-03` bound, with the constant-`d` sanity cases cancelling
+   exactly at `0.000e+00`. **And the call site is asserted separately**, because test 2 exercises the
+   estimator rather than what `secondary` hands it. The fixture must be **written out with its seed**:
+   the gap is driven by the variation in `m₁ − m₀` but is *not monotone* in it — one of six measured
+   candidates had the largest spread and the second-smallest gap, at 2.5e-04 — so "make the effect
+   heterogeneous" is not a specification [Stage 9 §8.4, §15.0.4, §15.8 items 3 and 6].
+3. A heterogeneous-effect scenario with a **correct** outcome model and a **misspecified** propensity
+   model does *not* recover the true ATO — and *does* recover the ATO indexed by the misspecified score,
+   which is the positive half that distinguishes "not doubly robust" from "wrong". This must be
+   asserted, not merely allowed: the estimator is not doubly robust [§8], and a test built on a
+   homogeneous effect will appear to show that it is, because every weighted average treatment effect
+   coincides in that case. Two corrections to how it is run: **"homogeneous" means constant on the
+   risk-difference scale** — a logistic outcome model with no interaction is not that, and is itself
+   detectably biased at `|t| = 21.3` — and **the test cannot be run at the cohort's size**, where the
+   per-replicate spread is sd 0.0877 against a bias of 0.026 and 40.5% of replicates have the wrong
+   sign. Run at n = 200,000 with the seed written out, where twelve seeds put the heterogeneous arm's
+   error in [0.02295, 0.030249] and the constant-effect companion's in [0.000176, 0.004929], with the
+   band between them empty and both asserted bounds (0.010, 0.015) inside it [Stage 9 §8.5, §15.10].
+
+**And every fixture these three tests run on is specified as code**, with its seeds and constants written
+out. This is not a style note: the spec's first two drafts pinned quantities on three fixtures to ten
+decimal places and described rather than gave them, which made tests 1-3 unstartable and the acceptance
+criteria unperformable [Stage 9 §15.0, §22.3 item 1].
 
 **Naming.** "model-assisted", never "doubly robust", in code, docstrings and output.
+
+**What Stage 9 found that is Stage 10's, and it is a blocker.** `propensity.fit` raises `SchemaError` on
+**26.0%** of patient-level stratified replicates: `_record_exclusion` (`propensity.py:400-432`) compares
+distinct excluded `case_id`s against excluded rows, and its premise is that duplicates are forbidden by
+Stage 2's A2 — which forbids them *in the workbook*, not in a resample. The cohort has exactly one
+covariate-incomplete record, in Lugano's stratum of 31, and the analytic probability of drawing a given
+row twice from 31 is 26.4%, which matches. Since Stage 8 §11 hands over that a `SchemaError` is a
+resampler bug and **must not be caught**, Stage 10's three options as landed are all prohibited: crash,
+catch what it prespecified it would not, or drop a quarter of its replicates for a reason that is not
+about the data. Either the guard learns that a replicate's rows are distinct draws, or the resampler
+names them distinctly. This is the first thing Stage 10 will hit [Stage 9 §12.3, §14].
 
 ## Stage 10 — Bootstrap engine [§10]
 
@@ -455,6 +550,25 @@ never substituted with a different estimator.** Surface the failure count and ra
 - **`FitError` is the droppable failure and `SchemaError` is not.** A `SchemaError` from `primary` or
   `propensity.fit` is a bug in the resampler, not a sparse replicate, and catching it would drop
   replicates for a reason that is not about the data (`propensity.py:468-469`).
+
+**And four things Stage 9 hands over** [Stage 9 §14].
+- **`propensity.fit` raises `SchemaError` on 26.0% of stratified replicates as landed**, and by the rule
+  immediately above, Stage 10 may not catch it. Fix the resampler or the guard before anything else;
+  Stage 9's own replicate measurements had to work around it and say so.
+- **The augmentation paths are passed in, not recomputed** — `ph2` crosses the rare-minority threshold
+  in 46.1% of replicates.
+- **The distribution of `max_abs_beta` from `m_a(X)`, per outcome, reported beside the failure counters.**
+  The name is ASCII deliberately: it becomes a column in a rendered markdown table, `data._md_table` does
+  no escaping, and a literal pipe in a cell breaks the table in a way byte-identity checks do not catch
+  [Stage 9 §10.4, §15.14].
+  Stage 9 prescribes no bound, so nothing turns a separated nuisance fit into a countable failure: the
+  `FitError` rate is 0.3% for `sich` and 0% elsewhere while 15.1% of `sich`'s fits exceed `|β| = 14`. The
+  counters will read near-zero on outcomes whose nuisance models are degenerate a sixth of the time.
+  Same move as `len(fit.alpha)` above, same reason.
+- **Stage 9 is the cost centre, not Stage 8 — and `model.design` is 72% of Stage 9.** Measured:
+  24.05 ms per replicate for the five augmented outcomes against `propensity.fit`'s 13.39 ms and
+  `primary`'s 4.73 ms; 71 ms wall-clock, about 142 s over `N_BOOT`. The four full-list outcomes share
+  an **identical** design matrix, so building it once per replicate is worth roughly 22 s.
 
 **Accept when.** On synthetic data with a known effect the interval covers the truth at roughly the
 nominal rate; the failure counter is exercised by a deliberately degenerate input; and no code path
