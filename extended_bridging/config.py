@@ -276,6 +276,39 @@ SMD_THRESHOLD: Final[float] = 0.10     # [§9]
 # rule's rationale.
 RARE_MINORITY_THRESHOLD: Final[int] = 10
 
+# The [§8] weighted marginal odds ratio's continuity correction [Stage 9 §6.3]. Haldane-Anscombe:
+# added to all four weighted pseudo-counts, and ONLY when a weighted proportion reaches 0 or 1, so an
+# interior estimate is bit-for-bit uncorrected. PI decision, 2026-08-24 — neither [§8] nor any
+# amendment specifies a rule and the roadmap says only "kept finite".
+#
+# Prespecified for FIRTH_*'s reason (config.py:315-317, which this insertion moved down from the
+# 281-284 the Stage 9 spec cites): [§10] refits this in every one of N_BOOT replicates, so a
+# correction that changes an ANSWER is a property of the sampling distribution and not a runtime knob.
+#
+# The scale is stated rather than implied, and PER ARM rather than averaged. These are WEIGHT-SUMS,
+# not row counts: Sw = 27.736623 over the ATO population, splitting 13.626360 treated / 14.110263
+# control against row counts of 39 treated / 53 control. The conventional 0.5 is calibrated against
+# ROWS, so against these weight-sums it is 2.9x more aggressive in the treated arm and 3.8x in the
+# control arm — measured per arm, because averaging the two row counts to "about 46" and reporting
+# "about three times" hides that the two arms are corrected by different relative amounts, which is
+# exactly the asymmetry that lets the correction cross the null [Stage 9 §6.4].
+#
+# It is NOT scaled to Sw to compensate, because a correction whose magnitude is a function of the
+# weights is a correction whose magnitude is a function of the propensity model, and [§10] refits
+# that in every replicate.
+#
+# CONSEQUENCE, MEASURED, AND IT IS NOT A ROUNDING EFFECT: because the arms are corrected unequally,
+# an empty cell in the HEAVIER arm can carry the odds ratio ACROSS 1 rather than toward it — e.g.
+# Sw1 = 17.007 against Sw0 = 22.768 with p0 = 0.00647 returns 1.0201 where the uncorrected value is
+# 0.0. About 3 replicates in N_BOOT = 2000 report a safety outcome with no bridging events as
+# favouring EVT alone. PI-reversible; [Stage 9 §6.4, §17].
+#
+# Measured: the branch is unreachable on v7 — no arm holds an empty cell for any of the seven
+# outcomes — and fires in 17.0% of stratified replicates for sich, 13.0% for tici_2b_3 and 2.3% for
+# ph2. So this constant is materially a choice about two INTERVALS and barely a choice about any point
+# estimate [Stage 9 §6.4].
+OR_CONTINUITY: Final[float] = 0.5
+
 
 # --- the Firth fit [§7, Stage 6 §5] -----------------------------------------------------------
 #
@@ -478,6 +511,14 @@ DERIVED_DICHOTOMIES: Final[tuple[str, ...]] = tuple(
 # test_config.py asserts there is exactly one, which is the assertion that notices [Stage 8 §12, T1].
 PRIMARY_OUTCOME: Final[str] = next(
     key for key, o in OUTCOMES.items() if o.family == "primary")
+
+# The [§5] binary outcomes, computed from the registry rather than named a second time. PRIMARY_OUTCOME
+# above takes the one primary entry; this takes the seven binary ones, and test_config.py asserts the
+# two partition OUTCOMES exactly — so an outcome cannot be estimated by neither Stage 8 nor Stage 9,
+# and cannot be estimated by both. Declared immediately after PRIMARY_OUTCOME for that reason: the two
+# are one decision about the registry and a reader checking the partition should find them together.
+BINARY_OUTCOMES: Final[tuple[str, ...]] = tuple(
+    key for key, o in OUTCOMES.items() if o.kind == "binary")
 
 
 # --- outcome-model overrides [§8 amendment, DECISION 3] --------------------------------------

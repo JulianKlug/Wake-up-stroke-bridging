@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import ast
 import os
+import warnings
 from pathlib import Path
 from typing import Final
 
@@ -2351,3 +2352,268 @@ def test_no_polr_precondition_message_names_an_exposure_or_an_outcome(name):
     assert ordinal_raises, f"{name} has no raise string to scan"
     for text in ordinal_raises:
         assert not [word for word in FORBIDDEN_IN_RAISES if word in text]
+
+
+# --- 15.6  `predict` — Stage 9 §15.6, and it lives here because the function does -----------------------
+#
+# `model.Fit.p` is the fitted probability at the OBSERVED treatment, because the X handed to `firth`
+# carries the observed treatment column. It is m_A(X) — the counterfactual matching each row's actual
+# arm — so it is NOT m_1 and NOT m_0, and an implementation reading it for either is wrong on every row
+# assigned to the other arm. `predict` is why that is not necessary [Stage 9 §7.3].
+#
+# THE ORACLE IS AN EQUALITY AND NOT A TOLERANCE, and that is the whole design of this section: both of
+# §7.3's details — the intercept prepended as a COLUMN, and the FIRTH_ETA_CLIP clip — are invisible to
+# `allclose` and visible to `array_equal`. A test written with a tolerance passes on both defects.
+
+from fixtures_stage9 import golden_arrays, golden_frame                        # noqa: E402
+from fixtures_stage9 import separated_frame as separated_binary_frame          # noqa: E402
+
+# THE ALIAS IS NECESSARY AND IS NOT TIDINESS. This module already defines `separated_frame` — Stage 8's
+# perfectly separated ORDINAL frame for `polr` — and Stage 9's is a separated BINARY frame for `firth`.
+# Same word, same idea, two fitters, two frames. An unaliased import would silently rebind this file's
+# own fixture and every §14.7 test below would start asserting Stage 9's numbers.
+
+GOLDEN_COVARIATE_PAIRS: Final[tuple[tuple[str, ...], ...]] = (
+    ("center", "atrial_fib"), ("center", "atrial_fib", "age"))
+
+
+def golden_fit(covariates: tuple[str, ...]):
+    """(fit, X) for `golden_frame()` under one of §15.0.2's two covariate lists.
+
+    The design is built exactly as `outcome.outcome_model` builds it — `model.design`, then treatment
+    inserted first by name — because the oracle below is that `predict` reproduces `fit.p` on THE VERY
+    X THE FIT WAS MADE FROM, and a differently assembled X would be testing a different claim.
+    """
+    df = golden_frame()
+    y, a, _, _ = golden_arrays(df)
+    X, _ = model.design(df, covariates)
+    X = X.copy()
+    X.insert(0, config.TREATMENT, a)
+    return model.firth(X, y), X
+
+
+def test_predict_is_the_inverse_logit_on_a_hand_computed_three_column_design():
+    """Against arithmetic done by hand, not against another implementation.
+
+    Two rows, three columns and a beta of (1, 2, 3, 4) chosen so the linear predictors are integers
+    and the expected probabilities are writable: eta = 1 + 2*x1 + 3*x2 + 4*x3.
+    """
+    fit = model.Fit(beta=np.array([1.0, 2.0, 3.0, 4.0]), p=np.array([np.nan, np.nan]),
+                    iterations=1, converged_on="likelihood", columns=("x1", "x2", "x3"),
+                    first_step_norm=0.0, rescales=0, halvings=0)
+    X = pd.DataFrame({"x1": [0.0, 1.0], "x2": [0.0, -1.0], "x3": [0.0, 0.5]})
+    eta = np.array([1.0, 1.0 + 2.0 - 3.0 + 2.0])
+    assert model.predict(fit, X) == pytest.approx(1.0 / (1.0 + np.exp(-eta)))
+
+
+@pytest.mark.parametrize("covariates", GOLDEN_COVARIATE_PAIRS)
+def test_predict_reproduces_fit_p_BIT_FOR_BIT_on_the_design_the_fit_was_made_from(covariates):
+    """`np.array_equal`, not `allclose`, and Stage 9 §15.6 is emphatic about the difference.
+
+    This is the only available oracle that `predict` and `firth` agree about the link, and it pins
+    BOTH of §7.3's details at once. The two companions below are what make the strength of the
+    assertion load-bearing rather than fussy.
+    """
+    fit, X = golden_fit(covariates)
+    assert np.array_equal(model.predict(fit, X), fit.p)
+
+
+@pytest.mark.parametrize("covariates", GOLDEN_COVARIATE_PAIRS)
+def test_WITHOUT_the_prepended_intercept_column_predict_is_ALLCLOSE_BUT_NOT_EQUAL(covariates):
+    """The companion for §7.3's first detail, and it is the reason the oracle is an equality.
+
+    `beta[0] + X @ beta[1:]` is the same mathematics as `Xc @ beta` over an intercept-prepended `Xc`
+    and a different floating-point summation order. Measured on the workbook's shape: max|difference|
+    1.11e-16 on 10 of 60 rows. A test written with `allclose` passes on this form; `array_equal`
+    fails on it, which is what turns a stylistic choice into a tested one.
+    """
+    fit, X = golden_fit(covariates)
+    scalar_intercept = 1.0 / (1.0 + np.exp(-np.clip(
+        fit.beta[0] + X.to_numpy(dtype=float) @ fit.beta[1:],
+        -config.FIRTH_ETA_CLIP, config.FIRTH_ETA_CLIP)))
+    assert scalar_intercept == pytest.approx(fit.p)          # allclose: passes
+    assert not np.array_equal(scalar_intercept, fit.p)       # array_equal: does not
+    assert 0.0 < float(np.max(np.abs(scalar_intercept - fit.p))) < 1e-15
+
+
+def test_WITHOUT_the_clip_predict_AGREES_on_the_golden_frame_and_DIVERGES_above_eta_500():
+    """The companion for §7.3's second detail. Agreement on ordinary data is the point.
+
+    `model._probabilities` clips at FIRTH_ETA_CLIP (model.py:320) and model.py:317-318 gives the
+    reason: a reader of `Fit` applying "a different clip — or none — from the one inside the loop" is
+    reading a quantity the fit was not computed from. On the golden frame no |eta| comes near 500, so
+    an unclipped implementation is bit-for-bit identical and no test on that frame can see the defect.
+    """
+    fit, X = golden_fit(GOLDEN_COVARIATE_PAIRS[0])
+    Xc = np.column_stack([np.ones(len(X)), X.to_numpy(dtype=float)])
+    unclipped = 1.0 / (1.0 + np.exp(-(Xc @ fit.beta)))
+    assert np.array_equal(unclipped, fit.p)                       # agrees where it cannot matter
+    assert float(np.max(np.abs(Xc @ fit.beta))) < config.FIRTH_ETA_CLIP
+
+    # and on a design that reaches the tail, it does not. One column, beta = (0, 1), so eta IS x.
+    tail = model.Fit(beta=np.array([0.0, 1.0]), p=np.array([np.nan]), iterations=1,
+                     converged_on="likelihood", columns=("x",), first_step_norm=0.0,
+                     rescales=0, halvings=0)
+    frame = pd.DataFrame({"x": [-800.0]})
+    with np.errstate(over="ignore"):
+        unclipped_tail = 1.0 / (1.0 + np.exp(-frame["x"].to_numpy(dtype=float)))
+    assert unclipped_tail[0] == 0.0
+    assert model.predict(tail, frame)[0] == 7.124576406741285e-218
+
+
+def test_the_inverse_logit_form_is_safe_at_the_POSITIVE_tail_and_UNSAFE_at_the_NEGATIVE_one():
+    """Stage 9 §3.3's corrected fact. An earlier draft asserted it was safe at both and tested one.
+
+    Both computed alongside, so the reason `predict` clips is in the suite and not only in a fence.
+    """
+    with np.errstate(over="ignore"):
+        for eta in (800.0, 1000.0):
+            assert 1.0 / (1.0 + np.exp(-eta)) == 1.0
+            assert np.isnan(np.exp(eta) / (1.0 + np.exp(eta)))
+        assert 1.0 / (1.0 + np.exp(-500.0)) == np.exp(500.0) / (1.0 + np.exp(500.0)) == 1.0
+        # the negative tail, where the "better-conditioned" form is the one that fails
+        assert 1.0 / (1.0 + np.exp(800.0)) == 0.0
+    assert model._probabilities(np.array([[1.0]]), np.array([-800.0]))[0] == 7.124576406741285e-218
+
+
+def test_the_unclipped_negative_tail_actually_WARNS_and_the_clipped_one_does_not():
+    """The overflow is a `RuntimeWarning`, which is the only thing that would ever have surfaced it —
+    and it is emitted by a form that returns a plausible 0.0 rather than raising."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        1.0 / (1.0 + np.exp(np.float64(800.0)))
+    assert any(issubclass(w.category, RuntimeWarning) for w in caught)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        model._probabilities(np.array([[1.0]]), np.array([-800.0]))
+    assert not [w for w in caught if issubclass(w.category, RuntimeWarning)]
+
+
+@pytest.mark.parametrize("mutate", ["reorder", "drop", "rename"])
+def test_predict_rejects_a_design_that_is_not_the_fits_by_NAME_and_by_ORDER(mutate):
+    """A set comparison would pass on `reorder`, and a width check would pass on `rename`.
+
+    `firth`'s beta is positional after the intercept, so the column names have to agree as a
+    SEQUENCE. `design` drops constant columns and returns their names, which is how a frame built
+    from a covariate list acquires a different width from the one a fit saw.
+    """
+    fit, X = golden_fit(GOLDEN_COVARIATE_PAIRS[0])
+    broken = {"reorder": X[list(X.columns)[::-1]],
+              "drop": X.drop(columns=[X.columns[-1]]),
+              "rename": X.rename(columns={X.columns[-1]: "elsewhere"})}[mutate]
+    with pytest.raises(config.SchemaError) as e:
+        model.predict(fit, broken)
+    assert "predict was given columns" in message_of(e)
+
+
+def test_WITHOUT_the_column_check_a_REORDERED_design_returns_a_NUMBER_instead_of_an_error():
+    """The companion is the point (Stage 9 §7.3). A mismatched positional dot product does not fail
+    — it succeeds, and returns a full array of finite, plausible probabilities."""
+    fit, X = golden_fit(GOLDEN_COVARIATE_PAIRS[0])
+    reordered = X[list(X.columns)[::-1]]
+    Xc = np.column_stack([np.ones(len(reordered)), reordered.to_numpy(dtype=float)])
+    silent = 1.0 / (1.0 + np.exp(-np.clip(Xc @ fit.beta,
+                                          -config.FIRTH_ETA_CLIP, config.FIRTH_ETA_CLIP)))
+    assert np.all(np.isfinite(silent)) and np.all((silent > 0.0) & (silent < 1.0))
+    assert not np.array_equal(silent, fit.p)
+
+
+# --- 15.7 (model's half)  separation converges, and NO bound turns that into a failure -----------------
+#
+# Stage 8 §6 established that separation in `polr` converges silently and therefore needs
+# POLR_MAX_ABS_BETA to become a countable failure. Both halves of that finding were re-asked of
+# `model.firth` for Stage 9. **The first reproduces exactly** and is asserted here. **The second does
+# not**: `sich`'s max_abs_beta across replicates runs continuously from 0.8558 to 80.9825 with 42.7%
+# above 8 and no gap anywhere, so there is no empty band to calibrate a bound from — and Stage 9 §9.6
+# prescribes none, for a STRUCTURAL reason rather than a measured one. At Stage 8 `beta` IS the
+# estimand, so a degenerate one is a degenerate answer; here `m_a(X)` is a nuisance and only its
+# PREDICTIONS enter tau, and predictions are probabilities, bounded in [0, 1] whatever beta does.
+
+
+def test_a_perfectly_separated_binary_frame_CONVERGES_through_firth():
+    """Asserted POSITIVELY, exactly as §14.7 asserts its ordinal analogue, and for the same reason: a
+    test written as "a separated frame raises" passes on a broken fitter and fails on the correct one.
+
+    Firth's penalty does not shrink a large coefficient into a small one and it does not turn
+    separation into a failure — it turns a fit with NO MAXIMUM into one that converges in six
+    iterations with every safeguard counter at zero, and hides the separation completely. Nothing in
+    the returned `Fit` is out of range.
+    """
+    frame = separated_binary_frame()
+    assert list(frame["y"]) == list(frame[config.TREATMENT])          # perfectly separated
+    X, dropped = model.design(frame, ("center", "atrial_fib"))
+    X = X.copy()
+    X.insert(0, config.TREATMENT, frame[config.TREATMENT].to_numpy(dtype=float))
+    fit = model.firth(X, frame["y"].to_numpy(dtype=float))
+
+    # only two of the four declared centres appear, so the constant-column rule fires TWICE
+    assert dropped == ("center_Lugano", "center_USZ")
+    assert fit.columns == (config.TREATMENT, "atrial_fib", "center_CHUV")
+    assert (fit.iterations, fit.converged_on) == (6, "likelihood")
+    assert (fit.rescales, fit.halvings) == (0, 0)
+    beta_treatment = float(fit.beta[1 + fit.columns.index(config.TREATMENT)])
+    assert beta_treatment == pytest.approx(6.0890571141, abs=1e-6)
+    assert float(np.exp(beta_treatment)) == pytest.approx(441.005397, abs=1e-4)
+    assert float(np.max(np.abs(fit.beta))) == pytest.approx(6.089057, abs=1e-6)
+    assert float(fit.p.min()) > 0.0 and float(fit.p.max()) < 1.0        # strictly interior
+    assert float(fit.p.min()) == pytest.approx(4.545e-02, abs=1e-5)
+    assert float(fit.p.max()) == pytest.approx(0.954546, abs=1e-6)
+
+
+def test_the_UNPENALISED_mle_on_the_same_frame_FAILS_OUTRIGHT():
+    """Computed alongside, so the penalty's effect is a measured contrast rather than a claim.
+
+    The unpenalised fit does not merely grow — it has no maximum, and all three routes below say so
+    in a different way. That contrast is stronger than "the coefficient gets large", which is what a
+    reader takes from Stage 8's ordinal analogue.
+
+    **THE ITERATION CAP IS PART OF THE MEASUREMENT AND `maxiter` IS THEREFORE NOT A DETAIL.** Stage 9
+    §9.6 records the Newton route as raising `LinAlgError: Singular matrix`; measured here, it does so
+    only once it is allowed to reach the singularity. At statsmodels' own default of 35 it stops
+    without raising, at max_abs_beta 67.87 and `converged=False`. Both facts are asserted, because the
+    second is the one that shows what an unpenalised fit looks like from the outside: a number.
+    """
+    statsmodels = pytest.importorskip("statsmodels.api")
+    frame = separated_binary_frame()
+    X, _ = model.design(frame, ("center", "atrial_fib"))
+    X = X.copy()
+    X.insert(0, config.TREATMENT, frame[config.TREATMENT].to_numpy(dtype=float))
+    Xc = np.column_stack([np.ones(len(X)), X.to_numpy(dtype=float)])
+    y = frame["y"].to_numpy(dtype=float)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        # allowed to run to the optimum, the information matrix goes singular and it raises
+        with pytest.raises(np.linalg.LinAlgError) as e:
+            statsmodels.Logit(y, Xc).fit(method="newton", maxiter=200, disp=0)
+        assert "Singular matrix" in str(e.value)
+
+        # stopped early, it returns a plausible number instead — and a different one at each cap,
+        # which IS the statement that there is no maximum to return
+        capped = statsmodels.Logit(y, Xc).fit(method="newton", disp=0)
+        bfgs = statsmodels.Logit(y, Xc).fit(method="bfgs", maxiter=60, disp=0)
+
+    assert capped.mle_retvals["converged"] is False
+    assert float(np.max(np.abs(capped.params))) > 60.0
+
+    # BFGS at 60 iterations reports SUCCESS, at a coefficient that is a function of the cap and not
+    # of the data. Firth reaches 6.089057 on the same frame, in six iterations, and is right to.
+    assert float(np.max(np.abs(bfgs.params))) == pytest.approx(33.0927, abs=1e-3)
+    assert bfgs.mle_retvals["converged"] is True
+    assert float(np.max(np.abs(bfgs.params))) > 5 * 6.089057
+
+
+def test_NO_BOUND_ON_THE_FIRTH_COEFFICIENT_EXISTS_and_that_is_a_decision():
+    """Stage 9 §9.6, asserted as a deliberate absence so that adding one is a visible change.
+
+    Stage 8 declares POLR_MAX_ABS_BETA and `outcome._assert_reportable` reads it. `firth` has no
+    counterpart: it returned the separated fit above, with max_abs_beta 6.09, and nothing anywhere
+    rejected it. The two reasons are §9.6's — there is no empty band to calibrate a bound from, since
+    `sich`'s replicate max_abs_beta runs continuously from 0.8558 to 80.9825; and at Stage 9 the
+    coefficient is a NUISANCE whose predictions are probabilities, so every term of the augmented
+    estimate is bounded whatever beta does. `outcome.py`'s half of this is §15.7's.
+    """
+    assert not hasattr(config, "FIRTH_MAX_ABS_BETA")
+    assert "MAX_ABS_BETA" not in SOURCE          # model.py reads no such bound on any path
+    assert hasattr(config, "POLR_MAX_ABS_BETA")  # and Stage 8's exists, so this is a contrast

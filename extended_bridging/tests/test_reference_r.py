@@ -423,7 +423,8 @@ def test_the_r_package_versions_are_captured_and_non_empty(tmp_path):
 R_ONLY_NAMES = ("Rscript", "logistf", "PSweight")
 
 # Every committed script, so a fourth one joins both hygiene checks below by being declared here.
-R_SCRIPTS = ("firth_logistf.R", "ato_psweight.R", "balance_psweight.R", "polr_clm.R")
+R_SCRIPTS = ("firth_logistf.R", "ato_psweight.R", "balance_psweight.R", "polr_clm.R",
+             "aug_psweight.R")
 
 
 @pytest.mark.parametrize("name", R_ONLY_NAMES)
@@ -646,3 +647,102 @@ def test_the_skip_reason_DISTINGUISHES_a_missing_package_from_an_R_THAT_DOES_NOT
         assert "R ITSELF DID NOT START" in reason
         assert "Do not install anything" in reason
     assert "Stage 8" in reason
+
+
+# --- Stage 9 §19b — the augmented estimator, and why no package is its oracle --------------------------
+#
+# `PSweight` is the reference implementation of this SAP's exact WEIGHTING — overlap weights, written
+# by the authors of the method — so it is the right oracle for the weighted marginal proportions and
+# their difference, which is the same check Stage 6 §16b.2 made one function over.
+#
+# **It is NOT an oracle for the augmented estimate, and that is a fact about the ESTIMAND rather than
+# about the package.** Every maintained augmented routine on offer targets the ATE or the ATT: it
+# tilts by `1/e(1−e)`-style weights, or by `e/(1−e)`, and [§8] tilts by `h = e(1−e)`. A routine
+# computing a different weighted average treatment effect is not a check on this one — it is a
+# different quantity that would disagree for the right reason, which is the worst kind of oracle. So
+# §8.1's formula is assembled TERM BY TERM in R and compared with the Python transcription.
+#
+# What that establishes and what it does not: agreement between two hand transcriptions in two
+# languages shows the two TRANSCRIPTIONS agree. It does not show the formula is [§8]'s. The tilt tests
+# in `test_outcome.py` are what check that, because only this repository knows which tilt [§7] means —
+# and they are in Python for exactly that reason.
+
+
+def augmented_frame():
+    """The frame the oracle is run on: `golden_frame()` with `w`, `m1` and `m0` already computed.
+
+    The GOLDEN frame and not the workbook, deliberately, and it is the one oracle in this file that
+    is not data-gated. Stage 9 §4.3's rule is that no WEIGHTED quantity computed on patient data
+    leaves the gitignored log — and an R oracle writes a CSV into a temporary directory and prints a
+    version banner, which is a second place a weighted proportion would exist. The golden frame is
+    synthetic, carries no patient data, and is the frame every other pin in Stage 9 is measured on.
+    """
+    import outcome
+    from fixtures_stage9 import golden_arrays, golden_frame
+    frame = golden_frame()
+    y, a, w, e = golden_arrays(frame)
+    X, _ = model.design(frame, config.outcome_model_covariates("tici_2b_3"))
+    X = X.copy()
+    X.insert(0, config.TREATMENT, a)
+    fit = model.firth(X, y)
+    m1, m0 = outcome._counterfactuals(fit, X)
+    return pd.DataFrame({"y": y, "a": a, "e": e, "w": w, "m1": m1, "m0": m0}), (y, a, w, e, m1, m0)
+
+
+@reference_r
+def test_psweight_agrees_on_the_weighted_marginal_proportions_and_the_risk_difference(tmp_path):
+    """The first row. The score is SUPPLIED, so a disagreement is about the weighting formula and
+    never about the propensity model — which is the whole reason Stage 7's balance oracle supplies
+    one too.
+
+    Asserted tightly: both sides are computing the same weighted mean of the same 0/1 vector over the
+    same weights, so there is no stopping rule and no optimiser between them, and anything looser than
+    machine precision would be hiding a real difference.
+    """
+    import outcome
+    frame, (y, a, w, e, m1, m0) = augmented_frame()
+    out = tmp_path / "augmented.csv"
+    version = _run("aug_psweight.R", _write(frame, tmp_path / "golden.csv"), out)
+    assert "PSweight" in version
+
+    theirs = pd.read_csv(out)
+    share = outcome.weighted_proportion(y, a, w)
+    assert theirs["p1"][0] == pytest.approx(share[1], abs=1e-12)
+    assert theirs["p0"][0] == pytest.approx(share[0], abs=1e-12)
+    assert theirs["rd"][0] == pytest.approx(outcome.weighted_rd(y, a, w), abs=1e-12)
+
+
+@reference_r
+def test_the_augmented_estimate_agrees_with_a_HAND_ASSEMBLED_R_COMPUTATION(tmp_path):
+    """The second row, and the one that matters.
+
+    Not against a package routine, for §19b's reason: every maintained AIPW implementation targets a
+    different estimand. This is a cross-language check on the ARITHMETIC of §8.1 — three terms, two
+    arm denominators and one tilt denominator — and explicitly not on the estimand.
+    """
+    import outcome
+    frame, (y, a, w, e, m1, m0) = augmented_frame()
+    out = tmp_path / "augmented.csv"
+    _run("aug_psweight.R", _write(frame, tmp_path / "golden.csv"), out)
+
+    theirs = float(pd.read_csv(out)["tau"][0])
+    ours = outcome.augmented_rd(y, a, w, outcome._tilt(e), m1, m0)
+    assert theirs == pytest.approx(ours, abs=1e-12)
+    # and it is the PINNED value, so the oracle checks the transcription against the same number
+    # every other Stage 9 test checks it against rather than against whatever we happen to compute
+    assert ours == pytest.approx(0.2233300473, abs=1e-9)
+
+
+def test_the_stage_9_oracle_does_NOT_ask_a_package_for_the_AUGMENTED_estimate():
+    """By scan, because it is the one thing about this script that a passing comparison cannot show.
+
+    If the augmented value came from a package routine, both tests above would still pass or fail
+    together and nothing would record that the number came from an estimator targeting the ATE. The
+    script's `tau` is built from `sum(...)` over the frame's own columns and from nothing else.
+    """
+    code = " ".join(line.split("#")[0]
+                    for line in (REFERENCE / "aug_psweight.R").read_text(
+                        encoding="utf-8").splitlines())
+    tau_line = code[code.index("tau <-"):code.index("write.csv")]
+    assert "::" not in tau_line, "the augmented term must not come from a package"
+    assert tau_line.count("sum(") == 6

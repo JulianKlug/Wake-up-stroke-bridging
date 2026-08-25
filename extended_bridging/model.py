@@ -4,6 +4,13 @@ The design matrix and the Firth fit, and nothing that knows what the exposure is
 **outcome-agnostic by construction**: it reads ``config`` and nothing else, takes no ``Audit``, and
 names neither the treatment nor any covariate list. Its caller logs; it computes.
 
+**``predict`` does not bend that rule, and this sentence is here because it looks as though it might**
+[Stage 9 §7.3]. Stage 9 builds its counterfactuals ``m_1`` and ``m_0`` by copying a design, overwriting
+one column and calling ``predict`` — so a reader who greps for the function finds it being used to
+intervene on an exposure. ``predict`` cannot tell an exposure from a covariate: it takes a ``Fit`` and
+a frame, checks the column names agree as a sequence, and evaluates. The knowledge that one of those
+columns is a treatment lives in ``outcome.py``, where the exposure is already named.
+
 **Stages 8, 9 and 12 come into this module directly and never through ``propensity.py``.** Stage 9's
 outcome regression ``m_a(X)`` is a Firth logistic fit on a design matrix over
 ``outcome_model_covariates(outcome)`` — the same two functions, a different covariate list and a
@@ -529,6 +536,50 @@ def firth(X: pd.DataFrame, y: np.ndarray) -> Fit:
         f"{C.FIRTH_SCORE_TOL:g}. {rescales} step(s) were shortened by the trust region and {halvings} "
         f"halving(s) were taken [§5.2a]. [§7] prescribes one estimator, and [§10] drops and counts "
         "the replicate rather than substituting another.")
+
+
+def predict(fit: Fit, X: pd.DataFrame) -> np.ndarray:
+    """The fitted probabilities of `fit` on `X`. `X` carries no intercept; one is prepended.
+
+    Named neither for treatment nor for any covariate: this is `Fit` evaluated somewhere, and the
+    somewhere is the caller's business [Stage 6 §0.1]. `outcome.py` is what knows that one of the
+    columns is an exposure and that setting it to a constant makes the result a counterfactual.
+
+    **Why it exists at all**: `Fit.p` is the fitted probability at the OBSERVED treatment, because the
+    `X` handed to `firth` carries the observed treatment column. It is `m_A(X)` — the counterfactual
+    matching each row's actual arm — and it is therefore neither `m_1` nor `m_0`. A caller reading it
+    for either is wrong on every row assigned to the other arm [Stage 9 §7.3].
+
+    The column check is BY NAME and is not a length check. `design` drops constant columns and
+    returns their names, so a frame built from a covariate list has a different width from the one a
+    fit saw -- and a positional dot product against a mismatched design returns a number rather than
+    an error. Comparing `fit.columns` to `X.columns` as a SEQUENCE catches a reordering too, which a
+    set comparison would not: `firth`'s beta is positional after the intercept.
+
+    **THIS IS `_probabilities` EVALUATED SOMEWHERE ELSE, AND IT IS THE SAME EXPRESSION ON PURPOSE.**
+    Two details, and `test_model.py` asserts the consequence as an EQUALITY against `fit.p` rather
+    than as a tolerance:
+
+      * The intercept is PREPENDED AS A COLUMN, never added as a scalar. `firth` computes
+        `eta = Xc @ beta` over an intercept-prepended `Xc`; `beta[0] + X @ beta[1:]` is the same
+        mathematics in a different summation order and does not reproduce `Fit.p` -- measured,
+        max|difference| 1.11e-16 on 10 of 60 rows [Stage 9 §3.3].
+      * The linear predictor IS CLIPPED, at FIRTH_ETA_CLIP, because `_probabilities` clips at
+        FIRTH_ETA_CLIP (model.py:320) and model.py:317-318 gives the reason: a reader of `Fit` that
+        applies "a different clip -- or none -- from the one inside the loop" is reading a quantity
+        the fit was not computed from. 1/(1+exp(-eta)) is better conditioned than
+        exp(eta)/(1+exp(eta)) at the POSITIVE tail only; at eta = -800 it overflows and returns
+        exactly 0.0 where the clipped form returns 7.124576406741285e-218 [Stage 9 §3.3]. The clip
+        for this form is FIRTH_ETA_CLIP and has nothing to do with Stage 8's POLR_ETA_CLIP.
+    """
+    if tuple(X.columns) != fit.columns:
+        raise C.SchemaError(
+            f"predict was given columns {tuple(X.columns)} for a fit on {fit.columns}. "
+            "The coefficient vector is positional after the intercept, so a mismatched or "
+            "reordered design returns a number instead of an error [Stage 9 §7.3].")
+    Xc = np.column_stack([np.ones(len(X)), X.to_numpy(dtype=float)])
+    eta = np.clip(Xc @ fit.beta, -C.FIRTH_ETA_CLIP, C.FIRTH_ETA_CLIP)
+    return 1.0 / (1.0 + np.exp(-eta))
 
 
 # --- Stage 8a — the weighted proportional-odds fit [§8] --------------------------------------------

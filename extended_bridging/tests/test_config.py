@@ -748,6 +748,63 @@ def test_POLR_MAX_ABS_BETA_is_strictly_inside_the_measured_sparse_region():
     assert config.POLR_MAX_ABS_BETA == 14.0
 
 
+# --- Stage 9 §13  the two computed views the [§8] BINARY estimators read ----------------------------
+#
+# Five assertions, written here for the Stage 8 §12 block's reason: the registry lives here, and each
+# one pins what a Stage 9 constant is COMPUTED FROM rather than what it happens to equal.
+
+def test_BINARY_OUTCOMES_is_the_seven_binary_registry_keys_in_registry_order():
+    binary = [key for key, o in config.OUTCOMES.items() if o.kind == "binary"]
+    assert list(config.BINARY_OUTCOMES) == binary
+    assert len(config.BINARY_OUTCOMES) == 7
+    assert all(config.OUTCOMES[key].kind == "binary" for key in config.BINARY_OUTCOMES)
+
+
+def test_BINARY_OUTCOMES_and_PRIMARY_OUTCOME_PARTITION_the_registry():
+    """Stage 9 §4.1. The two together are every outcome, and they share none.
+
+    This is the assertion that stops an outcome being estimated by NEITHER Stage 8 nor Stage 9, and
+    the one that stops it being estimated by BOTH. A ninth `OUTCOMES` entry of some third kind would
+    be silently unestimated without it — `secondary` ranges over BINARY_OUTCOMES and `primary` over
+    PRIMARY_OUTCOME, so nothing else anywhere would notice.
+    """
+    assert config.PRIMARY_OUTCOME not in config.BINARY_OUTCOMES
+    assert set(config.BINARY_OUTCOMES) | {config.PRIMARY_OUTCOME} == set(config.OUTCOMES)
+    assert len(config.BINARY_OUTCOMES) + 1 == len(config.OUTCOMES)
+
+
+def test_every_binary_outcome_declares_one_of_the_TWO_families():
+    """Stage 9 §3.1 and [§13]. `Secondary.by_family` and Benjamini-Hochberg both assume two families.
+
+    A third value in the registry would get its OWN correction group, silently: `by_family` builds its
+    dict from whatever `family` says, so a typo or a new family partitions the seven into three groups
+    and [§13]'s within-family correction is applied to a group of one. Nothing raises. Stage 9 §16
+    item 7 records this as the only guard, which is why it is asserted rather than assumed.
+    """
+    assert {config.OUTCOMES[key].family for key in config.BINARY_OUTCOMES} == {"secondary", "safety"}
+
+
+def test_OUTCOME_MODEL_OVERRIDES_can_only_name_a_BINARY_outcome():
+    """Stage 9 §9.2. An override is a route INTO augmentation, so a key outside BINARY_OUTCOMES is an
+    override nothing reads — for the ordinal outcome, which has no `m_a(X)`, or for a typo, which
+    `outcome_model_covariates` would answer with the shared list and no complaint."""
+    assert set(config.OUTCOME_MODEL_OVERRIDES) <= set(config.BINARY_OUTCOMES)
+
+
+def test_OR_CONTINUITY_is_a_positive_pseudo_count_no_larger_than_the_conventional_half():
+    """Stage 9 §6.3, §6.4. Asserted against BOTH endpoints, and neither is decoration.
+
+    Zero or below is not a continuity correction — the odds ratio stays 0 or +inf, which is the thing
+    the constant exists to prevent. Above 0.5 is past the conventional Haldane-Anscombe value, and
+    §6.4 measured that 0.5 is ALREADY 2.9x more aggressive in the treated arm and 3.8x in the control
+    arm than it is against row counts, because the four pseudo-counts here are WEIGHT-sums: Sw
+    27.736623 over the ATO population against 92 rows. Raising it further widens an asymmetry that is
+    measured to carry the odds ratio across the null in about 0.9% of empty-cell replicates.
+    """
+    assert 0.0 < config.OR_CONTINUITY <= 0.5
+    assert config.OR_CONTINUITY == 0.5
+
+
 def test_sex_labels_stay_none_until_the_query_is_answered():
     assert config.SEX_LABELS is None
 
