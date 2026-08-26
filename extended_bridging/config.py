@@ -15,9 +15,13 @@ decisions recorded in ``../out/stage0_data_inventory.md``. The specification for
 Standard library only, deliberately: importing the configuration is free, and the pure-logic
 acceptance tests run without a scientific stack. Where a value exists to be handed to pandas
 (``READ_DTYPES``, ``FACTOR_LEVELS``) it is a plain string or tuple that the consuming stage converts.
+``math`` is standard library and ``ci_min_draws`` is the one function that needs it; the Stage 10
+spec's fence writes ``np.ceil`` there, and ``math.ceil`` is the same value without making the import
+of this module depend on numpy [Stage 10 §13].
 """
 from __future__ import annotations
 
+import math
 import operator
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -269,6 +273,113 @@ DATA_SHA256: Final[str] = "54934fbb2ae22647a9c0a2cbaff7ac425ed8948bcaeabe36d69ac
 SEED: Final[int] = 20260807       # recorded in the run summary alongside DATA_SHA256
 N_BOOT: Final[int] = 2000
 SMD_THRESHOLD: Final[float] = 0.10     # [§9]
+
+
+# --- [§10] inference: the bootstrap's definitions ----------------------------------------------
+#
+# The [§10] stratification variable. A NAME and not the column itself, because `bootstrap.resample`
+# is general in its stratum (Stage 10 §12.2): [§14a] and [§14b] resample the same way over a
+# population that includes a centre with no treated patients, and a function that hard-coded
+# "center" would still be right there while being right for the wrong reason.
+BOOT_STRATUM: Final[str] = "center"
+
+# The [§10] confidence level. 0.95 is [§10]'s own "percentile 95% confidence intervals"; it is here
+# rather than as a literal so that `ci_min_draws` below can be derived from it and cannot disagree.
+CI_LEVEL: Final[float] = 0.95
+
+# The percentile DEFINITION, and this constant changes an ANSWER rather than a tolerance
+# [Stage 10 §8.2]. numpy's default is "linear", which interpolates between order statistics, and
+# [§10] claims its p-value "is the smallest level at which the percentile interval for beta excludes
+# the null" and "agrees by construction with the reported interval". THAT CLAIM IS FALSE UNDER THE
+# DEFAULT: measured over 30000 constructed draw sets at B = 2000, "linear" disagrees with the
+# p-value in 4.707% of them, and EVERY disagreement is at a smaller-tail count of exactly 50, where
+# p is exactly 0.0500 and an interpolated limit lands on whichever side of zero the arithmetic falls.
+#
+# "inverted_cdf" is the empirical-CDF quantile -- the smallest order statistic whose cumulative
+# proportion reaches the level -- which is the SAME object Pr(beta* <= 0) is computed from. That
+# identity is why the two agree, and it is why this is not "lower", which agrees at these levels by
+# arithmetic coincidence rather than by estimating the same quantile.
+#
+# Measured: on this workbook's own 2000 draws all three methods give the same verdict for beta and
+# for all seven risk differences, so the cohort does not witness this and the pin is justified by
+# construction. Prespecified for FIRTH_*'s reason: [§10] refits in every one of N_BOOT replicates.
+PERCENTILE_METHOD: Final[str] = "inverted_cdf"
+
+# The FitError buckets Stage 8 §11 requires reported separately, keyed by the leading token of the
+# raised message [Stage 10 §7.2]. `model.FitError` carries no code -- it is a bare RuntimeError
+# subclass (model.py:89) -- and every raise site IDENTIFIES itself by that token, so classification
+# is textual and test_bootstrap.py §15.6 SCANS the modules and asserts every token found is a key
+# here. A reworded message is then a test failure rather than a counter that silently reads zero.
+#
+# "polr:" covers two failures -- step-halving exhausted and no convergence in POLR_MAX_ITER -- and
+# they share a bucket. Stage 8 §11 asks for G7 against everything else, and Stage 8 §5.2 records
+# that exhausting the halvings is not a convergence route; both measured 0 in N_BOOT replicates.
+#
+# **THERE ARE NINETEEN RAISE SITES AND NOT SIXTEEN, AND THE SCAN IS WHAT FOUND THE OTHER THREE.**
+# Stage 10 §7.2, §13 and §15.6 all say sixteen -- fourteen in model.py and two in outcome.py -- and
+# re-scanning by AST reproduces those sixteen exactly. What that scan's SCOPE omitted is
+# `propensity.py`, which raises `model.FitError` three more times: twice from `ess` with the token
+# `ESS:` and once from `_assert_probabilities` with `F5`. Both are on `propensity.fit`'s own path,
+# which is the path Stage 10 §7.1 says fails a WHOLE replicate, so both are reachable from inside a
+# replicate and would have hit `_bucket`'s unrecognised-token raise -- turning a droppable sparse
+# replicate into a crash.
+#
+# **AND F5 IS NOT HYPOTHETICAL: IT IS THE ONLY `FitError` THE WORKBOOK ITSELF PRODUCES.** Stage 10
+# §7.5 measures `propensity.fit` raising `FitError` in 2 of N_BOOT replicates and does not say which
+# token. Measured over the [§10] draw at C.SEED: both are **F5** -- a fitted probability on the
+# boundary -- and neither is any of the sixteen tokens §7.2 scanned for. Without these two entries the
+# prespecified run terminates on replicate ~700 of 2000 with an unrecognised-token SchemaError.
+#
+# Both are bucketed `degenerate_design`, which keeps this map's VALUES the four §7.2 names that
+# test_config.py pins. F5 is a fitted probability on the boundary, which Stage 6 §5.5 calls "a
+# degenerate fit and not a confident one"; `ESS:` is an arm with no weighted patient or with every
+# weight at zero, which Stage 6 §3.1 calls a structural non-positivity. Neither is a separation
+# guard and neither is a convergence route, so the two remaining buckets would both be wrong.
+FAILURE_BUCKETS: Final[dict[str, str]] = {
+    "G7": "separation",
+    "S8": "constant_outcome",
+    "G6": "degenerate_design",
+    "polr:": "nonconvergence",
+    "Firth:": "nonconvergence",
+    "O1": "degenerate_design", "O2": "degenerate_design", "O3": "degenerate_design",
+    "O4": "degenerate_design", "O5": "degenerate_design", "O6": "degenerate_design",
+    "F3": "degenerate_design", "F4": "degenerate_design", "F6": "degenerate_design",
+    "F5": "degenerate_design", "ESS:": "degenerate_design",
+}
+
+
+def ci_min_draws(level: float = CI_LEVEL) -> int:
+    """The fewest draws at which a `level` percentile limit is an order statistic at all.
+
+    DERIVED, not chosen. Under PERCENTILE_METHOD the lower limit is order statistic
+    ceil((1-level)/2 * n), one-based; for that index to exceed 1 -- for the limit to be interior
+    rather than the sample minimum -- n must exceed 2/(1-level), which is 40 at CI_LEVEL = 0.95.
+    **AT EXACTLY THE FLOOR THE LOWER LIMIT IS THE SAMPLE MINIMUM AND THE UPPER IS THE SECOND-LARGEST
+    DRAW, NOT THE MAXIMUM**, and the asymmetry is the point: ceil(0.025 * 40) = 1 gives index 0
+    while ceil(0.975 * 40) = 39 gives index 38. Measured on np.arange(40.0): (0.0, 38.0). The floor
+    is a statement about the LOWER limit, which is the one that stops carrying information first;
+    below it np.percentile returns the minimum while still calling it a percentile
+    [Stage 10 §8.3, §15.8].
+
+    A function rather than a constant so it cannot disagree with CI_LEVEL. N_BOOT = 2000 against a
+    floor of 40 means an estimand needs 98% of its replicates to fail before it loses its interval:
+    measured, the worst per-outcome drop rate on this cohort is 0.8%, so the branch is unreachable
+    on v7 and is specified anyway.
+
+    THE SNAP IS NOT DEFENSIVE PROGRAMMING AND `int(ceil(2.0 / (1.0 - level)))` IS WRONG.
+    `1.0 - 0.90` is 0.09999999999999998, so that expression returns 21 where 20 is intended. At
+    CI_LEVEL = 0.95 it happens to return the intended 40 -- `1.0 - 0.95` errs the other way and the
+    quotient is 39.99999999999996 -- so the bug is invisible at the only level this study uses and
+    appears at the first [§13] sensitivity level anybody tries. A level whose quotient is genuinely
+    non-integral still takes the ceiling: at 0.93 the quotient is 28.571 and the answer is 29.
+
+    `math.ceil` and not `np.ceil`, which is what Stage 10 §13's fence writes. The two return the
+    same integer here and this module imports only the standard library [Stage 1 §3], which is a
+    property Stage 10 §13 does not list among what it amends.
+    """
+    exact = 2.0 / (1.0 - level)
+    nearest = round(exact)
+    return int(nearest if abs(exact - nearest) < 1e-9 else math.ceil(exact))
 
 # Named for the minority cell, min(events, non-events), not for events [§8 amendment, DECISION 3].
 # A constant named RARE_EVENT_THRESHOLD would invite the exact misreading the amendment corrects:

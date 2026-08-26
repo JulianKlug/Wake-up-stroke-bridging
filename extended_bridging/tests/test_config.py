@@ -805,6 +805,71 @@ def test_OR_CONTINUITY_is_a_positive_pseudo_count_no_larger_than_the_conventiona
     assert config.OR_CONTINUITY == 0.5
 
 
+# --- Stage 10 §13  the [§10] bootstrap's definitions -------------------------------------------------
+#
+# Six assertions. Each pins what a Stage 10 constant IS rather than what a reader assumes it is, and
+# two of them exist because the constant changes an ANSWER: `PERCENTILE_METHOD` decides a
+# significance verdict at the tail count [§10]'s p-value is a multiple of (Stage 10 §8.2), and
+# `ci_min_draws` is derived from `CI_LEVEL` by an arithmetic that is off by one at the first
+# sensitivity level anybody tries (Stage 10 §8.3).
+
+def test_CI_LEVEL_is_a_probability():
+    assert 0.0 < config.CI_LEVEL < 1.0
+    assert config.CI_LEVEL == 0.95            # [§10]'s own "percentile 95% confidence intervals"
+
+
+def test_BOOT_STRATUM_is_a_column_the_balance_set_knows_about():
+    """[§10] stratifies by centre, and `center` is a [§6] covariate rather than a name this
+    constant invents. Asserted against BALANCE_SET, which is the widest declared column set in
+    this module, so a typo cannot pass by matching nothing."""
+    assert config.BOOT_STRATUM in config.BALANCE_SET
+    assert config.BOOT_STRATUM in config.ANALYSIS_NAMES
+
+
+def test_PERCENTILE_METHOD_is_one_numpy_ACCEPTS():
+    """Asserted by CALLING np.percentile with it, not against a string list this test also writes.
+
+    A list of legal method names here would be a second declaration of numpy's API, free to drift
+    from numpy on the next `uv sync` while still passing. Calling it is the only check that fails
+    when the name stops being one numpy takes (Stage 10 §13).
+    """
+    import numpy as np
+    value = np.percentile(np.arange(100.0), 2.5, method=config.PERCENTILE_METHOD)
+    assert np.isfinite(value)
+    with pytest.raises(ValueError):
+        np.percentile(np.arange(100.0), 2.5, method="not_a_percentile_definition")
+
+
+def test_ci_min_draws_is_forty_at_the_declared_level_and_is_DERIVED():
+    """40 at 0.95, and the derivation checked at two other levels — one where the naive
+    `int(ceil(2/(1-level)))` is WRONG and one where the ceiling is genuinely what is wanted.
+
+    `1.0 - 0.90` is 0.09999999999999998, so the naive form returns 21 where 20 is intended; at 0.95
+    it errs the other way and returns the intended 40, which is why the bug is invisible at the one
+    level this study uses (Stage 10 §8.3).
+    """
+    assert config.ci_min_draws(config.CI_LEVEL) == 40
+    assert config.ci_min_draws(0.90) == 20                 # the naive form gives 21
+    assert config.ci_min_draws(0.93) == 29                 # 28.571 — a genuine ceiling
+
+
+def test_N_BOOT_supports_an_interval_at_the_declared_level():
+    """R8 as a STATIC check. Stage 10 §15.1 reaches R8 by monkeypatching CI_LEVEL, because `run`
+    takes no `level`; this is what guards the shipped configuration (Stage 10 §15.1)."""
+    assert config.N_BOOT >= config.ci_min_draws(config.CI_LEVEL)
+
+
+def test_FAILURE_BUCKETS_values_are_exactly_the_four_declared_buckets():
+    """A fifth bucket appearing by typo would silently collect the counts Stage 8 §11 asked to be
+    reported separately — the separation count against the convergence count — and a counter that
+    reads zero because its name is misspelled is indistinguishable from one that reads zero because
+    nothing fired (Stage 10 §7.2)."""
+    assert set(config.FAILURE_BUCKETS.values()) == {
+        "separation", "constant_outcome", "nonconvergence", "degenerate_design"}
+    assert config.FAILURE_BUCKETS["G7"] == "separation"
+    assert config.FAILURE_BUCKETS["S8"] == "constant_outcome"
+
+
 def test_sex_labels_stay_none_until_the_query_is_answered():
     assert config.SEX_LABELS is None
 

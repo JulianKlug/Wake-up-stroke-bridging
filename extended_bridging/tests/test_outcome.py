@@ -2208,6 +2208,15 @@ def test_by_family_partitions_the_seven_into_exactly_the_TWO_declared_families()
 BRANCH_PHASE: Final[dict[str, int]] = {
     "S1": 1, "S5a": 1, "S3a": 1, "S3b": 1, "S2": 2, "S4": 2, "S5b": 2, "S6": 3, "S7": 3, "S8": 3}
 
+# **NINE OF THE TEN ARE `SchemaError` AND S8 IS `model.FitError`** — DECISION 6 (PI, 2026-08-25),
+# Stage 10 §5.4. The map is here rather than as an `if branch == "S8"` inside the test because the
+# split is the assertion: Stage 10 §15.7 requires that S8 raises `FitError` AND that it does not
+# raise `SchemaError`, and that S6 and S7 are unmoved — "a change that moved all three would pass a
+# test written only for S8". A table both parametrised tests read is what makes that checkable at a
+# glance rather than by reading two branches.
+BRANCH_ERROR: Final[dict[str, type[Exception]]] = {
+    branch: (model.FitError if branch == "S8" else config.SchemaError) for branch in BRANCH_PHASE}
+
 
 def broken_secondary(branch: str):
     """(df, ps) for one of §15.1a's ten branches. Exactly one thing is wrong with each."""
@@ -2253,11 +2262,15 @@ def broken_secondary(branch: str):
 
 
 @pytest.mark.parametrize("branch", sorted(BRANCH_PHASE))
-def test_each_precondition_branch_raises_a_SchemaError_NAMING_ITS_OWN_CONDITION(branch):
+def test_each_precondition_branch_raises_ITS_OWN_ERROR_CLASS_NAMING_ITS_OWN_CONDITION(branch):
     """The message assertion is the test. Three of these ten frames were mis-specified in a way that
-    only a message assertion catches — `pytest.raises(SchemaError)` passes on all three."""
+    only a message assertion catches — `pytest.raises(SchemaError)` passes on all three.
+
+    The CLASS is `BRANCH_ERROR`'s and not `SchemaError` for all ten: S8 is `model.FitError` under
+    DECISION 6 [Stage 10 §5.4], and the other nine are unmoved.
+    """
     df, ps = broken_secondary(branch)
-    with pytest.raises(config.SchemaError) as e:
+    with pytest.raises(BRANCH_ERROR[branch]) as e:
         outcome.secondary(df, ps, data.Audit(hand_source(Path("."), "stage9")))
     assert branch in message_of(e), (
         f"{branch}'s frame raised, but the message names a different branch:\n{message_of(e)}")
@@ -2269,7 +2282,7 @@ def test_a_branch_about_ONE_OUTCOME_names_that_outcome(branch, key):
     """S6, S7 and S8 fire inside the loop, so their messages carry the key: "the outcome is constant"
     against seven outcomes is a message that costs a bisect. S1 and S2 name it for the same reason."""
     df, ps = broken_secondary(branch)
-    with pytest.raises(config.SchemaError) as e:
+    with pytest.raises(BRANCH_ERROR[branch]) as e:
         outcome.secondary(df, ps, data.Audit(hand_source(Path("."), "stage9")))
     assert key in message_of(e)
 
@@ -2968,16 +2981,32 @@ def test_THE_try_except_COMPANION_returns_seven_estimates_and_EVERY_OTHER_TEST_S
         outcome.secondary(df, ps, audit)
 
 
-def test_secondary_CATCHES_NOTHING_by_scan(stage9_source):
+def test_secondary_catches_EXACTLY_ONE_THING_and_it_is_model_FitError(stage9_source):
     """By scan, because the behavioural test above can only reach the failure modes it constructs.
 
-    `outcome.py`'s Stage 9 half contains no `except` of any kind. A `try` here would be a decision
-    about which failures are droppable, and that decision is [§10]'s and is already made: FitError is
-    droppable, SchemaError is not, and neither is Stage 9's to reinterpret.
+    **This assertion was `handlers == []` until Stage 10 landed `collect`**, and the amendment is
+    licensed by Stage 10 §13 rather than by this file: [§10] left the drop granularity open, DECISION
+    7 (PI, 2026-08-25) chose per-outcome replicate sets, and Stage 10 §7.3 puts the mechanism in
+    Stage 9's own seven-outcome loop rather than re-implementing that loop in `bootstrap.py` — which
+    Stage 9 §14 names as how §6.3's frozen paths get violated by accident.
+
+    What the scan asserts now is the shape the original assertion was protecting:
+
+      * there is EXACTLY ONE handler, so no second `try` has appeared;
+      * it names `model.FitError` and not `Exception` and not `C.SchemaError`, which is Stage 10
+        §7.1's taxonomy — a bare `except Exception` is `pilots/analysis.py:595`'s defect, where a
+        `KeyError` from a typo and an unfittable model are counted as the same dropped replicate;
+      * its body contains a bare `raise`, which is `collect=False` being the point-estimate contract
+        unchanged rather than a default nobody re-checks.
     """
     tree = ast.parse(stage9_source)
     handlers = [node for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler)]
-    assert handlers == []
+    assert len(handlers) == 1
+    caught = handlers[0].type
+    assert isinstance(caught, ast.Attribute) and caught.attr == "FitError"
+    assert isinstance(caught.value, ast.Name) and caught.value.id == "model"
+    reraises = [n for n in ast.walk(handlers[0]) if isinstance(n, ast.Raise) and n.exc is None]
+    assert len(reraises) == 1
 
 
 @DATA_GATED
@@ -3861,7 +3890,11 @@ def test_the_STAGE_8_FUNCTIONS_ARE_UNTOUCHED_by_this_stage():
     assert list(inspect.signature(outcome.weighted_proportion).parameters) == ["x", "a", "w"]
     assert list(inspect.signature(outcome.cumulative_rd).parameters) == ["y", "a", "w"]
     assert list(inspect.signature(outcome.primary).parameters) == ["df", "ps", "audit"]
-    assert list(inspect.signature(outcome.secondary).parameters) == ["df", "ps", "audit", "paths"]
+    # `collect` is Stage 10 §13's second licensed change to this module and the only addition to
+    # this signature since Stage 9; `paths` is Stage 9's own. Both are keyword-defaulted, so every
+    # Stage 1-9 call site is unchanged, and `primary` above is untouched.
+    assert list(inspect.signature(outcome.secondary).parameters) == [
+        "df", "ps", "audit", "paths", "collect"]
 
 
 def test_each_estimate_is_INDEPENDENT_OF_THE_OTHER_SIX():
@@ -4271,3 +4304,161 @@ def test_the_workbook_drops_center_USZ_from_EVERY_design(workbook_stage9):
         if est.fit is not None:
             assert est.dropped == ("center_USZ",)
     assert len(sec.estimates["tici_2b_3"].fit.beta) == 5
+
+# ======================================================================================================
+# Stage 10 §15.7 — S8's reclassification and `secondary`'s `collect`
+# ======================================================================================================
+#
+# These live here and not in `test_bootstrap.py` because that is where the changed function is
+# (Stage 10 §15). Two shipped changes are under test and they are the only two Stage 10 makes to
+# `outcome.py` (Stage 10 §13): S8 raises `model.FitError` rather than `C.SchemaError`, and
+# `secondary` gains `collect`.
+#
+# The frames are `fixtures_stage10.py`'s, which is Stage 10 §15.0's own rule — every constructed
+# fixture is code, so a pin nobody can reproduce is not a pin.
+
+from fixtures_stage10 import (constant_outcome_frame, two_centre_frame,   # noqa: E402
+                              unfittable_nuisance_frame)
+
+
+def stage10_fit(df: pd.DataFrame) -> propensity.Propensity:
+    """`propensity.fit` over a `fixtures_stage10` frame, on a throwaway `Audit`.
+
+    FITTED and not hand-assembled, unlike §15.0's `hand_propensity`: these frames exist to be driven
+    end to end through the stage as a [§10] replicate drives it, and a hand-built `Propensity` would
+    make the `m_a(X)` failure `unfittable_nuisance_frame` exists to produce a property of an invented
+    `e` rather than of the frame.
+    """
+    return propensity.fit(df, data.Audit(hand_source(Path("."), "stage10")))
+
+
+@pytest.mark.parametrize("key", ["tici_2b_3", "sich"])       # one secondary, one safety
+def test_S8_raises_FitError_and_DOES_NOT_raise_SchemaError(key):
+    """DECISION 6 (PI, 2026-08-25), Stage 10 §5.4. **The second half is the assertion that fails on
+    the landed code**, and it is the one that has to exist: `pytest.raises(model.FitError)` alone
+    would pass on an implementation that raised both, and there is no such thing — but it would also
+    pass if `FitError` were ever made a subclass of `SchemaError`, which is the collapse Stage 10
+    §15.4 asserts against from the other side.
+
+    Parametrised over one outcome from each [§5] family, because S8 fires inside the per-outcome loop
+    and a test on one family would not notice a guard keyed on `family`.
+    """
+    df = constant_outcome_frame(key)
+    ps = stage10_fit(df)
+    with pytest.raises(model.FitError) as e:
+        outcome.secondary(df, ps, data.Audit(hand_source(Path("."), "stage10")))
+    assert "S8" in message_of(e) and key in message_of(e)
+    assert not isinstance(e.value, config.SchemaError)
+
+
+@pytest.mark.parametrize("branch", ["S6", "S7"])
+def test_S6_and_S7_STILL_raise_SchemaError_after_S8_moved(branch):
+    """§5.4 changes ONE precondition of three, and a change that moved all three would pass a test
+    written only for S8. S6 is an empty [§11] population and S7 an arm with no record or no weight;
+    Stage 9 §4.4 argues both mean the mask and the weights disagree about the same rows, which is a
+    bug and not a sparse replicate — so both stay uncatchable by [§10] (Stage 10 §5.4, §7.1)."""
+    df, ps = broken_secondary(branch)
+    with pytest.raises(config.SchemaError) as e:
+        outcome.secondary(df, ps, data.Audit(hand_source(Path("."), "stage9")))
+    assert branch in message_of(e)
+    assert not isinstance(e.value, model.FitError)
+
+
+def test_the_S8_frame_is_CONSTANT_and_not_merely_rare():
+    """The fixture's own witness first, as §15.5's separated frame gets one: the outcome really does
+    take one value across its whole [§11] population, so the raise is S8's and not S7's."""
+    df = constant_outcome_frame("sich")
+    ps = stage10_fit(df)
+    population = ps.in_model & df["sich"].notna()
+    assert int(population.sum()) > 0
+    assert df.loc[population, "sich"].nunique() == 1
+
+
+def test_collect_False_RAISES_on_an_unfittable_nuisance_model():
+    """The point-estimate contract unchanged (Stage 10 §7.3). On the workbook a `FitError` is fatal
+    and must be, because there is no replicate to drop."""
+    df = unfittable_nuisance_frame()
+    ps = stage10_fit(df)
+    with pytest.raises(model.FitError):
+        outcome.secondary(df, ps, data.Audit(hand_source(Path("."), "stage10")))
+
+
+def test_collect_True_returns_SIX_estimates_and_ONE_RECORDED_failure():
+    """**Both halves, and the second is what makes it a test**: an implementation that dropped the
+    key entirely would give six estimates too (Stage 10 §15.7).
+
+    "Exactly one" is the fixture's specification: a frame on which two outcomes failed would pass a
+    wrong implementation that gives up after the first.
+    """
+    df = unfittable_nuisance_frame()
+    ps = stage10_fit(df)
+    sec = outcome.secondary(df, ps, data.Audit(hand_source(Path("."), "stage10")), collect=True)
+    assert len(sec.estimates) == 6
+    assert set(sec.failures) == {"tici_2b_3"}
+    assert set(sec.estimates) | set(sec.failures) == set(config.BINARY_OUTCOMES)
+    assert not set(sec.estimates) & set(sec.failures)
+    # The MESSAGE is recorded and not merely the key, because Stage 10 §7.2 classifies the failure
+    # by the leading token of it and a bare absence carries no token.
+    assert sec.failures["tici_2b_3"].split()[0] == "F3"
+
+
+def test_collect_True_leaves_by_family_one_short_rather_than_raising_KeyError():
+    """`by_family` ranges over the registry, so a dropped outcome is a missing member of its family
+    and not a broken registry (Stage 10 §7.3)."""
+    df = unfittable_nuisance_frame()
+    sec = outcome.secondary(df, stage10_fit(df),
+                            data.Audit(hand_source(Path("."), "stage10")), collect=True)
+    families = sec.by_family()
+    assert sum(len(v) for v in families.values()) == 6
+    assert "tici_2b_3" not in [e.outcome for group in families.values() for e in group]
+
+
+@pytest.mark.parametrize("collect", [False, True])
+def test_collect_NEVER_catches_SchemaError_at_EITHER_setting(collect):
+    """S6's frame trips a `SchemaError` inside the per-outcome loop, which is exactly where
+    `collect`'s `except` sits — so this is the assertion that the `except` clause names
+    `model.FitError` and not `Exception` (Stage 10 §7.1, §15.7)."""
+    df, ps = broken_secondary("S6")
+    with pytest.raises(config.SchemaError):
+        outcome.secondary(df, ps, data.Audit(hand_source(Path("."), "stage9")), collect=collect)
+
+
+def test_the_FROZEN_paths_still_govern_under_collect_True():
+    """An outcome whose frozen path is `"unaugmented"` fits no `m_a(X)` and so cannot contribute a
+    nuisance `FitError` at all — which is §6.3's rule and `collect` not interacting with it.
+
+    Asserted by freezing `tici_2b_3` to `"unaugmented"` on the very frame whose `tici_2b_3` nuisance
+    model is unfittable: with the path frozen there is no fit to fail, so all seven outcomes come
+    back estimated and `failures` is empty. The same frame with the paths decided from itself gives
+    six and one, which is the test immediately above.
+    """
+    df = unfittable_nuisance_frame()
+    ps = stage10_fit(df)
+    paths = {key: "unaugmented" if key == "tici_2b_3" else
+             outcome._augmented_path(key, min(
+                 int((df.loc[ps.in_model & df[key].notna(), key] == 1.0).sum()),
+                 int((df.loc[ps.in_model & df[key].notna(), key] == 0.0).sum())))
+             for key in config.BINARY_OUTCOMES}
+    sec = outcome.secondary(df, ps, data.Audit(hand_source(Path("."), "stage10")),
+                            paths=paths, collect=True)
+    assert sec.failures == {}
+    assert len(sec.estimates) == 7
+    assert sec.estimates["tici_2b_3"].augmented is None
+    assert sec.estimates["tici_2b_3"].fit is None
+
+
+def test_collect_False_is_the_DEFAULT_and_the_point_estimate_log_is_UNCHANGED():
+    """`collect` defaults to False and a clean frame renders the same three entries either way.
+
+    The byte comparison is what protects Stage 9's audit assertions: `_estimates_table` and
+    `_models_table` gained a skip for an absent key, and on a frame where no key is absent the two
+    tables must be what they were (Stage 10 §13's "no other function changes").
+    """
+    assert inspect.signature(outcome.secondary).parameters["collect"].default is False
+    df = two_centre_frame()
+    ps = stage10_fit(df)
+    a_default = data.Audit(hand_source(Path("."), "stage10"))
+    a_collect = data.Audit(hand_source(Path("."), "stage10"))
+    outcome.secondary(df, ps, a_default)
+    outcome.secondary(df, ps, a_collect, collect=True)
+    assert a_default.to_markdown() == a_collect.to_markdown()

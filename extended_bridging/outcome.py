@@ -90,7 +90,7 @@ This module is **not** exempt from the Stage 1 §7 raw-name scan and must never 
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final
 
 import numpy as np
@@ -759,15 +759,34 @@ class Secondary:
     `C.OUTCOMES[k].family` itself is a second place the family partition is computed, and [§13]'s
     correction is wrong if the two disagree. This is not a verdict method — it partitions, it does
     not judge.
+
+    **`estimates` and `failures` PARTITION `C.BINARY_OUTCOMES` and `failures` is empty at the
+    point-estimate contract** [Stage 10 §7.3]. `secondary(..., collect=True)` is Stage 10's call and
+    the only one that can fill it: an outcome whose `m_a(X)` cannot be fitted is recorded here by
+    name and message rather than raised past the other six, which is [§10]'s "dropped and counted" at
+    the granularity [§10] left open. With `collect=False` — every caller before Stage 10 — a
+    `FitError` propagates and `failures` is `{}`, so nothing about the point estimate moves.
+
+    The key is RECORDED and not simply absent, because "we tried this outcome and could not fit it"
+    and "this outcome was never attempted" are the two things [§10]'s counters have to tell apart
+    (Stage 10 §3.1, §15.7).
     """
 
     estimates: dict[str, BinaryEstimate]
+    failures: dict[str, str] = field(default_factory=dict)   # outcome -> the FitError message
 
     def by_family(self) -> dict[str, tuple[BinaryEstimate, ...]]:
-        """The estimates grouped by [§5] family, each tuple in C.BINARY_OUTCOMES order."""
+        """The estimates grouped by [§5] family, each tuple in C.BINARY_OUTCOMES order.
+
+        Ranges over the registry and SKIPS an outcome that is not in `estimates`, which under the
+        point-estimate contract is none of them. Under `collect=True` a family can come back one
+        short, and a `KeyError` there would be this method reporting a Stage 10 replicate's dropped
+        outcome as a broken registry [Stage 10 §7.3].
+        """
         out: dict[str, list[BinaryEstimate]] = {}
         for key in C.BINARY_OUTCOMES:
-            out.setdefault(self.estimates[key].family, []).append(self.estimates[key])
+            if key in self.estimates:
+                out.setdefault(self.estimates[key].family, []).append(self.estimates[key])
         return {fam: tuple(v) for fam, v in out.items()}
 
 
@@ -894,10 +913,22 @@ def _assert_estimable(key: str, y: np.ndarray, a: np.ndarray, w: np.ndarray) -> 
     argument: that function returns nan when an arm has no positive weight, so S7 firing means the
     MASK and the WEIGHTS disagree about the same rows, which is a bug and not a sparse replicate.
 
-    S8 is `SchemaError` and §16 item 3 is the open question about whether it should be FitError. The
-    reason it is SchemaError is NOT that a constant outcome yields nan -- measured, it yields a
-    finite 1.3529411765 (§6.2) -- but that it yields a PLAUSIBLE number for an outcome nobody
-    observed an event in, which is worse than a nan a reader would notice.
+    **S8 IS `model.FitError` AND S6 AND S7 ARE `C.SchemaError`, AND THE SPLIT IS THE WHOLE OF
+    DECISION 6** (PI, 2026-08-25) [Stage 10 §5.4]. Stage 9 wrote S8 as `SchemaError` and named the
+    classification as the open question of §16 item 3; `TODOS.md` set the trigger -- the first
+    Stage 10 replicate that hits it, and a non-negligible rate -- and the trigger fired. Measured
+    over 1998 stratified replicates: `sich` 16 (0.8%), `tici_2b_3` 3 (0.2%), 19 replicates and 1.0%
+    in total. `sich` has five events in ninety-two, so a resample drawing none of them is a sparse
+    replicate and not a bug, and Stage 8 §11 forbids [§10] catching a `SchemaError` -- so as landed
+    this raised something no correct implementation could catch and no correct resampler prevent.
+
+    Stage 9's own reason for the other choice is what settles it. The objection was to RETURNING a
+    plausible number -- a constant outcome does not yield nan, it yields a finite 1.3529411765
+    (§6.2) for an outcome nobody observed an event in -- and `FitError` returns nothing: it drops
+    the replicate and counts it in a named bucket, which is [§10]'s mechanism for exactly this. S6
+    is an empty population and S7 is an arm with no record or no weight; both mean the mask and the
+    weights disagree about the same rows, which is a bug, so both stay `SchemaError`. Neither fired
+    in 2000 replicates [Stage 10 §5.4, §7.1].
 
     **S7 and S8 raise on the FIRST failure rather than collecting**, unlike the two frame-level
     phases, and the asymmetry is deliberate: a frame-level phase reports on a frame the caller can
@@ -922,11 +953,15 @@ def _assert_estimable(key: str, y: np.ndarray, a: np.ndarray, w: np.ndarray) -> 
                 "here (outcome.py:155-157), so reaching this means the mask and the weights "
                 "disagree about the same rows -- a bug, not a sparse replicate [Stage 9 §4.4].")
     if len(set(y.tolist())) < 2:
-        raise C.SchemaError(
+        raise model.FitError(
             f"S8  {key}: constant at {y[0]!r} on its [§11] population of {y.size}. The risk "
             "difference is 0 and both weighted proportions are degenerate in the SAME direction, so "
             "§6.3's correction returns a finite odds ratio near 1 for an outcome with no contrast in "
-            "it -- a plausible number rather than a legible failure [Stage 9 §6.2, §16 item 3].")
+            "it -- a plausible number rather than a legible failure [Stage 9 §6.2]. It is FitError "
+            "and not SchemaError -- DECISION 6, PI 2026-08-25 -- because an outcome with five events "
+            "in ninety-two having none in a resample is a sparse replicate rather than a bug: [§10] "
+            "drops and counts it, which is what the objection to a plausible number asks for "
+            "[Stage 10 §5.4].")
 
 
 # --- the weighted risk difference [§8, §5] --------------------------------------------------------------
@@ -1270,11 +1305,19 @@ def _estimates_table(estimates: dict[str, BinaryEstimate]) -> tuple[tuple[str, .
     specification is reported beside its estimate."
 
     NO CELL MAY CONTAIN A PIPE and none does: `data._md_table` does no escaping (§10.3, §15.14).
+
+    An outcome absent from `estimates` is SKIPPED, which under the point-estimate contract is none of
+    them: only `secondary(..., collect=True)` can produce a partial dict, and that is Stage 10's
+    replicate call whose `Audit` is a throwaway nobody writes [Stage 10 §6.2, §7.3]. Rendering a row
+    of dashes for it would put a row about nothing in a log nobody reads, and rendering the message
+    would put a `FitError`'s prose — which is not pipe-checked — in a markdown cell.
     """
     header = ("outcome", "n", "p1_w", "p0_w", "RD_w", "OR_w", "corrected",
               "tau (model-assisted)", "m_a(X)")
     rows: list[tuple[str, ...]] = [header]
     for key in C.BINARY_OUTCOMES:
+        if key not in estimates:
+            continue
         est = estimates[key]
         rows.append((
             key, str(int(est.in_estimate.sum())),
@@ -1303,6 +1346,8 @@ def _models_table(estimates: dict[str, BinaryEstimate]) -> tuple[tuple[str, ...]
               "rescales", "halvings", "dropped")
     rows: list[tuple[str, ...]] = [header]
     for key in C.BINARY_OUTCOMES:
+        if key not in estimates:            # collect=True dropped it — `_estimates_table`'s reason
+            continue
         est = estimates[key]
         if est.fit is None:
             continue
@@ -1377,7 +1422,7 @@ def _record_models(estimates: dict[str, BinaryEstimate], audit: Audit) -> None:
 # --- the stage [§8, §11] ---------------------------------------------------------------------------------
 
 def secondary(df: pd.DataFrame, ps: propensity.Propensity, audit: Audit,
-              paths: dict[str, str] | None = None) -> Secondary:
+              paths: dict[str, str] | None = None, collect: bool = False) -> Secondary:
     """The [§8] binary estimates: seven outcomes, each on its own [§11] denominator.
 
     Takes no outcome list: `C.BINARY_OUTCOMES` is computed from the [§5] registry, so a ninth outcome
@@ -1390,6 +1435,25 @@ def secondary(df: pd.DataFrame, ps: propensity.Propensity, audit: Audit,
     passed IN" unsatisfiable through this function (§22.3 item 11). It is optional because the
     point-estimate call is the one that DECIDES the paths, and complete-or-absent because a partial
     map is the two-estimator mixture arrived at one outcome at a time.
+
+    `collect` turns a per-outcome `model.FitError` into a recorded failure instead of a raise
+    [Stage 10 §7.3]. Default False, which is the point-estimate contract unchanged: on the workbook a
+    `FitError` is fatal and must be, because there is no replicate to drop. Stage 10 passes True, and
+    then a single outcome's unfittable `m_a(X)` leaves the other six estimated — which is [§10]'s
+    "dropped and counted" at the granularity [§10] left open and Stage 10 §7.3 chose. The key lands
+    in `Secondary.failures` with its message, because Stage 10 classifies the failure by the leading
+    token of that message (Stage 10 §7.2) and a bare absence carries no token.
+
+    **`collect` NEVER catches `C.SchemaError`, at either setting.** S6 and S7 stay fatal, which is
+    Stage 10 §5.4's whole split: an empty [§11] population or an arm with no weight means the mask
+    and the weights disagree about the same rows, and that is a bug rather than a sparse replicate.
+    S8 alone was reclassified, and it is a `FitError` now, so it is what `collect` collects.
+
+    **The scope of the `except` is ONE OUTCOME'S WHOLE ESTIMATE and not its augmentation**
+    [Stage 10 §7.3]. An `m_a(X)` failure costs that outcome's `rd`, `odds_ratio` AND `augmented`
+    together, because Stage 9 §14 forbids taking percentiles of `tau` and of `rd` from different
+    replicate sets — [§10.3] reports the two as a comparison. Catching around `outcome_model` alone
+    would leave `rd` estimated and `tau` absent, which is exactly that prohibition violated.
 
     Six things about the order below, each of which is a failure if moved:
 
@@ -1407,12 +1471,14 @@ def secondary(df: pd.DataFrame, ps: propensity.Propensity, audit: Audit,
         fits a nuisance model. Reversing them would make `sich`'s 17-iteration fit (§7.4) happen on
         every call and be discarded, and would put a FitError on a path [§8] says has no model.
 
-    NO FitError IS CAUGHT HERE, and that is the whole of §9.5's no-substitution rule as code. A
-    `model.firth` failure on a declared nuisance model propagates, [§10] drops and counts the
-    replicate, and the estimate is ABSENT rather than silently downgraded to the unaugmented form.
-    A try/except around `outcome_model` is the most natural thing an implementer writes when a fit
-    fails on 0.3% of `sich` replicates and it is the thing that turns this stage into a two-estimator
-    mixture. §15.7a asserts it and shows the caught version passing every other test.
+    NO FitError IS SWALLOWED HERE, and that is the whole of §9.5's no-substitution rule as code. A
+    `model.firth` failure on a declared nuisance model is never downgraded to the unaugmented form:
+    at `collect=False` it propagates, and at `collect=True` it removes the outcome's whole estimate
+    and is recorded. Neither route produces a number from a fallback estimator, which is roadmap
+    invariant 5. A try/except around `outcome_model` that let `rd` survive is the most natural thing
+    an implementer writes when a fit fails on 0.3% of `sich` replicates and it is the thing that
+    turns this stage into a two-estimator mixture. §15.7a asserts it and shows the caught version
+    passing every other test.
 
     Deterministic, and writes no file. No seed is held, no clock is read, and the only mutable object
     touched is the `Audit` passed in. Stage 10 must pass a throwaway one per replicate, for Stage 8
@@ -1440,34 +1506,44 @@ def secondary(df: pd.DataFrame, ps: propensity.Propensity, audit: Audit,
     _record_estimable(df, ps, populations, minorities, audit)
 
     estimates: dict[str, BinaryEstimate] = {}
+    failures: dict[str, str] = {}
     for key in C.BINARY_OUTCOMES:
-        in_estimate = populations[key]
-        sub = df.loc[in_estimate]
-        y = sub[key].to_numpy(dtype=float)
-        a = sub[C.TREATMENT].to_numpy(dtype=float)
-        w = ps.w.loc[in_estimate].to_numpy(dtype=float)
-        e = ps.e.loc[in_estimate].to_numpy(dtype=float)
-        _assert_estimable(key, y, a, w)
+        try:
+            in_estimate = populations[key]
+            sub = df.loc[in_estimate]
+            y = sub[key].to_numpy(dtype=float)
+            a = sub[C.TREATMENT].to_numpy(dtype=float)
+            w = ps.w.loc[in_estimate].to_numpy(dtype=float)
+            e = ps.e.loc[in_estimate].to_numpy(dtype=float)
+            _assert_estimable(key, y, a, w)          # S6, S7 SchemaError; S8 FitError [§5.4]
 
-        odds_ratio, corrected, share = marginal_odds_ratio(y, a, w)
-        path = paths[key] if paths is not None else _augmented_path(key, minorities[key])
-        tau: float | None = None
-        fit: model.Fit | None = None
-        covariates: tuple[str, ...] | None = None
-        dropped: tuple[str, ...] = ()
-        if path != "unaugmented":
-            covariates = C.outcome_model_covariates(key)
-            fit, X, dropped = outcome_model(df, in_estimate, key)
-            m1, m0 = _counterfactuals(fit, X)
-            tau = augmented_rd(y, a, w, _tilt(e), m1, m0)
+            odds_ratio, corrected, share = marginal_odds_ratio(y, a, w)
+            path = paths[key] if paths is not None else _augmented_path(key, minorities[key])
+            tau: float | None = None
+            fit: model.Fit | None = None
+            covariates: tuple[str, ...] | None = None
+            dropped: tuple[str, ...] = ()
+            if path != "unaugmented":
+                covariates = C.outcome_model_covariates(key)
+                fit, X, dropped = outcome_model(df, in_estimate, key)
+                m1, m0 = _counterfactuals(fit, X)
+                tau = augmented_rd(y, a, w, _tilt(e), m1, m0)
 
-        estimates[key] = BinaryEstimate(
-            outcome=key, family=C.OUTCOMES[key].family, minority=minorities[key],
-            rd=weighted_rd(y, a, w), odds_ratio=odds_ratio, or_corrected=corrected,
-            proportion=dict(share), augmented_path=path, augmented=tau, covariates=covariates,
-            reduced=key in C.OUTCOME_MODEL_OVERRIDES, dropped=dropped,
-            in_estimate=in_estimate, fit=fit)
+            estimates[key] = BinaryEstimate(
+                outcome=key, family=C.OUTCOMES[key].family, minority=minorities[key],
+                rd=weighted_rd(y, a, w), odds_ratio=odds_ratio, or_corrected=corrected,
+                proportion=dict(share), augmented_path=path, augmented=tau, covariates=covariates,
+                reduced=key in C.OUTCOME_MODEL_OVERRIDES, dropped=dropped,
+                in_estimate=in_estimate, fit=fit)
+        except model.FitError as failure:
+            # `collect=False` re-raises, which is the point-estimate contract unchanged. Only
+            # `model.FitError` reaches here: `C.SchemaError` is not a subclass of it, so S6 and S7
+            # propagate at both settings and no `except` in this module can catch them
+            # [Stage 10 §7.1, §15.7].
+            if not collect:
+                raise
+            failures[key] = str(failure)
 
     _record_estimates(estimates, audit)
     _record_models(estimates, audit)
-    return Secondary(estimates=estimates)
+    return Secondary(estimates=estimates, failures=failures)
