@@ -22,11 +22,20 @@ model, so `Propensity.spec`, the `Specification` registry and `balance._role`'s 
 whole seam — are invisible to it.
 
 **Status.** Written 2026-08-27 against the landed Stages 1–10. **Twenty-two probes were run before
-any section was drafted, and six of them changed what this document says.** It then went through an
-**engineering review on 2026-08-27, which changed seven more things** — five of them internal
-contradictions in the draft, and one of them a reversal decided by re-reading [§14a] rather than by
-argument. **§27.1 is the ledger of what the review changed and is worth reading before §3.3**, whose
-key count it moved from seventy to sixty-nine.
+any section was drafted, and six of them changed what this document says.**
+
+**It then went through an engineering review on 2026-08-27, which changed fourteen things** — seven
+that needed a decision and six smaller corrections, plus one note about the environment. Five of the
+seven were **internal contradictions in the draft**: two sections prescribing incompatible things, a
+guard with no identifier, a record field holding a type it was not declared to hold. One was a
+**reversal**, decided by reading [§14a]'s Report sentence rather than by argument, and it moved the
+estimand key count from seventy to sixty-nine.
+
+**§27.1 is the ledger of what the review changed; §26.1 is what it did NOT check.** Read §26.1 before
+trusting this document's statistical choices: the review checked internal consistency and this
+document's claims about landed code, it did not check the statistical premises, it re-ran nothing,
+and **no independent cross-model review was run**. §21 item 14 is the residual and is the largest
+open risk here.
 
 - **§7.3 — two of the four quantities [§14a] lists as outputs are not new numbers.** The standardised
   mRS 0–2 risk difference *is* `RD_2` and the standardised mortality difference *is* `−RD_5`, to
@@ -229,7 +238,7 @@ computed clause rather than a sentence.
 | `extended_bridging/tests/reference/polr_ri_clmm.R` | **new.** The `ordinal::clmm` oracle for `polr_ri`, gated as `polr_clm.R` is (§12.7) |
 | `extended_bridging/tests/test_model.py`, `test_bootstrap.py`, `test_balance.py`, `test_config.py`, `test_reference_r.py` | **amended.** The two new estimators, the ninth public name and the surface count that moves with it, `balance`'s surface count moving with the rename, the four new constants, the second R gate (§20) |
 | `extended_bridging/implementation_roadmap.md` | **amended.** Stage 12 gains its `**Spec:**` line; five corrections and three additions (§27) |
-| `TODOS.md` | **amended.** Two items close, one has its stated reason corrected while its trigger fires, **two** have their triggers fire and stay open, **eight** are new (§21, §27) |
+| `TODOS.md` | **amended.** Two items close, one has its stated reason corrected while its trigger fires, **two** have their triggers fire and stay open, **nine** are new (§21, §27) |
 
 `out/logs/audit_<label>.md` is an **output, not a deliverable**. For this stage it is the only place
 any standardised probability, any risk difference, any interval limit and any centre intercept
@@ -1776,7 +1785,7 @@ rename and nothing else; and nothing in `outcome.py`, `propensity.py`, `cohort.p
 | `tests/test_config.py` | **six** assertions: `POLR_RI_NODES` odd and ≥ 9; `0 < POLR_RI_SIGMA_FLOOR < 1e-2`; `STANDARDISATION_COVARIATES == tuple(c for c in PS_COVARIATES if c != "center")` — [§15]'s permission as a static check (§5.1); `SUPPORT_COVARIATES` is `STANDARDISATION_COVARIATES` minus `CATEGORICAL`; the four new `FAILURE_BUCKETS` tokens; and `"support.beta"` is in no key set (§3.3, §20.3) | §20.2 |
 | `tests/test_reference_r.py` | the `clmm` oracle, under the existing `reference_r_ordinal` gate and `_r_environment` | §12.7 |
 | `implementation_roadmap.md` | Stage 12 gains its `**Spec:**` line; five corrections and three additions | §27 |
-| `TODOS.md` | two close, one has its stated reason corrected, two have their triggers fire and stay open, eight are new | §21, §27.1 |
+| `TODOS.md` | two close, one has its stated reason corrected, two have their triggers fire and stay open, nine are new | §21, §27.1 |
 
 ```python
 # config.py — the additions, as they are to be pasted. Stage 12 §18
@@ -2165,6 +2174,34 @@ was written for.
     labelled, and §25's step 0 replaces them with `N_BOOT` measurements before implementation begins.
     **Status: open until step 0 lands**, at which point this item closes with measured numbers rather
     than negatively.
+14. **NEW — this document has not been swept for the error class §27.1's first row is an instance
+    of: a structural decision argued from engineering grounds where [§10], [§14] or [§16] gives a
+    direct answer.** The estimand key set was specified as 70 keys with a uniform twenty-three per
+    arm, which is a good *engineering* shape — it makes the count derivable from `config.py` — and is
+    not what [§14a] asks for. [§14a] lists `exp(β)` as a model parameter separately from the
+    quantities to report *from the distributions*, and defines the sensitivity on the standardisation
+    population; both sentences were in the plan the whole time. **One instance was found because the
+    question was asked; the sweep was not run.**
+
+    **The check is cheap and mechanical**: for every structural decision in this document — what is
+    reported, at what granularity, over which population, under which label, with which interval —
+    ask whether [§10], [§14] or [§16] speaks to it directly, and whether this document cites that
+    sentence or reasons around it. Candidates worth the sweep, named so they are not rediscovered:
+    §7.3's choice of what to report from the distributions; §8's treatment of `exp(β)`; §10.1's
+    resolution of *"each continuous covariate"*; §11's reading of *"restrict the standardisation
+    population"*; §13.3's no-p rule against [§10]'s inference paragraph; §17.2's list of what must
+    travel with the estimate against [§16].
+
+    **Why it matters more here than in an ordinary spec:** this document is the sole implementation
+    source (header), so a place where it reasons around the plan rather than from it becomes code
+    that disagrees with the prespecified analysis — and the disagreement is invisible, because the
+    code will match the spec.
+
+    **Trigger.** Before this document is treated as final, or before Stage 13 reuses its machinery —
+    Stage 13 inherits §7.1's regime seam and §16's entry points, so a miscalibration here propagates.
+    **Status: open, and it is the largest remaining risk in this document**, larger than any single
+    number in §26, because it is the one class of error the review that produced §27.1 is known to be
+    bad at.
 
 ---
 
@@ -2344,6 +2381,42 @@ is not it. **This is the one estimator in this pipeline whose specification ship
 independent implementation having agreed with it**, and that is stated plainly rather than left to be
 discovered at step 7.
 
+### 26.1 The engineering review — what it checked, and what it did NOT
+
+The review of 2026-08-27 (§27.1) is part of this document's provenance, so its **scope is recorded
+with the same discipline as the probes'**. A reader who knows what was reviewed also needs to know
+what was not.
+
+**What it checked.** Internal consistency, end to end: every count against its own arithmetic, every
+number in prose against the table it cites, every guard against an identifier and a bucket token,
+every entry point against the audit ledger, every T identifier against an acceptance criterion, and
+every claim this document makes about landed code against that code. The last of those is why it
+found T4's bucket — `bootstrap.py:487` was read, not assumed.
+
+**Three things it did NOT check, and none of them is a formality:**
+
+1. **The statistical premises, which were taken as given because they are measured or are [§14]'s.**
+   Adaptive Gauss–Hermite at eleven nodes (§12.3); the per-covariate min–max box as the definition of
+   "outside the treated support" rather than a trimmed or hull-based one (§10.1); resampling the USZ
+   stratum (§13.1); conditioning the hierarchical standardisation on `b̂_c` rather than marginalising
+   (§12.6); `N_BOOT = 2000`. Each is either a measurement this document reports or a question §22
+   hands to the PI. **An engineering review is the wrong instrument for all five**, and the right
+   second reader is a statistician or the PI, not another code reviewer.
+2. **No cross-model review was run.** The intended independent pass failed to authenticate and no
+   substitute was run, so **this document has been reviewed once, by one reviewer**. That is recorded
+   rather than left to be assumed from the review's thoroughness. §21 item 14 is the residual.
+3. **Nothing was re-executed.** The review re-derived every number's *internal* consistency and found
+   one provenance error (§12.5's sample size), but it did not re-run a single probe. Twenty-one of
+   the twenty-two probes stand on their original run and on §26's closing statement that the suite
+   reproduced them exactly.
+
+**One finding about the review itself, and it is the reason item 14 exists.** The load-bearing
+decision — the estimand key set — was first argued from *engineering* grounds (a uniform 23-keys-per-
+arm shape makes the count derivable) and settled the other way only when [§14a]'s Report sentence was
+read directly. The correction came from the governing document and not from the review. **That failure
+mode has not been swept for**, and §21 item 14 states it as a gap rather than leaving the one instance
+to stand as if it were the only one.
+
 ---
 
 ## 27. What this spec changed elsewhere
@@ -2377,7 +2450,7 @@ document:
 allowing a closed item to read as a solved problem), one has its stated reason corrected while its
 trigger fires (item 4), **two** have their triggers fire and stay open — the parallelisation item as
 the largest cost in the pipeline (item 5) and the `model.FitError` `code`-field item, whose *"first
-bucket that is wrong"* this document supplied (item 12) — and **eight** are new (items 6–13).
+bucket that is wrong"* this document supplied (item 12) — and **nine** are new (items 6–14), of which item 14 is the review's own residual.
 
 ### 27.1 What the engineering review changed, 2026-08-27
 
@@ -2395,7 +2468,26 @@ places. Every one is discharged in a numbered section above:
 | The hierarchical arm's rates | quoted as if `N_BOOT` | labelled **n = 200**, with §25's step 0 to re-measure (§12.5, §26) |
 | `balance._levels` | reimplemented in §10.3 because it is private | **public as `balance.levels`** (§10.3, §18, §24), on Stage 7 §5.5's precedent for `smd` |
 
-Also: §17 and §19's driver sketches used `sup.inside` before `support` ran and omitted sensitivity 1's
-point estimate entirely, which would have recorded nine audit entries and failed §20.9's ledger; §20
-had no acceptance criterion for T5, T6, T7, T8 or T11, now §20.14; T10 and T11 had no tolerances, now
-§14; and §12.2's table gained the three rows its own prose was quoting.
+**Six smaller corrections, none of which would have stopped an implementer but each of which would
+have made one guess:**
+
+| Was | Is |
+|---|---|
+| §17 and §19's drivers used `over=sup.inside` **before** `support` ran, and §19 omitted sensitivity 1's point estimate entirely — nine audit entries against §20.9's ten | §19 is the **one** canonical call order, with its six calls and the entries each records; §15 and §20.9 reference it rather than each implying an order |
+| T10 and T11 had **no tolerance and no stated check site**, in a document whose header forbids inventing what is not written | §14 states both, and §20.6 explains why they differ: `mrs_0_2` **is** `rd[2]` so the comparison is exact, `mortality` is a second computation so it is 1e-15 |
+| §12.2's prose quoted three error values — adaptive at σ=3 / 3 nodes, non-adaptive at σ=2 / 5 and 7 — that were **not in the table it cited** | The three rows are in the table. A number quoted from a table it is not in is a number nobody can check |
+| §16's `population` was the only entry point whose docstring did not name its audit entries | "Records entries 1 and 2" |
+| "Four records" meant `{Standardisation, Support, Hierarchical, RIFit}` in §3.1 and `{Standardisation, Support, Hierarchical, Bootstrap}` in §1 and §0 | §3.1 says plainly: **three** of this stage's own, plus `RIFit` which is `model.py`'s and `Bootstrap` which `inference` returns |
+| `dist1_*` / `dist0_*` looked like the arm codes §7.1 forbids writing as literals | §3.3 states they are fixed **key names** — the wire format Stage 14 matches on — deliberately not derived from `C.TREATMENT_LABELS`, so a registry edit cannot silently rename a reported key |
+
+**And one thing the review added that is about the environment rather than the document.** §25's step 0
+now records that `DATA_XLSX` is gitignored, so in a worktree or a fresh clone every workbook-dependent
+test skips — measured **1343 passed / 112 skipped** in this branch's worktree against the main
+checkout's 1588 / 2. Nothing is wrong when that happens, but a green suite in a worktree is not
+evidence about any [§14a] number, and step 0's re-measurement must run where the data is.
+
+**§11's `over=` gained a named dependency it had been relying on silently.** It is applied inside every
+replicate to a *resampled* frame, and is safe to index by label only because `bootstrap.resample`
+resets the index first — `bootstrap.py:315-320`, which gives Stages 12 and 13 as its reason in as many
+words. §20.14 names it, so the property is visible from the caller that needs it and not only from the
+function that provides it.
