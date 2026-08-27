@@ -419,7 +419,23 @@ cannot witness a defect that appears only at the workbook's scale.
 the PI seeing the estimates and locking the analysis — and both are discharged by one commit over
 `test_outcome.py`. Splitting them would put two entries in this file whose triggers are identical.
 
-**Status: blocked on the PI**, and on nothing else. Both halves.
+**UNBLOCKED 2026-08-27 by DECISION 9.** The analysis is locked: [§15]'s amendment of the same date
+states the lock rule that [§16] had been citing it for and did not contain, and defines locking as
+three conditions — every prescribed estimator specified and implemented, the PI has read the estimate,
+and no open decision remains that could change the primary quantity or its null. DECISION 9 closed the
+third by declining to penalise the ordinal fit. The register carries no open decision.
+
+**One thing found while starting it, which the item did not anticipate.** `test_outcome.py` §14.12a is
+a meta-assertion that scans §14.12 for float literals **including inside docstrings** and fails if any
+appear — it exists precisely to keep the primary effect out of git, with an allowlist of two values.
+Pinning into §14.12 means dismantling the guard written to prevent it. **The pins therefore go in a new
+§14.12b whose declared purpose is magnitudes, and §14.12a keeps guarding §14.12 unchanged**, so the
+property assertions stay value-free and nobody can smuggle `exp(β)` into a property's docstring later.
+Widening §14.12a's allowlist in place was the alternative and trades a structural guarantee for a
+shorter diff.
+
+**Status: ready.** Both halves, one commit, plus Stage 8 §15's first bullet deleted and Stage 8 §20 /
+Stage 9 §21 gaining the pinned values.
 
 ---
 
@@ -777,7 +793,17 @@ row of the concatenated grid keeps the same cell count (§15.13).
 **Status: open**, cheap, filed so the grid is not shipped ambiguous.
 
 
-## A 12.5% bootstrap drop rate exists, and nothing prescribes what to do about it (Stage 11 §8.4, §16 item 1)
+## A 12.5% bootstrap drop rate exists, and nothing prescribes what to do about it — CLOSED by DECISION 8
+
+**Status: closed 2026-08-27, DECISION 8.** The interval is reported with its surviving count and with
+the statement that the thinning is selection on the estimate. [§13] gains the subgroup model as a
+declaration and [§16] gains the mechanism statement as a required one, both amendments of 2026-08-27.
+The two alternatives were declined **on measurement** rather than on preference, by a bound sweep run
+for the decision and recorded under DECISION 8: reporting the `S = 1` level alone moves the limits it
+exists to protect by 0.1%, and the interval is stable across bounds from 8 to 14, so it is a property
+of the data and the estimator rather than of where the bound sits. **No threshold at which an interval
+is withheld is prespecified, and none was introduced.** The question as put is below.
+
 
 **What.** Stage 11's `unknown_onset` subgroup loses **250 of 2000** replicates: 2 to a
 `propensity.fit` failure, 9 to O6 rank deficiency when a replicate draws no treated patient at
@@ -805,7 +831,7 @@ finite float every downstream table accepts, which is why the bound exists.
 **Trigger.** Now. The surviving count is printed beside the interval and the treated count beside the
 odds ratio either way, so nothing overclaims while the question is open.
 
-**Status: open**, put to the PI.
+**Status: closed** — see the header.
 
 ## Measure the interaction test's power (Stage 11 §16 item 3)
 
@@ -859,6 +885,51 @@ arm emits no p and §15.8 asserts the subgroups emit exactly two.
 public name taking the p rule as a parameter, and both callers read it.
 
 **Status: open**, deferred with a named trigger.
+
+## Nothing pins Stage 10's intervals or Stage 11's four records (found 2026-08-27)
+
+**What.** The pin item above covers Stage 8's primary and Stage 9's seven binary estimates, because
+that is the scope it was written with. It leaves **every [§10] interval limit and p-value, and every
+Stage 11 number** — the seven adjusted p-values, the two E-values, the two subgroups' odds ratios and
+interaction p-values, and the sensitivity arm's seven limits — with no regression pin anywhere in git.
+
+**Why it is a gap and not a decision.** The same argument applies: an edit that moves a percentile
+limit in the fourth decimal without breaking reconciliation, the draw floor or the interval-versus-p
+agreement passes the whole suite. [§15]'s amendment of 2026-08-27 makes pinning correct now for
+everything the lock covers, and these are covered — they are functions of a locked estimator over a
+pinned seed.
+
+**Why it is not folded into the pin item.** That item is one PI decision by one person at one moment
+and is discharged by one commit. This is a scope extension found afterwards, and merging them would
+change what that item's status means. It is also larger: 26 [§10] keys plus Stage 11's four records.
+
+**Cost.** A day, mostly deciding how many decimals a percentile limit deserves to be pinned to. The
+draws are deterministic given `C.SEED`, so the limits are exactly reproducible — the question is
+whether to pin them exactly or to a tolerance that survives a numpy patch release.
+
+**Trigger.** After the pin item above lands, so the two do not conflict over `test_outcome.py`. Do the
+[§10] half in `test_bootstrap.py` and the Stage 11 half in `test_sensitivity.py`, each beside the
+`[data-gated]` section that already asserts the properties.
+
+## The bound sweep that decided DECISION 8 is a probe and not a shipped diagnostic (2026-08-27)
+
+**What.** DECISION 8 rests on a sweep of `POLR_MAX_ABS_BETA` over the `unknown_onset` interaction
+bootstrap, which established that the reported interval is stable from a bound of 8 to 14 and collapses
+above 16. It was run once, as a probe, and the script is not in the repository.
+
+**Why it is deliberately not shipped.** It is a diagnostic about a guard, nothing in the pipeline reads
+it, and no estimate is conditioned on it — which is what keeps DECISION 4's rule that no stage reads a
+diagnostic in order to select an estimator. The PI chose to record it in the register rather than in the
+audit log or the manuscript, so it is evidence for a decision and not a reported quantity.
+
+**What that costs.** Nobody can re-derive it without rewriting the probe, and the numbers under
+DECISION 8 are therefore the only record. If a future cohort changes the shape of the subgroup — a
+different treated count at witnessed onset, or a drop rate on `core_above_median` — the sweep would
+have to be re-run to know whether the bound still sits on the flat part.
+
+**Trigger.** Any change to `C.POLR_MAX_ABS_BETA`, or a subgroup drop rate materially different from
+this workbook's. At that point either re-run the probe and update DECISION 8's table, or promote the
+sweep to a shipped `[data-gated]` test that asserts the stability rather than the values.
 
 ## `Replicate` cannot describe a body with more than one `polr` fit (Stage 11 §3.1, §16 item 8)
 
