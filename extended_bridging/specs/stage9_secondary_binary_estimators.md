@@ -303,7 +303,16 @@ class Secondary:
 
 ### 3.2 Public surface, and it is seven names
 
+**Amended 2026-08-27: eight.** `outcome.py` gains `estimation_population(df, ps)` — the [§11]
+estimation mask `primary` already bound inline, extracted so that Stage 11's subgroup replicate body
+reads the same definition on a drawn frame rather than spelling it a second time. `primary` calls it
+and no number moves; the rule is `weighted_proportion`'s own, that a denominator [§11] requires has
+one definition [Stage 11 §8.5, §15.7].
+
 ```python
+def estimation_population(df: pd.DataFrame, ps: propensity.Propensity) -> pd.Series: ...
+
+
 def secondary(df: pd.DataFrame, ps: propensity.Propensity, audit: Audit,
               paths: dict[str, str] | None = None) -> Secondary: ...
 

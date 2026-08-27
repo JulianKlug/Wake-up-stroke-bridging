@@ -709,7 +709,7 @@ stratum labels in the run summary beside the seed.
 
 **Status: open**, low consequence, stated so it is not rediscovered as a reproducibility failure.
 
-## Fix the stale `data.py:255` citation in `propensity.py`
+## Fix the stale `data.py:255` citation in `propensity.py` — CLOSES with Stage 11
 
 **What.** `propensity.py:413`, inside `_record_exclusion`'s docstring, cites `data.py:255` for
 `Audit.record`'s identifier normalisation. That normalisation is at `data.py:271`. `data.py` is unchanged
@@ -722,7 +722,13 @@ claim on a comment is a bad trade.
 
 **Trigger.** The next commit that edits `propensity.py` for any reason.
 
-**Status: open**, trivial, deliberately deferred.
+**Fired, 2026-08-27.** Stage 11 §4.3 builds the covariate seam in `propensity.py` — `_fit`, `fit`,
+`fit_full`, `Propensity.spec` and eight privates — so the trigger is met and the citation is corrected
+in the same commit. The correct line is `data.py:271`, verified. Stage 10's zero-line-diff claim is
+about *Stage 10's commit* and stays historically true; its Definition of done item 2 is marked
+historical rather than left as a live check that now fails.
+
+**Status: closed** with the Stage 11 implementation commit.
 
 ## Parallelise the bootstrap (Stage 10 §18)
 
@@ -735,12 +741,16 @@ stream a function of the scheduling unless each replicate is separately seeded, 
 declines per-replicate seeding for its own reason: it makes the draw a function of an index a later edit
 to the loop can renumber, and the failure is silent.
 
-**Trigger.** Stage 12's bootstrap, which resamples a larger population; or the [§13] sensitivity suite,
-which is five more `run` calls and turns 145 s into something over ten minutes. At that point the right
-design is a seed *sequence* — `SeedSequence.spawn(N_BOOT)` — which is reproducible under any scheduling
-and is a different decision from the one §4.3 declined.
+**Trigger, rewritten 2026-08-27 because Stage 11 falsified the old one.** It read *"the [§13]
+sensitivity suite, which is five more `run` calls and turns 145 s into something over ten minutes."*
+Both halves are wrong. DECISION 4 promoted **one** row and not five; and that one is not a `run` — a
+`run` also drives `outcome.secondary`, so Stage 11 §5.4 uses `bootstrap.replicates` with a primary-only
+body. Measured: the arm 69.3 s, the two subgroups together 68.3 s, **137.6 s added** to a 130-145 s
+pipeline. The trigger is now **Stage 12's bootstrap alone**, which resamples a larger population; the
+right design there is still a seed *sequence* — `SeedSequence.spawn(N_BOOT)` — reproducible under any
+scheduling and a different decision from the one §4.3 declined.
 
-**Status: open**, deferred with a named trigger.
+**Status: open**, deferred with a rewritten trigger.
 
 ## Label the denominator on each row of the bootstrap audit grid (Stage 10 §16 item 9)
 
@@ -765,3 +775,106 @@ row of the concatenated grid keeps the same cell count (§15.13).
 **Depends on / blocked by.** Stage 10 T9, the audit entry and its grid.
 
 **Status: open**, cheap, filed so the grid is not shipped ambiguous.
+
+
+## A 12.5% bootstrap drop rate exists, and nothing prescribes what to do about it (Stage 11 §8.4, §16 item 1)
+
+**What.** Stage 11's `unknown_onset` subgroup loses **250 of 2000** replicates: 2 to a
+`propensity.fit` failure, 9 to O6 rank deficiency when a replicate draws no treated patient at
+witnessed onset, and 239 to G9 when the fit converges and returns a reported coefficient at or above
+`POLR_MAX_ABS_BETA`. (Spec §21 is normative and says 2 + 9 + 239; an earlier draft of this item wrote
+241 for the third route, having folded the two propensity failures into it — `questions_for_the_pi.md`
+Question 4 carries the same correction.) Measured `|gamma|` up to **19.296**,
+against a bound of 14.0, with `polr` taking 10-15 iterations where 3-4 is typical.
+
+**Why it matters now and did not before.** `../out/questions_for_the_pi.md` carries a question deferred
+with *"ask after Stage 10"* — whether a drop rate above some level invalidates the interval — recorded
+as premature because **no drop rate existed**. Stage 10 then measured the primary's at 0.10% and the
+worst per-outcome at 0.8%, which answered it by making it moot. This is the first number that makes it
+live, and it is on a quantity [§13] labels hypothesis-generating.
+
+**The cause, measured.** Five treated patients at witnessed onset, of 41, four of them at one centre.
+[§13]'s amendment of 2026-08-10 retained the subgroup on the cohort split — 33 witnessed of 126 records
+— which is the right number for the question it answered and is not the number that governs
+estimability.
+
+**What is NOT proposed.** Withdrawing the subgroup. That decision was taken before any subgroup estimate
+existed and must not be revisited on one. Nor relaxing the bound: a separated fit's `exp(beta)` is a
+finite float every downstream table accepts, which is why the bound exists.
+
+**Trigger.** Now. The surviving count is printed beside the interval and the treated count beside the
+odds ratio either way, so nothing overclaims while the question is open.
+
+**Status: open**, put to the PI.
+
+## Measure the interaction test's power (Stage 11 §16 item 3)
+
+**What.** "Hypothesis-generating" is a word. The number that would make it mean something is the power
+of the `gamma` test at this cohort's shape — 92 records, 41 treated, treatment near-determined by
+centre — in Stage 10 §8.4's style, with the Monte Carlo standard error quoted.
+
+**Why.** It converts *"no interaction was detected"* into *"the test had X% power to detect a doubling
+of the odds ratio between levels"*, which is what the label is for. It would also close Stage 10 §16
+item 4's trigger — a coverage design carrying centre-like near-determination, *"the one that would say
+something about this study rather than about the procedure"* — for one parameter.
+
+**Cost.** Of the order of Stage 10 §8.4's two designs: 90 000 fits and about 270 s each.
+
+**Trigger.** Before the subgroup table is read as evidence of no interaction.
+
+**Status: open.**
+
+## `Primary` carries no specification, so two of them are structurally identical (Stage 11 §16 item 5)
+
+**What.** After Stage 11 the pipeline holds two `outcome.Primary` objects — the [§7] estimate and the
+[§13] arm's — with no field distinguishing them. `sensitivity.Arm` binds each to its `Propensity` and
+its `__post_init__` checks the pair, but the binding lives outside `outcome.py`, by the roadmap's own
+choice that *"`outcome.primary` then runs unchanged"*.
+
+**Why it is not fixed now.** Two objects, one of which is always inside an `Arm` record that asserts
+the pairing. A `spec` field on `Primary` would be a third place the specification is recorded and a
+third that can disagree.
+
+**Trigger. The second sensitivity arm.** With three `Primary` objects circulating the field should move
+onto `Primary`, and `Arm` should read it rather than assert it.
+
+**Status: open**, deferred with a named trigger.
+
+## The draws-to-intervals loop exists in two modules (Stage 11 §3.2, §16 item 7)
+
+**What.** `bootstrap.run` turns a `dict[str, Draws]` into a `dict[str, Interval]` at
+`bootstrap.py:1105-1111`, and `sensitivity._intervals` does the same for the [§13] arm and the [§13]
+subgroups. One `C.ci_min_draws()` floor, one `percentile_ci` call at `C.CI_LEVEL` and one p rule now
+exist in two places. The two are not the same function because the p rule differs — `run` uses
+`_tested`, the arm passes `lambda key: False` and the subgroups pass `_tested_subgroup` — which is
+why `_intervals` takes the rule as an argument and `run` does not.
+
+**Why it is not fixed now.** Refactoring `run` onto the shared helper would edit the function whose
+twenty-six intervals Stage 10's Definition of done asserts, and Stage 11 §0.2 refits nothing Stage 10
+refit. The duplication is two callers of a five-line loop, and both are covered: §15.3 asserts the
+arm emits no p and §15.8 asserts the subgroups emit exactly two.
+
+**Trigger.** A third caller — Stage 12's standardisation bootstrap is the candidate — or any change to
+`C.ci_min_draws` or `C.PERCENTILE_METHOD`. At that point the loop moves into `bootstrap.py` as a ninth
+public name taking the p rule as a parameter, and both callers read it.
+
+**Status: open**, deferred with a named trigger.
+
+## `Replicate` cannot describe a body with more than one `polr` fit (Stage 11 §3.1, §16 item 8)
+
+**What.** `bootstrap.Replicate.n_alpha` and `.polr_iterations` are scalars (`bootstrap.py:148-149`),
+which is right for a body running one ordinal fit — [§10]'s and the [§13] arm's. Stage 11's subgroup
+body runs two, one per `C.SUBGROUPS` key, so it sets both to `None` and `sensitivity.Subgroups`
+carries no `bootstrap.Diagnostics` at all. The cost is real and named: the per-subgroup cutpoint
+distribution is not recoverable from the log, so [§16]'s constant-shift statement cannot be evaluated
+per subgroup from a shipped counter — Stage 11 §21 carries the one measurement that exists.
+
+**Why it is not fixed now.** Widening the two fields to `dict[str, int | None]` keyed by fit touches
+`Replicate`, `Diagnostics`, `_diagnostics`, `_diagnostics_table` and every Stage 10 assertion over
+them, to gain a diagnostic for a hypothesis-generating analysis that Stage 11 §8.8 already labels as
+such. Stage 11 reports what it needs off `Draws`, which carries the surviving count and the buckets.
+
+**Trigger.** The first stage that wants diagnostics from a multi-fit replicate body. [§14a]'s
+standardisation is the candidate, since it fits per arm.
+
+**Status: open**, deferred with a named trigger.

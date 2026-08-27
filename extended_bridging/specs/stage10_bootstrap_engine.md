@@ -363,6 +363,15 @@ class Bootstrap:
 
 ### 3.2 Public surface, and it is five names
 
+**Amended 2026-08-27: it is eight, and the twelve privates become nine.** `_bucket`, `_collect` and
+`_diagnostics` become `bucket`, `collect` and `diagnostics`, with no private aliases kept, because
+Stage 11's two replicate bodies and Stage 12's must classify a `FitError` against one map, build one
+reconciling `Draws` and tally one cutpoint distribution rather than writing second ones — the move
+`propensity.ess` and `balance.smd` each made. `diagnostics` is the third and it arrived in Stage 11's
+engineering review: the [§13] arm's body runs one `polr` fit per replicate, so its `Diagnostics`
+means what this stage's means and `Arm` carries one, while the subgroup body runs two and carries
+none [Stage 11 §3.1, §5.4, §8.5, §12.1].
+
 ```python
 def resample(df: pd.DataFrame, rng: np.random.Generator, stratum: str) -> pd.DataFrame: ...
 def replicates(df: pd.DataFrame, body: Callable[[pd.DataFrame], object],
@@ -383,6 +392,9 @@ only in-repository caller declines to use it is a function nothing exercises: th
 twice, a seeding fix would land in one copy, and Stages 12 and 13 would inherit the copy [§10] never
 ran. `replicates` owns the `Generator`, the `resample` call and the ordering; `run` owns nothing about
 looping. This is §0.1's generality claim discharged rather than asserted.
+
+**Amended 2026-08-27: nine.** `_bucket`, `_collect` and `_diagnostics` leave this list and join the
+public surface above [Stage 11 §5.4]; the other nine are unchanged and no alias is kept.
 
 Privates in `bootstrap.py` are `_assert_run_inputs`, `_replicate`, `_bucket`, `_collect`,
 `_diagnostics`, `_tested`, `_estimand_keys`, `_shared_design`, `_counters_table`,
@@ -1683,6 +1695,14 @@ def bootstrap_p(draws: np.ndarray) -> float:
   provide it.** Stage 11's arm refits [§7] over `PS_COVARIATES_FULL`, so its interval is a second `run`
   over a second `Propensity` — which needs the covariate seam Stage 11 §11 already identifies as its one
   design decision. Nothing here blocks it and nothing here builds it.
+  - **Amendment, 2026-08-27 — it is a second `replicates` body and not a second `run`, and this
+    document was wrong to say `run`.** `run` also drives `outcome.secondary` (§11), so a second `run`
+    would emit nineteen binary-outcome intervals under the [§13] specification that no prespecified
+    section asks for — a table of unreported estimates is a multiplicity [§13] is not told about — and
+    it would cost the 123.0 s §2 measures for the seven binaries. Stage 11 §5.4 owns a primary-only
+    body over `replicates`, measured at 69.3 s. **And `_bucket` and `_collect` become public** so that
+    body classifies against one taxonomy and builds one reconciling `Draws`; §3.2's count moves with
+    them [Stage 11 §5.4, §13].
 
 ### 12.2 Stages 12 and 13 [§14a, §14b]
 
@@ -1885,7 +1905,11 @@ def ci_min_draws(level: float = CI_LEVEL) -> int:
    that testing null-spanning via `p` and via the limits agree.
 3. **A second `run` for the [§13, DECISION 4] full-covariate arm**, over a `Propensity` refit on
    `PS_COVARIATES_FULL`. This stage provides the engine and not the seam; Stage 11's roadmap entry
-   already names that seam as its one design decision.
+   already names that seam as its one design decision. **Amended 2026-08-27: a second `replicates`
+   body, not a second `run`** — §12.1 carries the reason. And this stage provides one guard it did not
+   know it owed: `run` given the arm's `Propensity` would return twenty-six intervals whose point
+   estimates are the arm's and whose replicates are the primary's specification, with nothing raising.
+   **R9 is that guard** [Stage 11 §4.5].
 4. **The subgroup interaction tests**, which are [§13]'s and are hypothesis-generating. Nothing here
    resamples within a subgroup, and a subgroup interval taken by re-slicing these draws would be
    conditional on the full-cohort resample rather than stratified within the subgroup.
@@ -2540,7 +2564,11 @@ Complete when all of the following hold, and not before.
 1. `uv run pytest -v` is green, and the Stages 1-9 sections are **unedited** except `test_outcome.py`'s
    S8 and `collect` sections (§15.12).
 2. **`propensity.py` has a zero-line diff.** §5.5 is the central claim of this stage and this is it as a
-   check.
+   check. **This is a statement about *Stage 10's commit* and it stays historically true; it stopped
+   being a live check on 2026-08-27**, when Stage 11 §4 built the covariate seam that section's own
+   §12.1 said Stage 11 would need. Run against the working tree today it fails, and it is not
+   supposed to pass — §5.5's argument, that the resampler was fixed on its own side so Stage 6's guard
+   kept its meaning, is untouched by the seam [Stage 11 §4.3].
 3. **The full loop runs to completion on the workbook with zero `SchemaError`.** Measured before this
    document: 26.0% from `_record_exclusion` and 1.0% from S8. Both must read zero.
 4. **The percentile pin has been seen to fail.** `boundary_draws(50)` under `method="linear"` gives an
@@ -2562,7 +2590,8 @@ Complete when all of the following hold, and not before.
 12. **Every count stated in this document has been re-derived before the commit** — the five public
     names, the **twelve** privates, the **twenty-six** estimand keys of which **eight** are tested,
     the six fixture functions, the five constants, the sixteen raise sites, the thirty-one audit
-    entries.
+    entries. *(Amended 2026-08-27: the first two are eight and nine after Stage 11 §5.4; the
+    remaining counts are unchanged. §3.2 is the statement, this item is the check.)*
 12a. **`run` contains no `for` and no comprehension over `range(C.N_BOOT)`** — the loop is
     `replicates`', by scan (§3.2). A second loop is the DRY failure this review removed.
 12b. **The propensity-failure companion has been seen to fail**: an implementation that skips a
