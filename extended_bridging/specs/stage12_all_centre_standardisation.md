@@ -22,7 +22,11 @@ model, so `Propensity.spec`, the `Specification` registry and `balance._role`'s 
 whole seam — are invisible to it.
 
 **Status.** Written 2026-08-27 against the landed Stages 1–10. **Twenty-two probes were run before
-any section was drafted, and six of them changed what this document says.**
+any section was drafted, and six of them changed what this document says.** It then went through an
+**engineering review on 2026-08-27, which changed seven more things** — five of them internal
+contradictions in the draft, and one of them a reversal decided by re-reading [§14a] rather than by
+argument. **§27.1 is the ledger of what the review changed and is worth reading before §3.3**, whose
+key count it moved from seventy to sixty-nine.
 
 - **§7.3 — two of the four quantities [§14a] lists as outputs are not new numbers.** The standardised
   mRS 0–2 risk difference *is* `RD_2` and the standardised mortality difference *is* `−RD_5`, to
@@ -43,13 +47,14 @@ any section was drafted, and six of them changed what this document says.**
 - **§12.2 — the hierarchical arm's quadrature must be ADAPTIVE, and this is measured rather than
   taken from the literature.** Non-adaptive Gauss–Hermite is off by **0.48 log-likelihood units at 31
   nodes** at σ = 3 and is **non-monotone in the node count**; adaptive quadrature is off by 8.9e-4 at
-  **three** nodes. And 24.0% of replicates fit σ̂ above 1, where the non-adaptive rule is not
-  converged — so this is not a refinement, it is what makes the arm computable at all.
+  **three** nodes. And 24.0% of replicates fit σ̂ above 1 — 48 of 200, and every hierarchical rate in
+  this document is at n = 200 (§26) — where the non-adaptive rule is not converged, so this is not a
+  refinement, it is what makes the arm computable at all.
 - **§12.4, §12.8 — the fitter's shape is decided by a cost measurement, not by taste.** The same fit
   costs **39.0 s** under Newton with a central-difference Hessian and **0.76 s** under BFGS with an
   analytic gradient — 2000 replicates being 21 hours against **17.5 min**. The analytic gradient is
   therefore part of the specification and not an optimisation.
-- **§12.5 — σ̂ reaches the boundary in 22.0% of replicates**, and the conditional-mode Newton
+- **§12.5 — σ̂ reaches the boundary in 22.0% of replicates**, 44 of 200, and the conditional-mode Newton
   overflows on `1/σ²` when it does. A prespecified floor is required, and it is a constant that
   changes an answer.
 
@@ -133,18 +138,19 @@ the more surprising half.
   |  hierarchical(pop, audit)            -> Hierarchical           [§14a] sens 2 (§12)   |
   |     model.polr_ri(X, y, groups)      A NEW ESTIMATOR, and the only one here   (§12)  |
   |     adaptive Gauss-Hermite, POLR_RI_NODES = 11, analytic gradient, BFGS      (§12.4) |
-  |     the sigma -> 0 boundary is reached in 22.0% of replicates                (§12.5) |
+  |     the sigma -> 0 boundary is reached in 44 of 200 replicates, 22.0%        (§12.5) |
   |                                                                                       |
   |  inference(pop, audit)               -> bootstrap.Bootstrap                  (§13)   |
   |     bootstrap.replicates(pop, body, N_BOOT, SEED, BOOT_STRATUM)                       |
   |     ALL FOUR STRATA, USZ included -- Stage 10 §12.2 left this here           (§13.1) |
-  |     three failure groups, one per arm                                        (§13.2) |
+  |     FOUR failure groups; a pooled FitError costs hier.* too                  (§13.2) |
   |     bootstrap.intervals(draws, lambda key: False)   NO p on ANY key          (§13.3) |
   +--------------------------------------------------------------------------------------+
 
   model.py gains TWO public names:   ordinal_probabilities  (§6),  polr_ri  (§12)
   bootstrap.py gains ONE:            intervals              (§13.3, the third caller)
-  eleven `C.SchemaError` / `FitError` identifiers, and they are the T series   (§14)
+  balance.py  gains ONE, a rename:   levels                 (§10.3, _levels made public)
+  twelve `C.SchemaError` / `FitError` identifiers, and they are the T series   (§14)
 
                   ->  Standardisation, Support, Hierarchical, Bootstrap          (§3.1)
 
@@ -213,16 +219,17 @@ computed clause rather than a sentence.
 
 | Path | Contents |
 |---|---|
-| `extended_bridging/standardise.py` | **new.** [§14a] whole: five public names (§3.2), four returned records (§3.1), seventy bootstrap estimand keys (§3.3) |
+| `extended_bridging/standardise.py` | **new.** [§14a] whole: five public names (§3.2), three returned records of its own (§3.1), sixty-nine bootstrap estimand keys (§3.3) |
 | `extended_bridging/model.py` | **amended, and it gains a new estimator.** `ordinal_probabilities` — category prediction from a `PolrFit`, the counterpart of `predict` (§6); and `polr_ri` — the random-centre-intercept proportional-odds fit, adaptive Gauss–Hermite, analytic gradient, BFGS (§12). `RIFit`, its frozen record. `polr`, `firth`, `design`, `predict` and `complete_cases` are untouched, and §20.11 asserts that by number |
 | `extended_bridging/bootstrap.py` | **amended.** `intervals(draws, tested)` becomes the ninth public name — the loop Stage 11 §16 left duplicated across two callers, this stage being the third (§13.3). Both Stage 11 callers move onto it. `resample`, `replicates`, `percentile_ci` and `bootstrap_p` are unchanged |
-| `extended_bridging/config.py` | **amended.** `POLR_RI_NODES`, `POLR_RI_SIGMA_FLOOR`, `POLR_RI_MAX_ITER`, `SUPPORT_COVARIATES` and three `FAILURE_BUCKETS` tokens, in the blocks §18 names (§18, fence) |
+| `extended_bridging/balance.py` | **amended, and it is a rename with no behaviour change.** `_levels` becomes public `levels` — the declared-factor-level row rule, which §10.3 needs and may not own a second copy of. `balance.py:292-295` already names this stage as why its missingness branch exists (§10.3, §18) |
+| `extended_bridging/config.py` | **amended.** `POLR_RI_NODES`, `POLR_RI_SIGMA_FLOOR`, `POLR_RI_MAX_ITER`, `SUPPORT_COVARIATES` and **four** `FAILURE_BUCKETS` tokens, in the blocks §18 names (§18, fence) |
 | `extended_bridging/tests/test_standardise.py` | **new.** §20 |
 | `extended_bridging/tests/fixtures_stage12.py` | **new.** §20.0, and that row is the one place its contents are enumerated |
 | `extended_bridging/tests/reference/polr_ri_clmm.R` | **new.** The `ordinal::clmm` oracle for `polr_ri`, gated as `polr_clm.R` is (§12.7) |
-| `extended_bridging/tests/test_model.py`, `test_bootstrap.py`, `test_config.py`, `test_reference_r.py` | **amended.** The two new estimators, the ninth public name and the surface count that moves with it, the four new constants, the second R gate (§20) |
+| `extended_bridging/tests/test_model.py`, `test_bootstrap.py`, `test_balance.py`, `test_config.py`, `test_reference_r.py` | **amended.** The two new estimators, the ninth public name and the surface count that moves with it, `balance`'s surface count moving with the rename, the four new constants, the second R gate (§20) |
 | `extended_bridging/implementation_roadmap.md` | **amended.** Stage 12 gains its `**Spec:**` line; five corrections and three additions (§27) |
-| `TODOS.md` | **amended.** Two items close, one has its stated reason corrected while its trigger fires, **six** are new (§21) |
+| `TODOS.md` | **amended.** Two items close, one has its stated reason corrected while its trigger fires, **two** have their triggers fire and stay open, **eight** are new (§21, §27) |
 
 `out/logs/audit_<label>.md` is an **output, not a deliverable**. For this stage it is the only place
 any standardised probability, any risk difference, any interval limit and any centre intercept
@@ -251,11 +258,15 @@ cd extended_bridging && uv sync && uv run pytest -v
 runs three arms over each drawn frame:
 
 ```
-   the pooled arm and the support-restricted arm, together      44 - 50 s / 2000   (§13.4)
-   the hierarchical arm                                        1050   s / 2000   (§12.8)
+   the pooled arm and the support-restricted arm, together      44 - 50 s / 2000   MEASURED (§13.4)
+   the hierarchical arm                                        1050   s / 2000   PROJECTED x10 from
+                                                                                 105.0 s / 200 (§12.8)
                                                               ─────────────────
-   Stage 12's bootstrap, one call, three arms                  ~18.4 min
+   Stage 12's bootstrap, one call, three arms                  ~18.4 min          part measured
 ```
+
+**The hierarchical line is a projection and the line above it is not**, which §12.8 measures and
+§25's step 0 closes before implementation begins.
 
 **And the hierarchical arm is 95% of it**, which is the number that makes §12.4's optimiser choice a
 specification and not an optimisation: the same arm under the first prototype this document wrote is
@@ -267,15 +278,21 @@ specification and not an optimisation: the same arm under the first prototype th
 
 ### 3.1 What the stage returns
 
-Four frozen dataclasses, none carrying a verdict, following Stage 8 §3's rule that a record reports
-what it computed and a caller decides what it means.
+**Three records of this stage's own — `Standardisation`, `Support`, `Hierarchical` — plus `RIFit`,
+which is `model.py`'s and is given here because §12 specifies it.** `inference` returns a fourth
+thing, `bootstrap.Bootstrap`, which this stage does not define. So "four" means different sets in §1
+and in §3.1 unless it is said which, and this is where it is said.
+
+All frozen, none carrying a verdict, following Stage 8 §3's rule that a record reports what it
+computed and a caller decides what it means.
 
 ```python
 @dataclass(frozen=True)
 class Standardisation:
     """One [§14a] standardisation: one fit, one averaging population, two regimes."""
 
-    population: str                      # "all eligible" | "treated support" — §11
+    population: str                      # "all eligible" | "treated support"          — §11
+                                         #   | "all eligible, random centre intercept" — §12.6
     n_average: int                       # the averaging population's size — §7.2, [§11]
     n_fit: int                           # the FIT's population; equal unless §11 changes it
     distribution: dict[int, dict[int, float]]   # arm code -> mRS level -> P, over MRS_LEVELS
@@ -286,9 +303,26 @@ class Standardisation:
     conditional_log_odds: float          # beta. NOT called an odds ratio, and §8 is why
     conditional_odds_ratio: float        # exp(beta), and it is CONDITIONAL — §8
     measure: str                         # the guard string, always _CONDITIONAL — §8
-    fit: model.PolrFit
+    fit: model.PolrFit | model.RIFit     # RIFit for the hierarchical arm ONLY — §12.6
     dropped: tuple[str, ...]             # design columns dropped as constant — §5.3
 ```
+
+**`fit` is a union of two types and `population` has three values, because all three arms return this
+record and one of them is fitted by a different estimator.** The alternative — a fourth field
+discriminating `"polr"` from `"polr_ri"` — is declined for §7.3's reason: it would carry what the
+`fit` type already determines, and two things that encode one fact are two things that can disagree
+after an edit. A caller that must branch narrows on the type.
+
+**For the hierarchical arm, `Standardisation.fit` IS `Hierarchical.fit`** — the same object, not an
+equal one — and §20.12 asserts `is` rather than `==`. Without that the `RIFit` would be reachable by
+two paths with nothing requiring them to agree, which is the duplication this record's shape exists
+to avoid.
+
+**`conditional_log_odds` means something slightly different in the hierarchical arm and the
+difference is stated rather than smoothed over.** In the pooled and support arms it is conditional on
+`X`; in the hierarchical arm it is conditional on `X` **and on `b_c`** (§12.1). `measure` stays
+`_CONDITIONAL` for all three — §8's guard is that neither may ever be labelled marginal, and both
+qualify — but Stage 14's caption must carry which conditioning it is (§17.2).
 
 **There is no field called `odds_ratio`**, and that is a decision rather than a naming preference:
 `Primary.odds_ratio` (`outcome.py:155`) is the [§8] marginal common odds ratio, and a Stage 14
@@ -355,28 +389,50 @@ let two fits with different numerical content compare equal on every field.
 Everything else is private. `model.py` goes from six public names to eight
 (`ordinal_probabilities`, `polr_ri`); `bootstrap.py` from eight to nine (`intervals`).
 
-### 3.3 The estimand keys — seventy, and the count is derived
+### 3.3 The estimand keys — sixty-nine, and the split is [§14a]'s own
 
-Twenty-three per arm, three arms, plus one:
+**Standardised quantities are per-ARM; model parameters are per-FIT.** That is not a tidying
+principle, it is [§14a]'s structure read literally, and §7.3's identity discipline applied to the key
+set instead of to two numbers:
 
 ```
-   beta                                            the CONDITIONAL log-odds — §8      1
-   rd_0 … rd_5                                     len(C.MRS_THRESHOLDS)              6
-   mrs_0_2, mortality                              [§14a]'s two namings — §7.3        2
-   dist1_0 … dist1_6, dist0_0 … dist0_6            2 * len(C.MRS_LEVELS)             14
-                                                                                    ───
-                                                              per arm                23
+   rd_0 … rd_5                          len(C.MRS_THRESHOLDS)                        6
+   mrs_0_2, mortality                   [§14a]'s two namings — §7.3                  2
+   dist1_0 … dist1_6, dist0_0 … dist0_6 2 * len(C.MRS_LEVELS)                       14
+                                                                                   ───
+                          THE STANDARDISED BLOCK, per arm                           22
 
-   arms:  ""  (pooled)   "support."   "hier."                                 23 * 3 = 69
-   plus:  hier.sigma                                the between-centre SD — §12.5     1
-                                                                                    ───
-                                                                                     70
+   arms:  ""  (pooled)   "support."   "hier."                                22 * 3 = 66
+
+   one CONDITIONAL LOG-ODDS PER FIT, and there are two fits                           2
+      beta        the pooled proportional-odds model      [§14a]: exp(β) "may appear
+      hier.beta   the random-intercept model               as a model parameter"
+   plus:  hier.sigma                    the between-centre SD — §12.5                 1
+                                                                                   ───
+                                                                                     69
 ```
+
+**There is no `support.beta`, and its absence is [§14a]'s and not an economy.** [§14a]'s Report
+sentence asks for the two standardised distributions and, *from them*, the `RD_k`, the mRS 0–2 risk
+difference and the mortality difference; `exp(β)` is granted a separate and narrower permission — it
+*"may appear as a model parameter but never as the standardised marginal effect."* And [§14a]'s
+sensitivity restricts **the standardisation population**, which §11 implements by restricting the
+averaging set and not the fit. So the support arm does not have a `β`: there is one pooled fit and
+therefore one pooled `β`, and a `support.beta` would be that same float — bit-identical, draw for
+draw, with a bit-identical interval — presented as a property of a *standardisation*, which is the
+one reading [§14a] forbids in as many words. `hier.beta` exists because the random-intercept arm **is
+a second fit** (§12.1).
 
 **The counts are computed from `C.MRS_LEVELS` and `C.MRS_THRESHOLDS` and never written as 6, 14 or
-23.** Stage 8 §12 made the level set derived from the plausible range so the two cannot disagree;
+22.** Stage 8 §12 made the level set derived from the plausible range so the two cannot disagree;
 this stage's key set is the next link in that chain, and `test_standardise.py` §20.3 asserts the total
-against the config rather than against 70.
+against the config rather than against 69.
+
+**The key NAMES `dist1_*` and `dist0_*` are fixed literal strings** — the wire format Stage 14 reads —
+and are deliberately **not** derived from `C.TREATMENT_LABELS`, even though §7.1 forbids writing the
+arm *codes* as 1 and 0 anywhere in the arithmetic. The two rules do not conflict: a code is a value the
+model sees and must come from the registry, while a key name is an identifier a downstream reader
+matches on, and deriving it from the registry would let a label edit silently rename a reported key.
 
 **No key carries a p-value, and the rule is passed to `bootstrap.intervals` as `lambda key: False`.**
 [§14]'s Inference paragraph prescribes *"percentile intervals"* and nothing else; [§10]'s p is defined
@@ -802,11 +858,36 @@ difference stays in range no matter how degenerate the fit is. **Measured over 2
 So the bound is not protecting the reported estimand here; it is protecting `beta`, which this stage
 reports as a **model parameter** (§8) and nothing else.
 
-**The guard is therefore at key granularity**: a fit reaching `POLR_MAX_ABS_BETA` on the treatment
-coefficient drops the `beta` key and **keeps** the standardised keys, which are unaffected and
-correct. Stage 10 §7 already supports per-key failure — its `_replicate` costs one binary outcome's
-three keys without touching the others — so this needs no new mechanism, only the declaration of a
-third granularity.
+**The guard is therefore at key granularity, and it is T12** (§14): a fit reaching
+`POLR_MAX_ABS_BETA` on the treatment coefficient drops that fit's `beta` key and **keeps** the
+standardised keys, which are unaffected and correct. Stage 10 §7 already supports per-key failure —
+its `_replicate` costs one binary outcome's three keys without touching the others — so this needs no
+new mechanism, only the declaration of a third granularity.
+
+**It applies to BOTH fits, and the second one is not an extension of the argument but the same
+argument.** The bound protects a quantity this stage reports as a *model parameter*, and there are two
+such quantities because there are two fits (§3.3): `beta` from the pooled model and `hier.beta` from
+the random-intercept one, each with its own percentile interval. A separated random-intercept fit
+drives `hier.beta` to infinity exactly as a separated pooled fit drives `beta`, and nothing about the
+random intercept changes that. So:
+
+- **the pooled call site costs `beta`** — and *only* `beta`, because there is no `support.beta`
+  (§3.3): the support arm restricts the averaging population and not the fit, so it has no `β` of its
+  own to lose;
+- **the `polr_ri` call site costs `hier.beta`**, leaving `hier.*`'s twenty-two standardised keys and
+  `hier.sigma` intact, which is the same trade §9.1 makes for the pooled arm.
+
+**One private helper, `_assert_beta_reportable`, two call sites, and the KEY COST is the caller's
+decision rather than the helper's.** The helper knows a coefficient and a bound; it does not know
+which keys a caller will lose, and a helper that did would be one function with two callers agreeing
+on nothing but the comparison — §4.1's objection to the shared [§11] mask, applied here.
+
+**`outcome._assert_reportable` is NOT reused, and §24 records why.** It bounds the *worst* coefficient
+in the fit (`outcome.py:363`, `if worst >= C.POLR_MAX_ABS_BETA`), which is right for Stage 8's
+one-column design where the worst coefficient *is* the treatment coefficient, and wrong here: §9.2
+requires `gamma` unbounded, and the largest `|gamma|` measured over 2000 replicates is 3.21 against a
+`|beta_treatment|` of 2.00. Calling it would drop replicates for a reason the reported quantity does
+not care about.
 
 **The departure from Stage 8 §6 is declared and it is not a weakening.** Stage 8 drops the whole
 replicate because the whole replicate's reported content is `beta` and the six `RD_k` derived from the
@@ -924,6 +1005,22 @@ rows range over `C.BALANCE_SET` — the [§6] confounders plus the five balance-
 because [§9]'s rule that balance is judged against the **full** confounder set is about what a reader
 must be shown, and it does not stop applying because the comparison is not a treatment contrast.
 
+**And it calls `balance.levels` for the rows themselves, which is the same note written twice.**
+`_levels` (`balance.py:282`) is renamed public at this stage (§18) rather than reimplemented, for
+exactly Stage 7 §5.5's reason and on evidence from `_levels`' own docstring, which keeps a branch
+alive *"because Stage 12 will need it over a population `complete_cases` did not build"*
+(`balance.py:292-295`). A second implementation of `smd` would be a second definition of the
+yardstick; a second implementation of `levels` would be a second definition of **what a row is**.
+
+The rule it carries is *range over declared `C.FACTOR_LEVELS`, never over the frame and never over a
+design matrix* — Stage 6 §7.5's, because *"a level nobody in the cohort has is a row reading 0, which
+is a fact about the population; a level that vanishes is a fact nobody sees."* **That rule may not
+exist twice, and the reason is that its failure is invisible here**: §10.1 measured that all three of
+`onset_type`'s declared levels are present in the treated arm, so a copy that ranged over *observed*
+levels would produce a byte-identical table on this workbook and silently drop a row on the next.
+Nineteen rows over `BALANCE_SET` — twelve non-categorical names, `center`'s four declared levels and
+`onset_type`'s three — and the count is `levels`' to determine, not this section's to assert.
+
 `smd`'s five documented `nan` routes (Stage 7 §5.3) apply unchanged and the caller owns the mask. One
 of them **fires here by construction and is reported rather than suppressed**: `center = USZ` is
 constant at 1 in one group and 0 in the other, so the pooled SD is exactly zero with the groups
@@ -967,8 +1064,12 @@ condition the bootstrap on one realisation of it and understate the interval. Me
 replicates the in-support averaging population ranges **69 to 102 with a median of 91**, against 93 at
 the point estimate — a spread wide enough that the choice is not cosmetic.
 
-This arm's keys carry the `support.` prefix and there are 23 of them (§3.3). `Standardisation.population`
-carries `"treated support"` so the record says which it is without a caller tracking the prefix.
+This arm's keys carry the `support.` prefix and there are **22** of them (§3.3) — the standardised
+block and no `β`. **There is no `support.beta`, and this section is why**: the arm restricts the
+averaging population and leaves the fit alone, so its treatment coefficient *is* the pooled one,
+and reporting it under a `support.` prefix would present `β` as a property of a standardisation —
+[§14a]'s forbidden reading (§3.3, §8). `Standardisation.population` carries `"treated support"` so
+the record says which it is without a caller tracking the prefix.
 
 ---
 
@@ -1017,10 +1118,17 @@ Measured on the estimation population, absolute error in the negative log-likeli
 | 0.5 | 31 | 4.4e-7 | 0 |
 | 1.0 | 7 | 9.6e-2 | 2.0e-7 |
 | 1.0 | 31 | 1.9e-3 | 0 |
-| 2.0 | 9 | 4.6e-1 | 1.0e-7 |
+| 2.0 | 5 | 4.0e-1 | 3.1e-6 |
+| 2.0 | 7 | 3.5e-1 | 4.4e-7 |
+| 2.0 | 9 | **4.6e-1** | 1.0e-7 |
 | 2.0 | 31 | 4.5e-2 | 0 |
+| 3.0 | 3 | 1.9e0 | **8.9e-4** |
 | 3.0 | 7 | 1.1e0 | 2.4e-6 |
 | 3.0 | 31 | **4.8e-1** | 0 |
+
+*(Every value the prose below quotes is a row above. The σ = 2 rows at 5, 7 and 9 nodes are the
+non-monotonicity in point 2; the σ = 3 row at 3 nodes is the Status block's "adaptive is off by
+8.9e-4 at three nodes". A number quoted from a table it is not in is a number nobody can check.)*
 
 **Three things this settles, none of which is a preference:**
 
@@ -1034,7 +1142,7 @@ Measured on the estimation population, absolute error in the negative log-likeli
    thirty-one non-adaptive ones by five orders of magnitude at *every* σ tested.
 
 **And point 3 is not a refinement, it is what makes the arm computable**, because §12.5 measures that
-**24.0% of replicates fit σ̂ above 1** — squarely in the region where the non-adaptive rule is not
+**24.0% of replicates fit σ̂ above 1** — 48 of 200 — squarely in the region where the non-adaptive rule is not
 converged. A fixed non-adaptive node count would give a quarter of the bootstrap draws a different
 numerical answer from the other three quarters, and the difference would be invisible.
 
@@ -1126,18 +1234,26 @@ for `polr` or tight here.
    The approximation is named rather than hidden, and §20.12 pins the measurement so that a change to
    the mode-finding step which made it worse fails a test.
 
-### 12.5 The σ → 0 boundary is reached in 22.0% of replicates, and it needs a floor
+### 12.5 The σ → 0 boundary is reached in 22.0% of 200 replicates, and it needs a floor
 
 [§14a] anticipates the boundary: *"if outcomes truly do not differ by centre given `X` then σ²_C = 0
 and it collapses to the pooled model."* It is not a hypothetical. Measured over 200 replicates:
 
 ```
+   MEASURED AT 200 REPLICATES, NOT AT N_BOOT.  Every rate below has n = 200.
    sigma_hat    min 0.000021   median 0.65923   max 1.78734
    below 0.01, the variance collapsing to the pooled model     44 / 200   22.0%
    above 1.0                                                   48 / 200   24.0%
    converged                                                  200 / 200   all on "likelihood"
    iterations   min 23   median 27   max 47      (POLR_RI_MAX_ITER 200)
 ```
+
+**These are the hierarchical arm's only measurements and they are at n = 200**, while the pooled and
+support arms were run at the full `N_BOOT = 2000` (probe B1). The asymmetry is a fact about how this
+document was produced and not about the estimator, so it is labelled everywhere the rates are
+repeated — §17.2, §19 and §21 item 7 — rather than stated once here and forgotten. **§25's step 0
+re-runs the three-arm body at `N_BOOT` and replaces every one of them with a measured figure**, at a
+cost of about eighteen minutes; until it lands, 22.0% and 24.0% mean 44 and 48 out of 200.
 
 **Under a `log sigma` parametrisation the boundary is at −∞**, and the conditional-mode Newton
 (§12.2) evaluates `1/sigma^2`, which **overflows** as the search approaches it — observed directly in
@@ -1231,17 +1347,27 @@ Four things the oracle must assert, and the first is the one that makes it worth
 ### 12.8 The cost, and it is 95% of Stage 12's bootstrap
 
 ```
-   one fit, point estimate                                        0.76 s
-   200 replicates, end to end                                   105.0 s     525 ms each
-   projected at N_BOOT = 2000                                    17.5 min
-   the same arm under the first prototype (C2)                   21.7 hours
+   one fit, point estimate                          MEASURED       0.76 s
+   200 replicates, end to end                       MEASURED     105.0 s     525 ms each
+   at N_BOOT = 2000                                 PROJECTED x10 17.5 min
+   the same arm under the first prototype (C2)      PROJECTED     21.7 hours
 ```
+
+**The 17.5 minutes is a ×10 projection from a measured 200 and not a measured 2000, and this section
+is the only place that says so — so every other section that quotes it says so too** (§2, §13.4, §19).
+The two-arm figure beside it in §2 *is* a measured 2000 (probe B1); the hierarchical arm's is not.
+§25's step 0 closes that gap before any code is written, and §26 records it under what was not
+measured.
 
 The projection is from a measured 200-replicate run of the full body — `model.design`, `model.polr`
 for the start values, then `polr_ri` — and not from the point fit's 0.76 s, because the start values
 matter: `polr_ri` starts from the pooled fit's `alpha` and `beta` with `sigma = 0.5`, which is a
 nested model's exact maximiser in every coordinate but one, and it is why 25 iterations suffice.
 `polr`'s docstring makes the same argument for its own start values.
+
+**That dependency is load-bearing at [§10] and §13.2 states its consequence**: because `polr_ri`'s
+start values *are* the pooled fit's, a replicate whose `model.polr` raises has no hierarchical arm
+either, and a pooled `FitError` therefore costs every key rather than exempting `hier.*`.
 
 **`TODOS.md` records that Stage 12's bootstrap is now the sole trigger for parallelising the replicate
 loop**, with a seed *sequence* — `SeedSequence.spawn(N_BOOT)` — as the right design. 18.4 minutes on a
@@ -1299,21 +1425,34 @@ draw for draw and the resample stream is paid for once.
      X, dropped = model.design(draw, cols)
      T1         -> FitError; costs EVERY key                    the design has no exposure
      fit        = model.polr(X, y)
-     FitError   -> costs every key EXCEPT hier.*                the pooled fit is both arms' fit
-     G-bound    -> costs `beta` and `support.beta` ONLY         §9.1, key granularity
-     pooled     = standardise(...)                              23 keys
-     support    = standardise(..., over=in_support(draw))       23 keys, box RECOMPUTED  §11
-     ri         = model.polr_ri(X, y, draw[BOOT_STRATUM])
-     FitError   -> costs hier.* ONLY                            24 keys
+     FitError   -> costs EVERY key, hier.* INCLUDED             polr_ri STARTS from this fit
+     T12        -> costs `beta` ONLY                            §9.1, key granularity
+     pooled     = standardise(...)                              22 keys
+     support    = standardise(..., over=in_support(draw))       22 keys, box RECOMPUTED  §11
+     ri         = model.polr_ri(X, y, draw[BOOT_STRATUM])       start values ARE `fit`'s  §12.8
+     FitError   -> costs hier.* ONLY                            24 keys: 22 + hier.beta + hier.sigma
+     T12        -> costs `hier.beta` ONLY                       §9.1, the second call site
      hier       = standardise(..., b_hat)                       §12.6
 ```
+
+**A pooled `FitError` costs the hierarchical arm too, and the reason is §12.8's and not a
+conservatism.** `polr_ri` starts from the pooled fit's `alpha` and `beta` with `sigma = 0.5` — a
+nested model's exact maximiser in every coordinate but one, which is why 25 iterations suffice and
+why the arm costs 17.5 minutes rather than hours. **There is no hierarchical arm without a pooled
+fit**, so an exemption for `hier.*` would require a cold start whose iteration count, convergence
+route and boundary rate are all unmeasured, and a quarter of the draws would then sit in a different
+numerical regime from the rest — which is precisely the failure §12.2 rejects non-adaptive quadrature
+for. Measured: the pooled fit fails in **0 of 2000** replicates (§13.4), so this path never fires on
+this workbook, and it is specified anyway on §5.3's rule.
 
 **The granularity is Stage 10 §7's, extended by one level and not reinvented.** Stage 10's
 `_replicate` already has three: a propensity failure costs every key, a primary failure costs `beta`
 and the six `rd_k` together, a per-outcome failure costs that outcome's three. Stage 12's are the same
 idea over its own dependency graph, and the rule is the one Stage 10 states — a failure costs exactly
 the keys that could not be computed and no others — with §9.1's key-granularity case as the one
-addition.
+addition. **Four failure groups**, not three: T1 and a pooled `FitError` both cost every key but carry
+different buckets (`degenerate_design`, `nonconvergence`), a `polr_ri` `FitError` costs `hier.*`, and
+T12 costs one `β` at whichever fit raised it.
 
 **`bootstrap.bucket` classifies and `bootstrap.collect` reconciles**, both public at Stage 11 §5.4.
 Nothing here re-implements either, which is what Stage 9 §14 names as how a taxonomy gets violated by
@@ -1352,15 +1491,23 @@ draws, so the floor is nowhere near and no key is dropped for thinness.
 
 ### 13.4 The drop rate is zero, and that closes a second `TODOS` item negatively
 
+**Two runs, and they are reported as two, because no single run produced this whole picture.**
+
 ```
-   replicates attempted                                    2000
-   survived                                                2000       100.00%
-   failure buckets                                         none
-   T1 (design lost the exposure)                              0
-   separation (POLR_MAX_ABS_BETA)                             0        §9.2
-   nonconvergence, pooled                                     0
-   nonconvergence, polr_ri                                    0        200/200 measured, §12.5
-   design columns dropped                                     0        100.00% empty
+   THE POOLED AND SUPPORT ARMS  --  measured at N_BOOT = 2000        [probe B1]
+     replicates attempted                                  2000
+     survived                                              2000       100.00%
+     failure buckets                                       none
+     T1 (design lost the exposure)                            0
+     T12, separation (POLR_MAX_ABS_BETA)                      0       §9.2
+     nonconvergence, pooled                                   0
+     design columns dropped                                   0       100.00% empty
+
+   THE HIERARCHICAL ARM  --  measured at 200, PROJECTED to 2000       [probe F4]
+     replicates attempted                                   200
+     survived                                               200       100.00%
+     nonconvergence, polr_ri                                  0       §12.5
+     T2, T3, T4                                               0
 ```
 
 **Nothing fails.** That is worth stating plainly against the run of this pipeline's history: Stage 10
@@ -1382,7 +1529,7 @@ absolute tolerance and this is evidence rather than proof.
 
 ---
 
-## 14. The failure taxonomy — the T series, and there are eleven
+## 14. The failure taxonomy — the T series, and there are twelve
 
 `C`, `D`, `E`, `F`, `G`, `H`, `O`, `P`, `R`, `S` and `B` are taken by Stages 2–11. Stage 12's
 identifiers are **T**, and the split between `C.SchemaError` and `model.FitError` follows the rule
@@ -1402,12 +1549,27 @@ a replicate; a `SchemaError` is a contract break and is never caught.**
 | **T9** | `support` | `SchemaError` | `treating_centres`' complement is not `EXPECTED_NEVER_IVT` (§10.2) |
 | **T10** | `_assert_distribution` | `SchemaError` | a standardised distribution does not sum to 1, or is not monotone (§20.5) |
 | **T11** | `inference` | `SchemaError` | a key's draws disagree with its point estimate's identity (§7.3) |
+| **T12** | `_assert_beta_reportable` | `FitError` | a fitted treatment coefficient reached `POLR_MAX_ABS_BETA` (§9.1) |
 
-**T2, T3 and T4 lead with `polr_ri:` and that token goes in `C.FAILURE_BUCKETS`**, mapping to
-`nonconvergence`, `nonconvergence` and `degenerate_design`. `test_bootstrap.py`'s scan asserts every
-`FitError` raise-site token in `model.py` and `outcome.py` is a `FAILURE_BUCKETS` key; **the scan
-scope grows to include `standardise.py`** (§18), so T1's token is covered by the same mechanism and a
-reworded message is a test failure rather than a counter that silently reads zero.
+**`bootstrap._bucket` classifies by the FIRST TOKEN of the message** — `message.split()[0]`
+(`bootstrap.py:487`) — **and raises `C.SchemaError` on a token it does not know.** Every rule below is
+a consequence of that one line and not a style choice:
+
+- **T2 and T3 lead with `polr_ri:`**, and that token goes in `C.FAILURE_BUCKETS` mapping to
+  `nonconvergence` — `"polr:"`'s arrangement, unchanged.
+- **T4 leads with `T4`, NOT with `polr_ri:`.** T4 is a degenerate design and not a convergence
+  failure, and a message leading with `polr_ri:` would be counted as `nonconvergence` **while
+  `"T4" → "degenerate_design"` sat in the map unreachable.** This is the one misclassification the
+  raise-site scan cannot catch: the scan asserts every token it finds is *in* the map, and
+  `polr_ri:` is in the map, so it would pass while the counter read wrong. T1 and T12 lead with their
+  own identifiers for the same reason.
+
+`test_bootstrap.py`'s scan asserts every `FitError` raise-site token in `model.py` and `outcome.py` is
+a `FAILURE_BUCKETS` key; **the scan scope grows to include `standardise.py`** (§18), so T1's and T12's
+tokens are covered by the same mechanism and a reworded message is a test failure rather than a
+counter that silently reads zero. **The scan remains a mitigation and not a fix** — it catches a
+reworded token and not a wrong-but-mapped one — which is `TODOS`' `code`-field item, whose trigger
+this section fired (§21).
 
 **T9 is a `SchemaError` and not a finding.** A workbook in which USZ acquires a treated patient, or in
 which a fifth centre appears, changes what [§14a]'s support check is *about* — the never-IVT set is
@@ -1421,6 +1583,26 @@ role: an assertion target, never an operative rule.
 conditions expressed as code, and §20.5 is the argument for asserting a property that cannot currently
 fail.
 
+**Their tolerances and their check sites are prespecified, because a self-check with an invented
+tolerance is a self-check that means whatever its implementer decided:**
+
+| | fires when | tolerance is | checked |
+|---|---|---|---|
+| **T10** | `abs(sum(P) − 1) > 1e-12` for any row or arm, **or** the cumulative sequence is not non-decreasing | §20.5's, so the guard and the test cannot disagree | every `Standardisation` the module constructs — point estimate **and** every replicate |
+| **T11** | `mrs_0_2 != rd[2]` exactly, **or** `abs(mortality + rd[5]) > 1e-15` | §20.6's, and the asymmetry is §7.3's | every `Standardisation`, same as T10 |
+
+The two tolerances differ for the reason §7.3 gives and it is not a rounding choice. `mrs_0_2` **is**
+`rd[2]` — the same cumulative difference read twice, so the comparison is exact and `1e-15` would
+hide a real defect. `mortality` is computed independently from the distributions (§20.6 asserts it
+by monkeypatch), so it agrees with `−rd[5]` to floating-point and not to the bit; the measured worst
+is 8.3e-17, three orders below the bound.
+
+**Both are `SchemaError`, so both are uncaught inside a replicate and kill the whole bootstrap.** That
+is deliberate and it is §14's rule, not an oversight: a distribution that does not sum to 1 is a
+contract break in the arithmetic, not a sparse resample, and eighteen minutes of draws built on it
+are worth less than the crash. The measured margins — 6.7e-16 against 1e-12, 8.3e-17 against 1e-15 —
+are what make that safe to specify.
+
 ---
 
 ## 15. The audit entries, and there are ten
@@ -1428,6 +1610,11 @@ fail.
 All under existing `data.KINDS`; **no kind is added**, which is the first stage since Stage 5 of which
 that is worth saying, and the reason is that `cohort` and `model` between them already describe what
 this stage does. Every step name is distinct from `cohort.build`'s for §4.2's reason.
+
+**The numbering below is the order the entries are RECORDED, and that order is a consequence of
+§19's call order rather than a declaration made here.** In particular entry 7 falls between 6 and 8
+because `support` must run before the restricted `all_centre` that produces it — `over=sup.inside` is
+`support`'s output. §20.9 asserts the order against §19's driver and not against this table.
 
 | # | kind | step | contents |
 |---|---|---|---|
@@ -1461,7 +1648,7 @@ def population(df: pd.DataFrame, audit: Audit) -> pd.DataFrame:
     """The [§14a] estimation population: eligible, covariate-complete, outcome-observed. 126 -> 104.
 
     Restriction 1 is NOT applied and `cohort.build` is not called: [§14a]'s population is the one
-    restriction 1 removes a centre from [Stage 5 §9]. T6, T7.
+    restriction 1 removes a centre from [Stage 5 §9]. T6, T7. Records entries 1 and 2.
     """
 
 
@@ -1489,7 +1676,7 @@ def hierarchical(pop: pd.DataFrame, audit: Audit) -> Hierarchical:
 
 
 def inference(pop: pd.DataFrame, audit: Audit) -> bootstrap.Bootstrap:
-    """The [§14] bootstrap: one `replicates` call, three arms per draw, seventy keys, no p-value.
+    """The [§14] bootstrap: one `replicates` call, three arms per draw, sixty-nine keys, no p-value.
 
     ALL FOUR STRATA (§13.1). Records entry 10. Calls `bootstrap.replicates`, `bootstrap.bucket`,
     `bootstrap.collect` and `bootstrap.intervals`; implements none of them.
@@ -1504,14 +1691,17 @@ body that took a fitted object would be resampling around a fixed fit.
 
 ## 17. Data flow into Stages 13 and 14
 
+**The call order is §19's and this block does not restate it in a different one.** `support` runs
+before the restricted `all_centre`, because `over=sup.inside` is *its* output:
+
 ```
   population(df, audit)   -> DataFrame, 104 rows                       (§4.1)
   all_centre(pop, audit)  -> Standardisation   n_average 104           (§7)
+  support(pop, audit)     -> Support           12 never-IVT, 3 outside (§10)
   all_centre(pop, audit, over=sup.inside)
                           -> Standardisation   n_average  93           (§11)
-  support(pop, audit)     -> Support           12 never-IVT, 3 outside (§10)
   hierarchical(pop, audit)-> Hierarchical      sigma, b_hat, at_floor  (§12)
-  inference(pop, audit)   -> Bootstrap         70 keys, 2000 draws each, NO p
+  inference(pop, audit)   -> Bootstrap         69 keys, 2000 draws each, NO p
                                                                        (§13)
   the classified frame comes back unchanged                            (§0.2)
 
@@ -1548,9 +1738,19 @@ prespecified rule says so:
   which `RD_5` equals `RD_4` exactly (§6.3). A reader comparing the two intervals is entitled to know
   that 83 draws of 2000 made them identical by construction.
 - **The hierarchical arm prints its `at_floor` rate and USZ's posterior SD.** 22.0% of replicates
-  collapse to the pooled model, and the interval on `hier.sigma` has a limit that means "the boundary"
-  in those draws (§12.5); USZ's intercept is the least precise of the four and the arm rests on it
-  (§12.6).
+  collapse to the pooled model — 44 of 200, and the rate Stage 14 prints must be the one §25's step 0
+  measures at `N_BOOT`, not this projection — and the interval on `hier.sigma` has a limit that means
+  "the boundary" in those draws (§12.5); USZ's intercept is the least precise of the four and the arm
+  rests on it (§12.6).
+- **There is one conditional log-odds per FIT, never one per arm.** The support arm has no
+  odds-ratio row: it restricts the averaging population and not the fit, so its `β` would be the
+  pooled `β` under a sensitivity label, which is [§14a]'s forbidden reading (§3.3). Stage 14 prints
+  `beta` for the pooled model and `hier.beta` for the random-intercept one, and nothing for
+  `support.` — a key that does not exist (§20.3).
+- **The two `β`s are conditional on different things, and the caption must say which.** `beta` is
+  conditional on `X`; `hier.beta` is conditional on `X` **and on `b_c`** (§3.1, §12.1). Both carry
+  `measure = _CONDITIONAL`, which is §8's guard that neither may be labelled marginal, but a table
+  putting them in one column under one heading would assert they are the same quantity.
 - **No [§14a] quantity carries a p-value, and none is in a [§13] family.** §3.3 is why, and Stage 11's
   Benjamini–Hochberg must not acquire a fifth family by counting Stage 12's keys — which is the
   mistake Stage 10 §12.1 warned about in its own direction ("seven p-values, not fourteen").
@@ -1559,22 +1759,24 @@ prespecified rule says so:
 
 ## 18. What Stage 12 amends in Stages 1–11
 
-The full ledger, so that no amendment is discovered during implementation. **Three shipped modules and
-four test modules; the two new estimators are both in `model.py` and nothing in `outcome.py`,
-`propensity.py`, `balance.py`, `cohort.py`, `eligibility.py`, `derive.py` or `data.py` changes at
-all.**
+The full ledger, so that no amendment is discovered during implementation. **Four shipped modules and
+five test modules; the two new estimators are both in `model.py`; `balance.py` changes by one
+rename and nothing else; and nothing in `outcome.py`, `propensity.py`, `cohort.py`,
+`eligibility.py`, `derive.py` or `data.py` changes at all.**
 
 | File | Amendment | Why |
 |---|---|---|
 | `model.py` | `ordinal_probabilities` (§6) and `polr_ri` + `RIFit` (§12). Public surface 6 → 8 | §0.1: an estimator-shaped function lives in `model.py`. `polr`, `firth`, `design`, `predict`, `complete_cases` and `Fit`/`PolrFit` are untouched, and §20.11 asserts it by number |
 | `bootstrap.py` | `intervals(draws, tested)` becomes the ninth public name; `run` and Stage 11's two callers move onto it | §13.3. The `TODOS` trigger is a third caller and this is it. `run`'s twenty-six intervals are asserted byte-identical across the change (§20.11) |
-| `config.py` | `POLR_RI_NODES`, `POLR_RI_SIGMA_FLOOR`, `POLR_RI_MAX_ITER` in the model-tolerance block; `SUPPORT_COVARIATES` as a computed view in the covariates block; three `FAILURE_BUCKETS` tokens | §12.3, §12.5, §12.4, §10.1, §14. The fence below |
+| `balance.py` | `_levels` becomes public as **`levels`** — a rename and nothing else, no behaviour change. Public surface 3 → 4 | §10.3. `balance.py:292-295` already names this stage as the reason its missingness branch exists; Stage 7 §5.5 made `smd` public on the same argument, and the rule it carries may not exist twice (§24) |
+| `config.py` | `POLR_RI_NODES`, `POLR_RI_SIGMA_FLOOR`, `POLR_RI_MAX_ITER` in the model-tolerance block; `SUPPORT_COVARIATES` as a computed view in the covariates block; **four** `FAILURE_BUCKETS` tokens | §12.3, §12.5, §12.4, §10.1, §14. The fence below |
 | `tests/test_model.py` | `ordinal_probabilities` against a hand-built fit and against `_ord_pieces`; `polr_ri` against its analytic gradient, its node-count stability and its floor | §20.5, §20.12 |
 | `tests/test_bootstrap.py` | `intervals`' three p-rules; the surface count 8 → 9; the raise-site scan scope grows to `standardise.py` | §13.3, §14 |
-| `tests/test_config.py` | **five** assertions: `POLR_RI_NODES` odd and ≥ 9; `0 < POLR_RI_SIGMA_FLOOR < 1e-2`; `STANDARDISATION_COVARIATES == tuple(c for c in PS_COVARIATES if c != "center")` — [§15]'s permission as a static check (§5.1); `SUPPORT_COVARIATES` is `STANDARDISATION_COVARIATES` minus `CATEGORICAL`; the three new `FAILURE_BUCKETS` tokens | §20.2 |
+| `tests/test_balance.py` | the surface count 3 → 4; `levels`' behaviour is unchanged, asserted against the existing Stage 7 fixtures rather than by diff | §10.3 |
+| `tests/test_config.py` | **six** assertions: `POLR_RI_NODES` odd and ≥ 9; `0 < POLR_RI_SIGMA_FLOOR < 1e-2`; `STANDARDISATION_COVARIATES == tuple(c for c in PS_COVARIATES if c != "center")` — [§15]'s permission as a static check (§5.1); `SUPPORT_COVARIATES` is `STANDARDISATION_COVARIATES` minus `CATEGORICAL`; the four new `FAILURE_BUCKETS` tokens; and `"support.beta"` is in no key set (§3.3, §20.3) | §20.2 |
 | `tests/test_reference_r.py` | the `clmm` oracle, under the existing `reference_r_ordinal` gate and `_r_environment` | §12.7 |
 | `implementation_roadmap.md` | Stage 12 gains its `**Spec:**` line; five corrections and three additions | §27 |
-| `TODOS.md` | two close, one has its stated reason corrected, six are new | §21 |
+| `TODOS.md` | two close, one has its stated reason corrected, two have their triggers fire and stay open, eight are new | §21, §27.1 |
 
 ```python
 # config.py — the additions, as they are to be pasted. Stage 12 §18
@@ -1595,7 +1797,7 @@ all.**
 # The measured cost of the two nodes above the plateau is 0.5 s per 2000-replicate arm.
 POLR_RI_NODES: Final[int] = 11
 
-# The sigma -> 0 boundary is REACHED -- 22.0% of replicates, measured (Stage 12 §12.5) -- and under a
+# The sigma -> 0 boundary is REACHED -- 44 of 200 replicates, 22.0%, measured (Stage 12 §12.5) -- and under a
 # log-sigma parametrisation it is at -inf, where the conditional-mode Newton's 1/sigma^2 overflows.
 # This is a floor on the SD, so 1e-8 on the variance: five orders of magnitude below the smallest
 # non-boundary sigma_hat in 200 replicates, so it separates "collapsed to the pooled model" from
@@ -1621,28 +1823,43 @@ SUPPORT_COVARIATES: Final[tuple[str, ...]] = tuple(
     c for c in STANDARDISATION_COVARIATES if c not in CATEGORICAL)          # [§14a]
 ```
 
-Three `FAILURE_BUCKETS` tokens are added beside the existing sixteen: `"T1"` →
-`"degenerate_design"`, `"polr_ri:"` → `"nonconvergence"`, `"T4"` → `"degenerate_design"`. `"T2"` and
-`"T3"` both lead with `polr_ri:` and share a bucket, which is `"polr:"`'s arrangement and Stage 10
-§7.2's argument for it, unchanged.
+**Four** `FAILURE_BUCKETS` tokens are added beside the existing sixteen: `"T1"` →
+`"degenerate_design"`, `"polr_ri:"` → `"nonconvergence"`, `"T4"` → `"degenerate_design"`, `"T12"` →
+`"separation"`. `"T2"` and `"T3"` both lead with `polr_ri:` and share a bucket, which is `"polr:"`'s
+arrangement and Stage 10 §7.2's argument for it, unchanged.
+
+**T12's bucket is `"separation"` and not a new one**, which is Stage 8 §11's requirement that the
+separation count be reported separately from the convergence count, satisfied by reusing G7's bucket
+rather than by adding a second name for the same thing. **T4's token is `"T4"` and not `"polr_ri:"`,
+and §14 is why** — a token that is in the map but is the wrong one passes the raise-site scan and
+misreads the counter.
 
 ---
 
 ## 19. Handover to Stage 13 [§14b]
 
+**This is the canonical call order — the ONE place it is written, and §15, §17 and §20.9 reference it
+rather than each implying one.** `support` must precede the restricted `all_centre`, whose `over=` is
+its output; the six calls record audit entries 1–10 in the declared order, entry 7 falling between 6
+and 8 because that is where the call falls:
+
 ```
   pop  = standardise.population(classified, audit)                    104 rows, all 4 centres
-  std  = standardise.all_centre(pop, audit)                           [§14a]
-  sup  = standardise.support(pop, audit)
-  hier = standardise.hierarchical(pop, audit)
-  boot = standardise.inference(pop, audit)                            70 keys, 2000 draws
+                                                                      entries 1, 2
+  std  = standardise.all_centre(pop, audit)                           [§14a]   entries 3, 4
+  sup  = standardise.support(pop, audit)                                       entries 5, 6
+  ssup = standardise.all_centre(pop, audit, over=sup.inside)          §11      entry  7
+  hier = standardise.hierarchical(pop, audit)                                  entries 8, 9
+  boot = standardise.inference(pop, audit)               69 keys, 2000 draws   entry  10
 
     126 -> 107 -> 104   the ledger, and the 2 outcome-missing are BOTH at USZ     [§4.1]
     12 / 3              never-IVT patients, and how many are outside the box      [§10.2]
     4.15%               replicates losing mRS 5, in which RD_5 == RD_4 exactly    [§6.3]
     0 / 2000            failures. Nothing in this stage drops a replicate         [§13.4]
-    22.0% / 24.0%       polr_ri replicates at the sigma floor / above sigma = 1   [§12.5]
+    44/200, 48/200      polr_ri replicates at the sigma floor / above sigma = 1   [§12.5]
+                        n = 200, NOT N_BOOT.  §25 step 0 re-measures              [§26]
     ~18.4 min           the bootstrap, of which the hierarchical arm is 95%       [§2]
+                        the hierarchical share is PROJECTED, not measured         [§12.8]
     10                  audit entries, taking a Stages 1-12 ledger to 56          [§15]
 ```
 
@@ -1708,16 +1925,21 @@ described rather than given, which made its acceptance criteria unperformable.
 
 ### 20.2 The config additions
 
-Five assertions, listed in §18. The load-bearing one is
+Six assertions, listed in §18. The load-bearing one is
 `STANDARDISATION_COVARIATES == tuple(c for c in PS_COVARIATES if c != "center")`, which makes [§15]'s
 *"permitted inside §14 only"* a static check rather than a sentence: a covariate added to the [§14a]
 model without being a [§6] confounder fails at import.
 
 ### 20.3 The estimand keys are derived and not counted
 
-`len(keys) == 3 * (1 + len(C.MRS_THRESHOLDS) + 2 + 2 * len(C.MRS_LEVELS)) + 1`, asserted against the
-config and never against 70. And `all(interval.p is None for interval in boot.intervals.values())` —
-§3.3's no-p rule, asserted over every key rather than spot-checked.
+`len(keys) == 3 * (len(C.MRS_THRESHOLDS) + 2 + 2 * len(C.MRS_LEVELS)) + 2 + 1`, asserted against the
+config and never against 69 — three standardised blocks, one `β` per fit and there are two,
+`hier.sigma`. And `all(interval.p is None for interval in boot.intervals.values())` — §3.3's no-p
+rule, asserted over every key rather than spot-checked.
+
+And **`"support.beta" not in keys`**, asserted by name. §3.3's argument is [§14a]'s, so the absent key
+is the enforcement in the manner §8's absent `odds_ratio` field is: a later "make the arms uniform"
+edit fails a test rather than putting `β` into a row labelled as a sensitivity result.
 
 ### 20.4 The fit is unweighted, and the call site is the assertion
 
@@ -1748,6 +1970,15 @@ on both fixtures. And a test asserts `mortality` is computed from the **distribu
 `-rd[5]`, by monkeypatching `rd` and requiring `mortality` to be unaffected — because an
 implementation that derived one from the other would pass the identity trivially.
 
+**The two tolerances differ, and the monkeypatch test applies to only one of them, and both facts are
+§7.3's rather than arbitrary.** `mrs_0_2` **is** `rd[2]` — the same cumulative difference read under
+[§14a]'s name for it, one computation and not two — so the comparison is **exact**, `1e-15` would
+hide a real defect, and there is nothing for a monkeypatch to catch. `mortality` is genuinely a
+second computation, from `P(Y = 6)` in each arm rather than from `1 − P(Y ≤ 5)`, so it agrees with
+`−rd[5]` to floating point and not to the bit — measured 8.3e-17 — and it is exactly the quantity an
+implementer might "simplify" into `-rd[5]`, which is what the monkeypatch prevents. T11 fires at these
+same two tolerances (§14).
+
 ### 20.7 The mortality interval is NOT the reflection of `RD_5`'s
 
 The measurement of §7.4, as a test: over `boundary_draws()`-style constructed draws under
@@ -1764,9 +1995,16 @@ arithmetic error — which is the shape Stage 10 §15.8 used for the same pin.
 
 ### 20.9 The audit entries and their step names
 
-Ten entries in the declared order; the step-name set is **disjoint** from `cohort.build`'s, asserted as
-a set intersection rather than against a list (§4.2); entry 1 names exactly as many case identifiers as
-its `n` claims, `cohort._record_removal`'s discipline; and the Stages 1–12 ledger totals 56.
+Ten entries, in the order **§19's driver produces them** — the test runs that driver rather than
+calling the five functions in an order of its own, so entry 7 lands between 6 and 8 because `support`
+precedes the restricted `all_centre` (§15). The step-name set is **disjoint** from `cohort.build`'s,
+asserted as a set intersection rather than against a list (§4.2); entry 1 names exactly as many case
+identifiers as its `n` claims, `cohort._record_removal`'s discipline; and the Stages 1–12 ledger
+totals 56.
+
+**A driver that omitted the restricted `all_centre` would record nine entries and total 55**, which
+is the failure this assertion catches and the reason §19 spells the call out rather than leaving
+sensitivity 1's point estimate implied.
 
 ### 20.10 The support check
 
@@ -1807,17 +2045,59 @@ its `n` claims, `cohort._record_removal`'s discipline; and the Stages 1–12 led
 - **`ordinal::clmm`**, gated (§12.7): coefficients negated, thresholds not, `sigma` not, `nAGQ`
   passed.
 - T2, T3 and T4 each fire on a constructed frame, and each token is a `C.FAILURE_BUCKETS` key.
+  **T4's raised message begins with the literal `T4` and NOT with `polr_ri:`**, asserted on the
+  message text, because `bootstrap._bucket` reads the first token and `polr_ri:` is also a valid key
+  — so this is the one bucket assertion the raise-site scan cannot make (§14).
+- **T12 at the `polr_ri` call site**: a constructed frame driving `hier.beta` past
+  `POLR_MAX_ABS_BETA` costs `hier.beta` and **nothing else** — `hier.*`'s twenty-two standardised
+  keys and `hier.sigma` all survive (§9.1).
+- **`Hierarchical.fit is Hierarchical.standardisation.fit`** — identity, not equality (§3.1). And
+  `Hierarchical.standardisation.population` is the third literal, so a formatter can tell the three
+  arms apart from the record alone.
 
 ### 20.13 The replicate loop
 
 - The drawn-frame sequence is byte-identical to the one a body returning `None` produces, at the same
   seed, frame and stratum — Stage 10 §15.2's property, now over a three-arm body (§13.1).
 - **All four strata appear in every drawn frame** and each stratum's size is exact, USZ's 12 included.
-- The three failure groups each cost exactly their own keys, driven by three constructed failures, and
-  `Draws.n_attempted` reconciles for every one of the seventy keys.
-- A `POLR_MAX_ABS_BETA` breach costs `beta` and `support.beta` and **nothing else** — §9.1's key
+- The **four** failure groups each cost exactly their own keys, driven by four constructed failures,
+  and `Draws.n_attempted` reconciles for every one of the sixty-nine keys.
+- **A pooled `model.polr` `FitError` costs EVERY key, `hier.*` included** — §13.2, because
+  `polr_ri`'s start values are the pooled fit's (§12.8). Asserted by driving the pooled fit to raise
+  and requiring `hier.sigma`'s surviving-draw count to fall by exactly one, which is the assertion a
+  `hier.*` exemption would fail.
+- **A `POLR_MAX_ABS_BETA` breach on the pooled fit costs `beta` and nothing else** — §9.1's key
   granularity, which is the one place this stage departs from Stage 8 and therefore the one that most
-  needs a test.
+  needs a test. The support arm's twenty-two keys are unaffected, and there is **no `support.beta`**
+  to be affected (§3.3, §20.3).
+
+### 20.14 Every T identifier fires, and the set is the assertion
+
+§20.1–20.13 name a test for T1, T2, T3, T4, T9, T10 and T12 as a consequence of testing the thing
+each guards. **T5, T6, T7, T8 and T11 are guards nothing else reaches**, so they are asserted here —
+and asserted as a **set**, on §20.9's pattern, so that a thirteenth identifier added to §14 without a
+test fails rather than passing unnoticed:
+
+    {t for t in T_IDENTIFIERS_IN_SECTION_14} == {t exercised by this module's tests}
+
+Each fires on a constructed input, never on a mutated workbook:
+
+| id | constructed input |
+|---|---|
+| **T5** | `ordinal_probabilities` called with the fitted columns **reordered**, and again with a column renamed — `SchemaError` both times, and the message names the offending column (§6.1) |
+| **T6** | a frame with the `eligibility` column dropped, i.e. `classify` was not run |
+| **T7** | an empty frame, and separately a frame with one arm empty — both after `eligibility.retained`, so the emptiness is the population's and not the input's |
+| **T8** | `over=` as a float Series; as a boolean Series on a shuffled index; and as one whose length differs from the population's |
+| **T11** | a `Standardisation` whose `mortality` has been perturbed by 1e-14 — above §20.6's 1e-15 bound and far below anything a reader would see — so the check is known to be live at its stated tolerance and not merely present |
+
+**T8's three cases are one point about alignment and it is worth stating why they are separable.**
+`over=` is applied inside every replicate to a **resampled** frame, and that frame is safe to index
+by label only because `bootstrap.resample` **resets the index** before renaming — `bootstrap.py:315-320`,
+which says so in as many words and gives Stage 12 as the reason: *"a frame with a duplicated index is
+a frame on which a future label-based `.loc` is wrong in a way that returns a number."* T8 is the
+guard for the case that reset does not cover, and the reset is the reason T8 does not have to cover
+the duplicated-label case at all. Stage 10 wrote it for this stage; §11's `over=` is the caller it
+was written for.
 
 ---
 
@@ -1853,6 +2133,7 @@ its `n` claims, `cohort._record_removal`'s discipline; and the Stages 1–12 led
    implements [§14a]'s reading; the marginal one is a different estimand and would need a [§14]
    amendment. **Trigger:** a reviewer asking what the arm says for a patient at an unobserved centre.
 7. **NEW — a percentile interval on a parameter at a boundary.** 22.0% of `hier.sigma`'s draws are at
+   the floor — 44 of 200, and §25's step 0 re-measures it at `N_BOOT`. Those draws are at
    `POLR_RI_SIGMA_FLOOR`, so its lower limit is the floor and means "the boundary". §17.2 requires the
    rate printed beside it; a bounded parameter's interval is a known-hard problem and this pipeline
    does not solve it. **Trigger:** any reading of that interval as a range for the between-centre SD.
@@ -1869,6 +2150,21 @@ its `n` claims, `cohort._record_removal`'s discipline; and the Stages 1–12 led
 11. **NEW — Stage 12's spec is written against an unlanded Stage 11.** The three dependencies are named
     in the header. **Trigger:** Stage 11 landing with `bucket`/`collect` private, or `intervals` not
     extracted.
+12. **NEW — the textual failure classification produced a wrong bucket in this document, and the
+    raise-site scan could not have caught it.** `TODOS`' `code`-field item sets its trigger as *"the
+    first bucket that is wrong"*; this spec's first draft gave T4 a message leading with `polr_ri:`,
+    which `bootstrap._bucket` (`bootstrap.py:487`) would have counted as `nonconvergence` while
+    `"T4" → "degenerate_design"` sat in the map unreachable. **The scan asserts every token it finds
+    is in the map, and `polr_ri:` is in the map** — so it would have passed. That is the second
+    documented instance, after the `G6` omission the item already records, and both were caught by
+    reading a spec rather than by a run. **Status: the trigger has FIRED and the fix is deferred** —
+    Stage 12 is already landing a new estimator, a fourth public module surface and the interval-loop
+    refactor, and a nineteen-site error-taxonomy amendment on top is two structural changes at once.
+    §14 states the first-token rule explicitly so the next author does not rediscover it.
+13. **NEW — the hierarchical arm's rates are 200-replicate measurements** (§12.5, §26). Every one is
+    labelled, and §25's step 0 replaces them with `N_BOOT` measurements before implementation begins.
+    **Status: open until step 0 lands**, at which point this item closes with measured numbers rather
+    than negatively.
 
 ---
 
@@ -1919,7 +2215,8 @@ its `n` claims, `cohort._record_removal`'s discipline; and the Stages 1–12 led
 | The counterfactual pattern | `outcome._counterfactuals` (`outcome.py:1087`) | Copy the *shape* — overwrite the column of the fitted design — not the function; it is Firth-specific |
 | The never-IVT set | `cohort.treating_centres` (`cohort.py:96`) | Take its **complement**. `cohort.py:112-119` writes the expression |
 | The standardised mean difference | `balance.smd` (`balance.py:252`) | Call it with unit weights. Stage 7 §5.5 made it public for this |
-| The balance row list and labels | `balance._levels`, `C.BALANCE_SET` | `_levels`' rule — range over declared levels, never over observed — is what §10.3 needs; the function is private, so §10.3 builds its rows the same way rather than importing it |
+| The balance row list and labels | `balance.levels` (public at this stage), `C.BALANCE_SET` | **Call it.** Its rule — range over declared levels, never over observed — is what §10.3 needs, and `balance.py:292-295` already names this stage as why its missingness branch exists. Renamed public here for the reason Stage 7 §5.5 made `smd` public (§10.3, §18) |
+| The treatment-coefficient bound | `outcome._assert_reportable` (`outcome.py:347`) | **Do NOT call it.** It bounds the *worst* coefficient in the fit (`outcome.py:363`), which is right for Stage 8's one-column design and wrong here: §9.2 requires `gamma` unbounded, and measured `max\|gamma\|` is 3.21 against `max\|beta_treatment\|` 2.00. T12 is this stage's own, on the treatment coefficient alone (§9.1) |
 | The resampler | `bootstrap.resample` (`bootstrap.py:290`) | Call it via `replicates`. General in stratum by design |
 | The replicate driver | `bootstrap.replicates` (`bootstrap.py:347`) | Call it. One-argument body |
 | Failure classification and reconciliation | `bootstrap.bucket`, `bootstrap.collect` (public at Stage 11 §5.4) | Call them. Do not re-implement |
@@ -1939,8 +2236,25 @@ convention — which is why §12 is a specification and not a call site.
 
 In order, each landing green before the next begins.
 
-1. **`config.py`** — the four constants and the three `FAILURE_BUCKETS` tokens (§18 fence).
-   `test_config.py`'s five assertions.
+0. **Re-measure the hierarchical arm at `N_BOOT`, before any code is written.** Re-run the
+   three-arm replicate body at `N_BOOT = 2000` on the landed Stages 1–10 and replace §12.5's,
+   §12.8's, §13.4's, §2's, §17.2's, §19's and §21 item 7's projected figures with measured ones —
+   the at-floor rate, the above-σ=1 rate, the `polr_ri` non-convergence count and the wall clock.
+   About **eighteen minutes** of compute. It is step 0 and not step 10 because §17.2 requires the
+   at-floor rate printed beside `hier.sigma`'s interval, so it is a number that reaches a
+   manuscript, and because a document whose authority rests on every number having been run should
+   not carry a projection into implementation when closing it costs eighteen minutes. **Until it
+   lands, every hierarchical rate in this document means n = 200** (§26).
+
+   **It must be run where the workbook is.** `DATA_XLSX` is gitignored, so in a git worktree or a
+   fresh clone it is absent and every workbook-dependent test skips — measured in this branch's
+   worktree, **1343 passed / 112 skipped** against the main checkout's 1588 / 2, with the 110
+   additional skips all reading *"the private workbook is gitignored and absent from this
+   checkout"*. That is not a failure and nothing is wrong with the suite; it is a reason step 0 and
+   every probe re-run belong in the checkout that has the data, and a reason a green run in a
+   worktree is not evidence about any [§14a] number.
+1. **`config.py`** — the four constants and the four `FAILURE_BUCKETS` tokens (§18 fence).
+   `test_config.py`'s six assertions.
 2. **`model.ordinal_probabilities`** (§6) with its hand-built and `_ord_pieces` tests (§20.5). It is
    independent of everything else here and it is what the rest rests on.
 3. **`bootstrap.intervals`** (§13.3), with Stage 11's two callers and `run` moved onto it, and
@@ -1954,7 +2268,7 @@ In order, each landing green before the next begins.
    objective; the analytic gradient with §20.12's central-difference test **before** the optimiser
    exists; the BFGS loop; the floor; `RIFit`. Then the `clmm` oracle.
 8. **`standardise.hierarchical`** (§12.6). §20.12.
-9. **`standardise.inference`** (§13) — the three-arm body, three failure groups, seventy keys.
+9. **`standardise.inference`** (§13) — the three-arm body, four failure groups, sixty-nine keys.
    §20.3, §20.13.
 10. **The roadmap and `TODOS.md` amendments** (§21, §27), landing with the code.
 
@@ -1983,7 +2297,7 @@ pandas 2.3.3.
 | A7 | the audit step names | 12 entries before this stage; `cohort.build`'s six names enumerated | §4.2, §15 |
 | B0 | the structural Accept-when, point estimate | sums to 1 exactly, monotone, all in [0, 1] | §20.5 |
 | B0b | the two identities | `|mrs_0_2 − RD_2|` 0.0; `|mortality + RD_5|` 8.3e-17 | §7.3 |
-| B1 | 2000 replicates, three-arm body | 2000/2000 survived, no failures, 43.9 and 50.1 s for two arms over two runs | §13.4, §2 |
+| B1 | 2000 replicates, the POOLED and SUPPORT arms only | 2000/2000 survived, no failures, 43.9 and 50.1 s over two runs. **The hierarchical arm was NOT in this run** — it is F4's, at n = 200 | §13.4, §2 |
 | B2 | the cutpoint collapse | 83 / 2000 = **4.15%**, always mRS 5 | §6.2 |
 | B3 | convergence across replicates | iterations 4–6, all likelihood, `first_step_norm` 1.01–22.8 | §13.4 |
 | B4 | separation on ten columns | max `|beta|` 2.00, max `|gamma|` 3.21, 0 reaching 14.0; every reported quantity in range | §9.1, §9.2 |
@@ -1994,7 +2308,7 @@ pandas 2.3.3.
 | C1–C4 | the first `polr_ri` prototype | non-adaptive, numerical Hessian: 39.0 s per fit, **21.7 h** at `N_BOOT` | §12.4, §12.8 |
 | D1–D4 | analytic gradient, non-adaptive | gradient to 7.8e-9; 0.82 s per fit; σ̂ 0.72/0.80/0.83 at 5/7/9 nodes | §12.3, §12.4 |
 | E1–E4 | adaptive against non-adaptive | non-adaptive error 4.8e-1 at 31 nodes at σ=3, non-monotone; adaptive 8.9e-4 at **3** | §12.2 |
-| F1–F4 | the specified shape | frozen-node gradient 1e-8 relative; 0.76 s per fit; 200/200 converge; **22.0%** at the floor, **24.0%** above σ=1; **17.5 min** at `N_BOOT` | §12.4, §12.5, §12.8 |
+| F1–F4 | the specified shape, **at n = 200 throughout** | frozen-node gradient 1e-8 relative; 0.76 s per fit; 200/200 converge; **44/200 = 22.0%** at the floor, **48/200 = 24.0%** above σ=1; **17.5 min** at `N_BOOT`, **projected ×10** from 105.0 s / 200 | §12.4, §12.5, §12.8 |
 
 **Six probes changed what this document says**, each named in the Status block: B0b (§7.3), B7 (§7.4),
 B4 (§9), E1 (§12.2), C4/D2/F2 (§12.4), F4 (§12.5).
@@ -2009,7 +2323,19 @@ Stages 1–10 suite was run at the same time: **1588 passed, 2 skipped**, the tw
 oracles that this machine's segfaulting R cannot open (§12.7). This document changes no shipped code
 and the run is recorded as the guard against an accidental edit rather than as evidence about Stage 12.
 
-**What was NOT measured, and is therefore not claimed.** The `ordinal::clmm` oracle has not been run:
+**What was NOT measured, and is therefore not claimed. There are two things, and the second was found
+by the engineering review rather than by the probe suite.**
+
+**First — the hierarchical arm was never run at `N_BOOT`.** Probe B1's 2000 replicates covered the
+pooled and support arms; the hierarchical arm is probe F4's, at **200**. So `22.0%` at the floor,
+`24.0%` above σ = 1 and `0/200` non-convergence are 200-replicate measurements, and `17.5 min` is a
+×10 projection from a measured 105.0 s. Every section quoting them says so (§12.5, §12.8, §13.4,
+§17.2, §19, §21 item 7). Nothing about the arm's behaviour is expected to change at 2000 — the
+projection is linear in the replicate count and the body is identical — but "not expected to change"
+is not a measurement, and this document does not report those as the same thing. **§25's step 0 runs
+it**, at a cost of about eighteen minutes, before any code is written.
+
+**Second — the `ordinal::clmm` oracle has not been run:**
 R segfaults on this machine at startup for the `uname`/PATH reason `test_reference_r.py`'s banner
 documents, and opening that gate is an implementation task (§25 step 7) and not a spec task. So
 `polr_ri` is verified here against its own analytic gradient, against node-count stability, against the
@@ -2049,5 +2375,27 @@ document:
 
 `TODOS.md` — two items close (§21 items 2, 3 — both **negatively**, which is recorded rather than
 allowing a closed item to read as a solved problem), one has its stated reason corrected while its
-trigger fires (item 4), one has its trigger fire and stays open as the largest cost in the pipeline
-(item 5), and six are new (items 6–11).
+trigger fires (item 4), **two** have their triggers fire and stay open — the parallelisation item as
+the largest cost in the pipeline (item 5) and the `model.FitError` `code`-field item, whose *"first
+bucket that is wrong"* this document supplied (item 12) — and **eight** are new (items 6–13).
+
+### 27.1 What the engineering review changed, 2026-08-27
+
+Recorded here rather than folded in silently, because five of the seven were **internal
+contradictions in this document** and a reader is entitled to know the drafting failed in those
+places. Every one is discharged in a numbered section above:
+
+| Finding | Was | Is |
+|---|---|---|
+| The estimand key set | 70 keys, 23 per arm, including `support.beta` | **69**, 22 standardised per arm + one `β` **per fit** + `hier.sigma` (§3.3). [§14a] reports `exp(β)` as a model parameter and defines the sensitivity on the *standardisation population*, so the support arm has no `β` |
+| A pooled `FitError` | cost every key **except** `hier.*` | costs **every** key (§13.2). §12.8 says `polr_ri` starts from the pooled fit, so the exemption was unimplementable |
+| The `POLR_MAX_ABS_BETA` guard | named "G-bound", no identifier, no raise site, no bucket token | **T12**, one helper, **two** call sites — `beta` and `hier.beta` (§9.1, §14, §18) |
+| T4's bucket | led with `polr_ri:`, so it would have counted as `nonconvergence` | leads with `T4` (§14). The failure the raise-site scan cannot catch |
+| `Hierarchical.standardisation.fit` | typed `model.PolrFit`, held a `RIFit` | `PolrFit \| RIFit`, third `population` value, `is`-identity with `Hierarchical.fit` (§3.1, §12.6) |
+| The hierarchical arm's rates | quoted as if `N_BOOT` | labelled **n = 200**, with §25's step 0 to re-measure (§12.5, §26) |
+| `balance._levels` | reimplemented in §10.3 because it is private | **public as `balance.levels`** (§10.3, §18, §24), on Stage 7 §5.5's precedent for `smd` |
+
+Also: §17 and §19's driver sketches used `sup.inside` before `support` ran and omitted sensitivity 1's
+point estimate entirely, which would have recorded nine audit entries and failed §20.9's ledger; §20
+had no acceptance criterion for T5, T6, T7, T8 or T11, now §20.14; T10 and T11 had no tolerances, now
+§14; and §12.2's table gained the three rows its own prose was quoting.

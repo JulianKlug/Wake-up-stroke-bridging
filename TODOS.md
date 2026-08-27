@@ -682,16 +682,44 @@ prefixes and `test_bootstrap.py` §15.6 scans both modules to assert every token
 failure mode that matters. It does not make the classification structural, and a stage that needed to
 branch on a failure kind rather than count it would still be parsing English.
 
-**That this is a real risk and not a hypothetical:** an earlier draft of the Stage 10 spec stated fourteen
-raise sites and omitted `G6` from the bucket map entirely. The scan found it — before the scan existed as
-a test, while it was still a paragraph being checked.
+**That this is a real risk and not a hypothetical — and there are now TWO instances:**
+
+1. An earlier draft of the Stage 10 spec stated fourteen raise sites and omitted `G6` from the bucket
+   map entirely. The scan found it — before the scan existed as a test, while it was still a paragraph
+   being checked.
+2. **The Stage 10 draft of Stage 12's spec gave T4 — a degenerate grouping variable — a message
+   leading with `polr_ri:`, while declaring `"T4" → "degenerate_design"` in the bucket map.**
+   `_bucket` reads `message.split()[0]`, so every T4 would have been counted as `nonconvergence` and
+   the `"T4"` entry would never have matched anything. Found by the Stage 12 engineering review,
+   2026-08-27; fixed in that spec's §14, which now states the first-token rule explicitly.
+
+**Instance 2 is the more serious of the two, because the scan CANNOT catch it.** The scan asserts that
+every token it finds is *in* `C.FAILURE_BUCKETS`, and `polr_ri:` **is** in the map — so the scan
+passes, the map is complete, and the counter is silently wrong. The mitigation described above covers
+a *reworded* token; it does not cover a **wrong-but-mapped** one. That is the whole gap between
+textual classification and a `code` field, and it is now demonstrated rather than argued.
+
+**Both instances were caught by reading a spec rather than by a run**, which is the review process
+working — and also the reason neither produced evidence from production. A third instance that reaches
+code would present as a bucket count that reads plausibly and is wrong, with nothing failing.
 
 **Why it was not done at Stage 10.** Sixteen raise sites across `model.py` — the module Stages 6, 8, 9
 and 12 all depend on — amended on the strength of a diagnostic.
 
-**Trigger.** The first bucket that is wrong, or the first stage that needs to branch on a failure kind.
+**Why it is still not being done at Stage 12.** Stage 12 lands a new estimator (`polr_ri`, its own
+quadrature rule, optimiser and boundary behaviour), a fourth amended module surface
+(`balance.levels`), the `bootstrap.intervals` extraction with a byte-identity guard on Stage 10's
+twenty-six intervals, and twelve new failure identifiers. A nineteen-site error-taxonomy amendment on
+top of that is two structural changes in one landing — Beck's rule, and the reason Stage 12 §25
+orders its own steps the way it does. Stage 12 mitigates instead: its §14 states the first-token rule
+as a rule, and `test_standardise.py` asserts T4's message text directly.
 
-**Status: open.**
+**Trigger.** ~~The first bucket that is wrong~~ — **FIRED, twice, both in specs (above).** The trigger
+is now: **the first bucket that is wrong in landed code**, or the first stage that needs to branch on
+a failure kind rather than count it. Stage 13 adds raise sites to this scheme and is the next
+opportunity.
+
+**Status: open, trigger fired, fix deliberately deferred past Stage 12.**
 
 ## Measure bootstrap coverage under near-separation (Stage 10 §8.4, §16 item 4)
 
