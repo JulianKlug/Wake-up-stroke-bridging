@@ -835,12 +835,49 @@ heading [Stage 12 §8].
 
 ## Stage 13 — Feasible-policy analysis [§14b]
 
+**Spec:** `specs/stage13_feasible_policy.md`.
+
+Independent of Stages 6–11 and reads no Stage 12 result; it takes the unrestricted classified frame
+and applies **neither** [§3] restriction. Measured: 126 → 123 with the [§11] completeness applied — the
+same three records Stage 12 loses, all eligible — so the population is Stage 12's 104 plus exactly the
+19 contraindicated patients, at HUG (11) and USZ (8), none of them bridged [Stage 13 §4.1].
+
 **Build.** The same standardisation machinery over all patients at all centres, but the active regime
 assigns treatment **as a function of eligibility** — bridge if eligible, direct thrombectomy if
 contraindicated — against a comparator of direct thrombectomy for everyone.
 
-**Accept when.** No contraindicated patient is ever assigned a predicted IVT outcome, and the output is
-labelled an operational policy contrast, distinct from both [§14a] and [§7].
+- **One fit, on all 123 records, with `X` = the [§14a] covariates plus a contraindication indicator**
+  — DECISION 10 (PI, 2026-08-27). [§14b] left the model open; fitting on all patients *without* the
+  indicator would build the confounding [§3] restriction 2 exists to remove, and [§14a]'s "not a
+  covariate" clause is conditional on the restriction that [§14b] lifts. The indicator is derived from
+  `eligibility` and never from the raw flag — Stage 4 is the one classifier [Stage 13 §5].
+- **The regime is a per-row vector written into the treatment column of the fitted design** — the same
+  overwrite Stage 12 §7.1 prescribes, with a vector instead of a scalar, through `standardise.gcompute`
+  (Stage 12's `_standardise` made public with the regimes as arguments). No second g-computation
+  exists [Stage 13 §6.1].
+- **The policy contrast is the eligible-population contrast diluted by the eligible share, to machine
+  precision** — a contraindicated patient's per-row contrast is exactly 0 under both regimes, so
+  `RD_k^policy = (n_eligible / N) · RD_k^eligible`, measured to 8.9e-17 and asserted (U7). The share
+  (0.846 on the workbook) is a **statistic** — 0.748 to 0.935 across replicates — and both it and the
+  undiluted contrast travel as estimand keys, so a reader is not shown a smaller effect where there is
+  a smaller share [Stage 13 §7.3]. That undiluted contrast is *not* [§14a]'s: the nineteen extra
+  records move the shared coefficients by a measured 2.1e-3 at the point estimate.
+- **The contraindication indicator separates in 1 of 2000 replicates** — every drawn contraindicated
+  patient at mRS 6 — its coefficient runs to −23.6 past `POLR_MAX_ABS_BETA`, the fit converges in 21
+  iterations, **and no reported quantity moves**: in that draw the eligible contrast equals an
+  eligible-only fit's exactly. So the separation guard (U8) binds the treatment coefficient alone, as
+  Stage 12's T12 does [Stage 13 §9].
+- **Inference:** one `bootstrap.replicates` call, all four strata, one arm per draw, **thirty** keys,
+  no p-value. Measured: 2000 of 2000 survive, mRS 5 is lost in 0.65% of draws (five patients carry it
+  here against three at Stage 12), 27.6 s [Stage 13 §10].
+- **Nothing [§14a] prescribes as a sensitivity is built here.** No support check, no treated-support
+  restriction, no random centre intercept: [§14b] prescribes none, and each would be a [§14] amendment
+  added from symmetry — the failure Stage 12 §21 item 14 names [Stage 13 §19].
+
+**Accept when.** No contraindicated patient is ever assigned a predicted IVT outcome — **checked as a
+contract on the active design's treatment column before any prediction is made (U2), never on the
+average** — and the output is labelled an operational policy contrast, distinct from both [§14a] and
+[§7], **as a string on the record that Stage 14 prints and never writes** [Stage 13 §6.3, §8].
 
 ## Stage 14 — Outputs and guardrails [§16]
 

@@ -1345,3 +1345,53 @@ two on the strength of an aesthetic.
 
 **Trigger.** A second caller needing the denominator, or the next stage that touches `balance.py` for
 any other reason. **Status: open.**
+
+## Three implementations of the exact-naming removal ledger (Stage 13 §4.2)
+
+**What.** `cohort._record_removal` (private), `standardise.record_removal` (Stage 12's copy, made
+public at Stage 13 so that `policy.py` does not write a third), and `policy.py` as the third caller.
+The rule they share — an entry must name exactly as many patients as it says it removed — is stronger
+than `data.py`'s `_MUST_NAME_CASES`, and it now exists in two bodies.
+
+**Why not fixed at Stage 13.** Stage 12 §18 says `cohort.py` does not change; Stage 13 §15 says the
+same. Moving the rule into `data.py` reopens a landed module every stage imports for a discipline two
+callers already honour.
+
+**Trigger.** Fired at Stage 13 — the next change to either body moves the rule into `data.py` as one
+public function with `cohort` and `standardise` as callers. **Status: open, trigger fired.**
+
+## The [§14b] contraindication indicator is a main effect only (Stage 13 §5.1, §17 item 2)
+
+**What.** DECISION 10 lets contraindication shift the cutpoints and nothing else: a contraindicated
+patient's covariates are assumed to act on their outcome as an eligible patient's do. Nineteen records
+at two centres cannot test that. It is the same class of assumption [§14a] makes about centre.
+
+**Consequence.** It moves the absolute standardised levels and the eligible patients' counterfactuals
+through the shared coefficients (measured 2.1e-3 on the eligible contrast at the point estimate); it
+cannot move the contraindicated patients' own contribution to any `RD_k`, which is zero by construction.
+
+**Trigger.** A reviewer asking whether the contraindicated patients' EVT outcome model is the same
+model, or a [§14] amendment adding an interaction. **Status: open, a [§14] question.**
+
+## A hybrid plug-in for the contraindicated patients' distributions (Stage 13 §7.3, §17 item 3)
+
+**What.** For a contraindicated patient `Y^0 = Y` observed, so their block of the two regime
+distributions could be the empirical one rather than a model prediction. Identical `rd_k` — the block
+cancels — and different `active_j`/`comparator_j`.
+
+**Why not built.** [§14b] says "same standardisation machinery", and a plug-in is a second machinery
+for one sub-population. A [§14] amendment.
+
+**Trigger.** Stage 14 wanting the comparator distribution read as a description of this cohort rather
+than as a model prediction. **Status: open.**
+
+## The separated-indicator draw is benign, at 1 in 2000 (Stage 13 §9.1, §17 item 5)
+
+**What.** One stratified replicate drew every contraindicated patient at mRS 6; the indicator's
+coefficient ran to −23.6, past `POLR_MAX_ABS_BETA`, and `polr` converged in 21 iterations. Measured:
+the eligible contrast under that fit equals an eligible-only fit's exactly, so nothing reported moved,
+and U8 deliberately does not bind the indicator.
+
+**Trigger.** The rate exceeding 1%, or a workbook where a centre's contraindicated patients share one
+outcome — at which point the fit is slow rather than wrong, and the question is cost. **Status: open,
+low consequence.**

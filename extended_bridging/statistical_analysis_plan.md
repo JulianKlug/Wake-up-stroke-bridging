@@ -495,6 +495,25 @@ only §14 analysis whose population includes contraindicated patients, and its i
 operational — what adopting a bridging policy would deliver in this cohort — not the biological effect
 of IVT.
 
+**Amendment, 2026-08-27 — the §14b model is specified, and the contrast's structure is stated.** The
+text above names the population and the two regimes and leaves the model open. It is: one
+proportional-odds model over **all** patients — eligible and contraindicated — at all centres, with
+`X` = §14a's covariates (the §6 set minus `center`) **plus a contraindication indicator** as a main
+effect. §14a's clause that contraindication status is not a covariate is conditional on the restriction
+to eligible patients, which this analysis lifts; fitting on all patients without the indicator would
+make "no IVT" a marker of contraindication and its prognosis inside the one analysis that retains
+contraindicated patients, which is the bias §3's second restriction exists to remove. `exp(β)` is
+conditional on `X` **and** on contraindication status and may appear only as a model parameter. The
+indicator's coefficient is a nuisance parameter and is not a result.
+
+Report the two standardised mRS distributions under the two regimes and, from them, the cumulative risk
+differences, the mRS 0–2 difference and the mortality difference, under the label above. A
+contraindicated patient receives direct EVT under both regimes, so their contribution to every risk
+difference is exactly zero and the policy contrast equals the eligible-population contrast **under this
+model** multiplied by the eligible share of the cohort. Both factors are reported with it: the share is
+a property of the cohort and is resampled with it, and the eligible contrast under this model is not
+§14a's, because the model is fitted on a different population. Inference as below; no p-value.
+
 ### Inference for §14
 
 Patient-level bootstrap stratified by centre, as §10: resample, refit the ordinal model, predict every
