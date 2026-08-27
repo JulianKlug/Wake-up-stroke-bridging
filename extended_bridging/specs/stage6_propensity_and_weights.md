@@ -1279,6 +1279,14 @@ Two things follow that Stage 6 owns rather than defers:
   §16 declines it, for Stage 5 §15's reason one stage on: the [§13] propensity-specification rows are
   *different target populations*, and a parameter makes them look like options. When they are
   un-deferred they arrive as a named specification with a [§13] amendment, not as a keyword.
+  - **Discharged, 2026-08-27.** DECISION 4 un-deferred exactly one of them and Stage 11 §4 paid this
+    note as written: `fit` and `fit_full` are two **named** public entry points over a private
+    `_fit(df, spec, audit)`, both keeping `(df, audit)` with no defaults, so `test_propensity.py`'s
+    signature guard survives verbatim and is merely parametrised. The specification travels as a
+    frozen `Specification` record on the `Propensity` — not as a covariate tuple, because two fits
+    over one cohort record **identical** audit step names and `Audit.entry` is first-match, so a tuple
+    would leave every programmatic read returning the primary's entry while the log looked complete
+    [Stage 11 §4.2, §4.4].
 
 `design`, by contrast, **is** parameterised, because Stage 9's `m_a(X)` and Stage 12's standardisation
 model genuinely need other lists — and neither of those is the [§7] estimand.

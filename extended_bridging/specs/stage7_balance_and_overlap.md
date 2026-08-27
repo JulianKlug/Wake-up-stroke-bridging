@@ -1461,6 +1461,12 @@ What each later stage may rely on, and what each owes:
   covariate set some of which it could not judge is a row that reads better than the evidence. When
   those specifications arrive they call `assess` once each, with the `Propensity` from their own
   named specification, and the `role` column moves without the table changing shape (§4.1).
+  - **Fulfilled, 2026-08-27, exactly as written.** Stage 11 §4.4 reads the specification off
+    `ps.spec` and `assess`'s signature does not change. Measured on the [§13] arm: 19 rows in both
+    tables, identical labels in identical order, roles 14 / 4 / 1 → 18 / 0 / 1, and the four that move
+    are exactly `NEGATIVE_CONTROLS`. The three role literals become module-level `Final` constants in
+    the same edit, because Stage 14 now holds two `Balance` objects and matches on `row.role` by
+    value — `CentreOverlap`'s own argument for `status` (§3), transferred.
 - **Stage 12 [§14a]** — calls **`smd` directly**, with unit weights, for the support check's baseline
   table comparing IVT-treated patients with never-IVT-centre patients. It does **not** call `assess`:
   that function reads a `Propensity`, and [§14] fits no propensity model anywhere. What it inherits
@@ -2171,6 +2177,13 @@ turns out to have been about.
 - **What the [§13] full-covariate specification's balance table will say.** Deferred by decision
   (roadmap Stage 11). §4.1 records only that it has the same 19 rows with four re-roled, so the two
   are readable against each other.
+  - **Answered, 2026-08-27** [Stage 11 §5.3]. The three negative controls that exceeded fall below
+    the threshold — `diabetes` 0.380 → 0.052, `hyperlipidemia` −0.301 → −0.082, `hypertension`
+    −0.139 → +0.026 — and the count of rows reaching `SMD_THRESHOLD` goes from five to two. **Both
+    survivors are `center`, and both are worse**: HUG 0.211 → 0.275, Lugano −0.154 → −0.199. §5.4's
+    reading of [§9] holds from the other side: a wider design is closer to separated, so the Firth
+    deviation grows exactly on the covariate that most nearly determines treatment. The worst |SMD|
+    falls and the balance is not uniformly better, and both must be reported.
 - **Whether `PSweight`'s SMD convention or [§9]'s is the better one.** §16b measures that they
   differ, exactly and recoverably. [§9] prescribes the unweighted pooled SD and gives the reason; a
   package choosing otherwise is a convention difference to record, not a disagreement to resolve.

@@ -650,17 +650,37 @@ deliberately degenerate input; and no code path can return an estimate from a fa
 
 ## Stage 11 — Multiplicity, subgroups, E-value [§6, §13]
 
+**Spec:** `specs/stage11_multiplicity_subgroups_evalue.md`.
+
 **Build.**
 - Benjamini–Hochberg within the secondary and safety families; primary uncorrected; raw and adjusted
-  p both reported [§13].
+  p both reported [§13]. **Seven p-values and not fourteen** — one per binary outcome, on the
+  risk-difference scale — so the family sizes are three and four and come from
+  `Secondary.by_family()`, never from counting Stage 10's twenty-six intervals [Stage 11 §6.1].
 - Subgroup estimates with a treatment × subgroup interaction test, labelled hypothesis-generating
-  [§13].
+  [§13]. **On the primary outcome alone**, which is two interaction tests: one pooled weighted
+  proportional-odds fit per subgroup over the prespecified [§7] weights, `A + S + A×S` and **no [§6]
+  covariate**, so `exp(β)` stays marginal. The interaction p is **not** corrected — [§13] scopes the
+  correction to the outcome families and the primary is uncorrected — and the count of tests is
+  printed instead [Stage 11 §8.2, §8.8].
+  - **The witnessed-onset level rests on 5 treated patients of 41**, and the fit is separated or
+    near-separated in **12.0%** of replicates: a bound on the reported quantities drops them, and the
+    resulting **12.5%** drop rate is the largest this pipeline has produced. It is counted, printed
+    beside the interval, and put to the PI — never absorbed [Stage 11 §8.4].
 - **E-value for the primary estimate** [§6]. The primary effect measure is a common odds ratio, so
   convert with the usual approximation for a common outcome (`RR ≈ √OR`) and state that the
   approximation was used. Report the E-value for the point estimate and for the confidence limit
   nearest the null, with the rule that **the limit's E-value is 1.0 whenever the interval already
   spans the null** — feeding a null-crossing limit into the formula measures how far past the null the
   interval reaches and returns a large number that reads as robustness while meaning the opposite.
+  - Null-spanning is decided on `intervals["beta"]` against 0, and **three routes must agree**:
+    `exp` is strictly increasing with `exp(0.0) == 1.0` exactly; `exp` of a percentile limit *is* the
+    percentile limit of `exp` of the draws, which is true under `PERCENTILE_METHOD` and **false under
+    numpy's default** — so Stage 10 §8.2's pin is what licenses reporting an odds-ratio interval at
+    all; and Stage 10 §9.4's p-versus-interval agreement [Stage 11 §7.2].
+  - **The E-value is never printed alone.** It bounds *unmeasured* confounding and this analysis has
+    measured confounding it has not fixed, so it is reported with the specification's worst residual
+    |SMD| beside it [Stage 11 §7.6].
 
 - **The full-covariate propensity sensitivity analysis** [§13, DECISION 4]. Refit the [§7] propensity
   model over `config.PS_COVARIATES_FULL` — the [§6] set plus the four vascular risk factors — re-derive
@@ -677,12 +697,32 @@ deliberately degenerate input; and no code path can return an estimate from a fa
     the arm's balance table is rendered; `penumbra_ml` is the only balance-table covariate left outside
     every model.
   - **Its own balance table has the same 19 rows with four of them re-roled**, which is what Stage 7
-    §4.1's role column exists for.
+    §4.1's role column exists for. Measured: 19 rows, identical labels in identical order, roles
+    14 / 4 / 1 → 18 / 0 / 1, and the four that move are exactly `NEGATIVE_CONTROLS`.
+  - **The seam is a named `Specification` record and not a covariate tuple**, because two fits over
+    one cohort record identical audit step names and `Audit.entry` is first-match — so a tuple would
+    leave every programmatic read of a `model` entry returning the primary's while the rendered log
+    looked complete [Stage 11 §4.2, §4.4].
+  - **Its bootstrap is `bootstrap.replicates` and not a second `bootstrap.run`**, which is a declared
+    departure from Stage 10 §12.1 and §14 item 3: `run` also drives `outcome.secondary`, so a second
+    `run` would emit nineteen binary-outcome intervals under the [§13] specification that no
+    prespecified section asks for [Stage 11 §5.4].
 
 **Accept when.** The arm's `in_model` population, ESS and worst residual |SMD| are reported beside the
 primary's, and the two estimates appear together with the statement that they differ in the propensity
-specification and in nothing else. **Balance is still judged against the full [§6] confounder set**
-[§9], so the arm's table is comparable with the primary's row for row.
+specification and in nothing else — **a clause computed from the two `in_model` masks and never
+asserted, with both counts printed either way**. Measured on v7 the two masks are identical at 92 and
+the clause is true, because all four vascular risk factors are complete on all 93 cohort rows; it is
+true of *this workbook* and not of the design, which is why it is derived [Stage 11 §5.2].
+**Balance is still judged against the full [§6] confounder set** [§9], so the arm's table is
+comparable with the primary's row for row.
+
+**And the arm is not uniformly better balanced, which the summary statistic alone would say.**
+Measured: the rows reaching [§9]'s threshold fall from five to two and the worst |SMD| from 0.380
+(`diabetes`) to 0.275 (`center = HUG`) — but **both centre rows get worse**, HUG 0.211 → 0.275 and
+Lugano −0.154 → −0.199, which is [§13]'s own mechanism running in the direction [§13] describes: a
+wider design on 92 records is closer to separated, so Firth's penalty does more work exactly where
+the design is most nearly determined. Report both directions [Stage 11 §5.3].
 
 **Still deferred.** The other **five** [§13] sensitivity rows — propensity model without centre;
 unadjusted; largest centre alone; pre-stroke mRS ≤ 2; model-assisted augmented cumulative mRS risk
