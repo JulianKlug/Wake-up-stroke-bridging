@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import hashlib
 import inspect
 import os
 import re
@@ -4560,3 +4561,187 @@ def test_collect_False_is_the_DEFAULT_and_the_point_estimate_log_is_UNCHANGED():
     outcome.secondary(df, ps, a_default)
     outcome.secondary(df, ps, a_collect, collect=True)
     assert a_default.to_markdown() == a_collect.to_markdown()
+
+
+# --- the locked-estimate digests `[data-gated]` ---------------------------------------------------------
+#
+# **THE REGRESSION PIN, IN THE FORM THAT PUTS NO ESTIMATE INTO VERSION CONTROL.**
+#
+# `TODOS.md`'s pin item and Stage 8 §4.3 between them left a real hole: there is no pinned regression
+# number on the primary effect or on the seven binary estimates anywhere in git, so an edit that moves
+# `β` in the fourth decimal without breaking convergence, ordering, orientation or monotonicity passes
+# the whole suite. §14.0.2's and §15.0.2's golden vectors are a partial mitigation only — 5 and 24
+# records against the workbook's 92 — and cannot witness a defect that appears only at the workbook's
+# scale. `TODOS.md`'s own open item to make `POLR_TOL` relative to the weight total is a concrete
+# change of exactly that shape.
+#
+# **The pin is a CONTENT HASH and not a literal, which is `config.DATA_SHA256`'s pattern applied one
+# stage on.** That module pins the workbook by digest and `test_config.py` asserts it; this pins the
+# locked estimates the same way. Four things follow, and the third is why this form was chosen over
+# writing the numbers out:
+#
+#   * It fires on ANY drift at the pinned precision, which is stronger than a hand-copied literal.
+#   * It localises: two digests, so a failure names Stage 8 or Stage 9 rather than "something moved".
+#   * **No estimate enters version control**, so [§15]'s rule — no number on the primary effect pinned
+#     before the analysis is locked — is not spent, it is honoured. The pin therefore did not need the
+#     lock and could have existed since Stage 8; that it did not is because "pin" was read as "write
+#     the number down".
+#   * §14.12a's float-literal scan needs no change, because there is no float literal to scan. Its
+#     scope is §14.12 alone and this section is outside it — asserted below, so that stays true.
+#
+# **The precision is `data._fmt`'s and that is deliberate.** Six significant figures is the precision
+# the audit log publishes and the precision Stage 2's byte-identity criterion is written against, so
+# the pin is tied to the reproducibility contract the project already has rather than to a second one.
+# It is also what keeps the digest immune to a last-ULP change from a numpy patch release inside
+# `pyproject.toml`'s declared range, while still catching a fourth-decimal move in `β`.
+#
+# **When one of these fails.** It does not say what moved. Run the pipeline, and diff
+# `out/logs/audit_<label>.md` against the values `../out/stage0_data_inventory.md` records beside these
+# digests — that register is the baseline, because the log is overwritten on every run. Regenerating a
+# digest is correct ONLY if the change was intended and the register records why; a digest updated to
+# make a test pass is the whole of this section undone.
+
+_LOCKED_PRIMARY_DIGEST: Final[str] = (
+    "c955301b8d45c1f7178de9453782ceee770599cb7d84a08c1609d7cd4ea320b3")
+_LOCKED_SECONDARY_DIGEST: Final[str] = (
+    "a4ce1868b85ebf1e02f951fe84eb295dd19eab7112359033ed74b67b700d2bc4")
+
+# The workbook's primary rendering is 26 lines. A COUNT and not an estimate, in §14.12's own sense —
+# 2 scalars, 6 cutpoints because all seven declared mRS levels are occupied, 6 risk differences and
+# 12 cumulative probabilities. It is pinned because the derived expectation below is a function of
+# `len(est.alpha)`, so a collapse that lost a cutpoint would satisfy the derivation while changing
+# what is being pinned.
+_WORKBOOK_PRIMARY_LINES: Final[int] = 26
+
+
+def _expected_primary_lines(est: outcome.Primary) -> int:
+    """The rendering's shape, DERIVED from the declarations and the fit rather than pinned.
+
+    A renderer bug that emitted nothing would produce a stable digest of the empty string, and whoever
+    regenerated it would pin the hash of nothing — so the shape is asserted before the digest is. It
+    is derived and not a constant because the cutpoint count is a property of the SAMPLE: `polr`
+    collapses the response to the categories carrying positive weight, so a fixture with four occupied
+    levels renders four `alpha` lines and the workbook renders six.
+    """
+    return (2                                              # beta, odds_ratio
+            + len(est.alpha)                               # one per FITTED cutpoint
+            + len(config.MRS_THRESHOLDS)                   # RD_k
+            + len(config.MRS_THRESHOLDS) * len(config.TREATMENT_LABELS))    # cumulative
+
+
+def _expected_secondary_lines() -> int:
+    """Eight lines per [§5] binary outcome: minority, path, two proportions, rd, or, flag, tau."""
+    return len(config.BINARY_OUTCOMES) * (6 + len(config.TREATMENT_LABELS))
+
+
+def _digest(canonical: str) -> str:
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def canonical_primary(est: outcome.Primary) -> str:
+    """The [§8] primary estimate as one deterministic string, every value through `data._fmt`.
+
+    Ranges over `MRS_THRESHOLDS` and `TREATMENT_LABELS` rather than over the dicts' own key order, so
+    the rendering is a function of the declarations and not of insertion order.
+    """
+    lines = [f"beta={data._fmt(est.beta)}", f"odds_ratio={data._fmt(est.odds_ratio)}"]
+    lines += [f"alpha[mrs<={level}]={data._fmt(value)}"
+              for level, value in zip(est.cut_levels, est.alpha)]
+    lines += [f"rd[{k}]={data._fmt(est.rd[k])}" for k in config.MRS_THRESHOLDS]
+    lines += [f"cumulative[{k}][{code}]={data._fmt(est.cumulative[k][code])}"
+              for k in config.MRS_THRESHOLDS for code in config.TREATMENT_LABELS]
+    return "\n".join(lines)
+
+
+def canonical_secondary(sec: outcome.Secondary) -> str:
+    """The seven [§8] binary estimates as one deterministic string. `C.BINARY_OUTCOMES` order."""
+    lines: list[str] = []
+    for key in config.BINARY_OUTCOMES:
+        e = sec.estimates[key]
+        lines.append(f"{key}.minority={e.minority}")
+        lines.append(f"{key}.path={e.augmented_path}")
+        for code in config.TREATMENT_LABELS:
+            lines.append(f"{key}.proportion[{code}]={data._fmt(e.proportion[code])}")
+        lines.append(f"{key}.rd={data._fmt(e.rd)}")
+        lines.append(f"{key}.odds_ratio={data._fmt(e.odds_ratio)}")
+        lines.append(f"{key}.or_corrected={e.or_corrected}")
+        lines.append(f"{key}.augmented="
+                     + ("absent" if e.augmented is None else data._fmt(e.augmented)))
+    return "\n".join(lines)
+
+
+def test_the_canonical_renderings_have_the_PINNED_SHAPE_and_every_line_carries_a_value():
+    """Asserted on the FIXTURE cohorts, so it runs with no `data/` — the shape is a property of the
+    renderer and of the declarations, not of the workbook.
+
+    Two different fixtures, because no single one reaches both stages: `ordinal_cohort()` is five
+    records and `outcome.secondary` raises S8 on it — `tici_2b_3` is constant on its [§11] population
+    there — while `secondary_cohort()` is the frame Stage 9's own sections are driven on. Measured.
+    """
+    _, _, est, _ = estimated()
+    _, _, sec, _ = secondary_run()
+    for canonical, expected in ((canonical_primary(est), _expected_primary_lines(est)),
+                                (canonical_secondary(sec), _expected_secondary_lines())):
+        lines = canonical.split("\n")
+        assert len(lines) == expected
+        assert all("=" in line and line.split("=", 1)[1] for line in lines)
+        assert len(set(lines)) == len(lines)          # no key rendered twice
+
+
+def test_the_DIGEST_IS_SENSITIVE_at_the_precision_it_pins():
+    """The mutation companion, and it runs with no `data/`. A pin nobody has seen discriminate is a
+    pin nobody can price.
+
+    `beta` is perturbed in the SIXTH significant figure — the last `data._fmt` renders — and the
+    digest must move. And it is perturbed in the twelfth, where it must NOT, because that is the
+    numpy-patch-release noise the `_fmt` precision exists to absorb.
+    """
+    df, ps, est, _ = estimated()
+    baseline = _digest(canonical_primary(est))
+    sixth = dataclasses.replace(est, beta=est.beta * (1.0 + 1e-5))
+    twelfth = dataclasses.replace(est, beta=est.beta * (1.0 + 1e-12))
+    assert _digest(canonical_primary(sixth)) != baseline
+    assert _digest(canonical_primary(twelfth)) == baseline
+
+
+def test_the_digest_section_is_OUTSIDE_14_12a_scan_so_that_guard_needs_no_change():
+    """§14.12a scans §14.12 for float literals including inside docstrings, and it exists to keep the
+    primary effect out of git. This section does not touch it, and that is asserted rather than
+    assumed: the scan's boundary is §14.12's banner to the next one, and this section is past it."""
+    scanned = _section_source(THIS_FILE, SECTION_BANNER)
+    assert "_LOCKED_PRIMARY_DIGEST" not in scanned
+    assert _unallowlisted_float_literals(scanned) == []
+    # ...and the property that makes this form of the pin work at all: NO ESTIMATE APPEARS HERE. It is
+    # asserted as an exact set rather than as the absence of magnitudes, because two magnitudes
+    # legitimately belong — the mutation companion's perturbation factors, which are sizes of a nudge
+    # and not values of anything. A pasted `beta` is a third member and fails.
+    section = THIS_FILE[THIS_FILE.index("# --- the locked-estimate digests"):]
+    floats = {node.value for node in ast.walk(ast.parse(textwrap.dedent(section)))
+              if isinstance(node, ast.Constant) and isinstance(node.value, float)}
+    assert floats == {1.0, 1e-5, 1e-12}, f"an unexpected magnitude appears here: {sorted(floats)}"
+
+
+@DATA_GATED
+def test_the_LOCKED_PRIMARY_ESTIMATE_has_not_moved(workbook_primary):
+    """`[data-gated]`. The [§8] primary effect, pinned by digest at `data._fmt`'s precision.
+
+    If this fails, something changed `beta`, `exp(beta)`, a cutpoint, a cumulative risk difference or a
+    weighted cumulative probability. Diff the regenerated audit log against the values the register
+    records beside this digest. **Do not regenerate the digest to make this pass.**
+    """
+    canonical = canonical_primary(workbook_primary)
+    assert len(canonical.split("\n")) == _WORKBOOK_PRIMARY_LINES
+    assert len(canonical.split("\n")) == _expected_primary_lines(workbook_primary)
+    assert _digest(canonical) == _LOCKED_PRIMARY_DIGEST
+
+
+@DATA_GATED
+def test_the_LOCKED_SECONDARY_ESTIMATES_have_not_moved(workbook):
+    """`[data-gated]`. The seven [§8] binary estimates, pinned by digest at the same precision.
+
+    Separate from the primary's so that a failure names the stage. The same instruction applies.
+    """
+    df, ps, audit = workbook
+    canonical = canonical_secondary(outcome.secondary(df, ps, audit))
+    assert len(canonical.split("\n")) == _expected_secondary_lines()
+    assert _digest(canonical) == _LOCKED_SECONDARY_DIGEST

@@ -355,7 +355,45 @@ run, so nothing there is owed either. The separate `TODOS` item above asking for
 
 ---
 
-## Pin the primary AND the secondary estimates once the analysis is locked
+## Pin the primary AND the secondary estimates once the analysis is locked — CLOSED
+
+**Status: closed 2026-08-27, and not by the route this item described.** Both halves are pinned in
+`test_outcome.py`'s locked-estimate section — the primary and the seven binary estimates, one digest
+each so a failure names the stage. Stage 8 §15's first bullet is closed in the same commit.
+
+**The form changed and that is the substance of the closure.** This item said "add the workbook's `β`,
+`exp(β)` and six `RD_k` as literal regression pins", which reads *pin* as *write the number down*. On
+that reading the item needed a PI decision, an [§15] amendment, and the dismantling of §14.12a — the
+meta-assertion built to keep the estimate out of git, which scans §14.12 for float literals including
+inside docstrings. **The pin is a content hash instead**, which is `config.DATA_SHA256`'s own pattern:
+a canonical rendering through `data._fmt` in a declared order, and a SHA-256 of it. It fires on any
+drift at the precision the audit log publishes, it localises, **no estimate enters version control**,
+and §14.12a needs no change because there is no float literal to scan — asserted, so it stays true.
+
+**Which means the pin never needed the lock.** DECISION 9 and [§15]'s amendment stand on their own
+merits — [§16] was citing [§15] for a rule [§15] did not contain — but the regression protection could
+have existed since Stage 8 landed, and did not, because nobody questioned what a pin had to be. Worth
+remembering the next time an item's blocker is a decision rather than a technique.
+
+**What it pins beyond what this item asked for**, because the rendering was free to be wider than a
+list of literals would have been: the fitted cutpoints and the whole weighted cumulative table, which
+no test asserted a value of before, and the seven augmentation paths — so an outcome silently moving
+from `full` to `unaugmented` fails the digest instead of passing every property test.
+
+**The baseline lives in `../out/stage0_data_inventory.md`** beside the log, because a digest failure
+says only that something moved. The register carries the canonical renderings and the instruction not
+to regenerate a digest to make a test pass.
+
+**And this item's own named threat turned out not to be one, which is worth correcting rather than
+leaving.** It offered the open `POLR_TOL` item as the concrete change that would slip past the golden
+vectors. Measured on the workbook: loosening `POLR_TOL` by five orders of magnitude moves `β` by
+3.2e-11 — nothing at any reportable precision. The pin catches changes to *what is fitted* and not to
+*how precisely it is fitted*, and it was demonstrated firing on three of the first: one covariate
+removed from the propensity specification, three times. The register records those, and records that
+one of the three incidentally computed a deferred [§13] analysis.
+
+### The item as filed
+
 
 **Surfaced by:** writing `extended_bridging/specs/stage8_primary_outcome_estimator.md`, 2026-08-21
 (§4.3 and §15 there). **Extended to Stage 9, 2026-08-25** — see the Stage 9 half at the end.
@@ -434,8 +472,8 @@ property assertions stay value-free and nobody can smuggle `exp(β)` into a prop
 Widening §14.12a's allowlist in place was the alternative and trades a structural guarantee for a
 shorter diff.
 
-**Status: ready.** Both halves, one commit, plus Stage 8 §15's first bullet deleted and Stage 8 §20 /
-Stage 9 §21 gaining the pinned values.
+**Status: closed** — see the header. Stage 8 §20 and Stage 9 §21 do NOT gain the values: the digest
+has one home, and a second copy in a spec would be a drift risk for no gain.
 
 ---
 
