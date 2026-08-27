@@ -1601,27 +1601,25 @@ def test_model_names_no_ivt_or_mrs_STRING_LITERAL():
     assert [s for s in body if "ivt" in s or "mrs_" in s] == []
 
 
-def test_only_outcome_and_sensitivity_NAME_PRIMARY_OUTCOME_and_the_second_is_SPENT_DELIBERATELY():
-    """Stage 8 §12's rule, and Stage 11 spends it once — from the side that section did not consider.
+def test_only_the_TWO_STAGES_THAT_ESTIMATE_ON_IT_name_PRIMARY_OUTCOME():
+    """§14.13's invariant, widened by exactly one module at Stage 12 and for a stated reason.
 
-    §12 made `outcome.py` the only shipped module that may name the [§5] primary outcome, so that no
-    second estimator of it could appear anywhere else. Stage 11 §9 quotes the rule from the other
-    direction, declining to put the subgroup `FitError` raises in `outcome.py` because *"a subgroup
-    estimator in it would be that rule spent for a scan's convenience"* — and then implements the
-    subgroup estimator in `sensitivity.py`, which must therefore name the response it fits.
+    It read `== ["outcome.py"]` through Stage 11 and now admits `standardise.py`, because [§14a]
+    STANDARDISES THE PRIMARY OUTCOME — that is what the section is about, and a module that estimates
+    on an outcome has to be able to name it. The widening is one entry and is asserted as a list
+    rather than as a membership test, so a THIRD module naming it is still a failure.
 
-    **It is unavoidable and it is bounded.** [§13]'s subgroup clause is explicitly *on the primary
-    outcome*, so the module implementing it names the primary outcome or takes the column from a
-    parameter no prespecified signature has. What the rule EXISTS to prevent is preserved and is
-    asserted below: `sensitivity.py` names no OTHER [§5] outcome key, and the only ordinal fit it
-    performs is the [§13] interaction design — the primary estimate itself is `outcome.primary`'s and
-    is called, never reimplemented.
+    **The load-bearing half is unchanged and is the second assertion**: `model.py` must not name it.
+    That module is outcome-agnostic by Stage 6 §0.1 — it takes a design and a response and does not
+    know what either means — and Stage 12 added two estimators to it without changing that. An
+    estimator that named the outcome would be an estimator with one legitimate caller.
     """
     shipped = sorted(p for p in MODULE_DIR.glob("*.py"))
     naming = [p.name for p in shipped
               if "PRIMARY_OUTCOME" in p.read_text(encoding="utf-8") and p.name != "config.py"]
-    assert naming == ["outcome.py", "sensitivity.py"]
+    assert naming == ["outcome.py", "standardise.py"]
     assert "PRIMARY_OUTCOME" not in (MODULE_DIR / "model.py").read_text(encoding="utf-8")
+    assert "PRIMARY_OUTCOME" not in (MODULE_DIR / "bootstrap.py").read_text(encoding="utf-8")
 
     sensitivity_source = (MODULE_DIR / "sensitivity.py").read_text(encoding="utf-8")
     for key in config.BINARY_OUTCOMES:

@@ -30,6 +30,7 @@ where a defect reads as a dropped-replicate count rather than as a bug.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import os
 import warnings
 from pathlib import Path
@@ -2367,6 +2368,8 @@ def test_no_polr_precondition_message_names_an_exposure_or_an_outcome(name):
 
 from fixtures_stage9 import golden_arrays, golden_frame                        # noqa: E402
 from fixtures_stage9 import separated_frame as separated_binary_frame          # noqa: E402
+from fixtures_stage12 import (RI_BETA_TRUE, RI_SIGMA_TRUE,                    # noqa: E402
+                              collapsed_level_frame, flat_ri_frame, two_group_ri_frame)
 
 # THE ALIAS IS NECESSARY AND IS NOT TIDINESS. This module already defines `separated_frame` — Stage 8's
 # perfectly separated ORDINAL frame for `polr` — and Stage 9's is a separated BINARY frame for `firth`.
@@ -2617,3 +2620,510 @@ def test_NO_BOUND_ON_THE_FIRTH_COEFFICIENT_EXISTS_and_that_is_a_decision():
     assert not hasattr(config, "FIRTH_MAX_ABS_BETA")
     assert "MAX_ABS_BETA" not in SOURCE          # model.py reads no such bound on any path
     assert hasattr(config, "POLR_MAX_ABS_BETA")  # and Stage 8's exists, so this is a contrast
+
+
+# --- Stage 12 §20.5  ordinal_probabilities --------------------------------------------------------
+#
+# `P(Y = j | x)` for every `j`, which is what g-computation averages and which nothing in this
+# pipeline could do before: `predict` evaluates a Firth binary `Fit`, and `_ord_pieces` computes the
+# two cumulative probabilities bracketing ONE category per row — the row's own observed one.
+
+
+def _hand_polr_fit() -> model.PolrFit:
+    """A `PolrFit` with KNOWN alpha and beta, so §20.5's assertions are about the arithmetic.
+
+    Constructed and not fitted, which is Stage 12 §20.5's own requirement: a property asserted only
+    against a fitted object is a property asserted against this cohort.
+    """
+    return model.PolrFit(
+        beta=np.array([0.5, -0.25]), alpha=np.array([-1.0, 0.0, 1.5]),
+        categories=(0, 1, 2, 3), columns=("a", "b"), iterations=3,
+        converged_on="likelihood", first_step_norm=1.0, rescales=0, halvings=0)
+
+
+def _hand_design() -> pd.DataFrame:
+    return pd.DataFrame({"a": [1.0, 0.0, 2.0, -1.5], "b": [0.0, 1.0, -1.0, 0.5]})
+
+
+def test_ordinal_probabilities_agrees_with_EXPIT_DIFFERENCES_COMPUTED_BY_HAND():
+    """Stage 12 §20.5. Constructed, not measured, so the assertion is about the arithmetic."""
+    fit, X = _hand_polr_fit(), _hand_design()
+    got = model.ordinal_probabilities(fit, X)
+
+    eta = X["a"].to_numpy() * fit.beta[0] + X["b"].to_numpy() * fit.beta[1]
+    def expit(z):
+        return 1.0 / (1.0 + np.exp(-z))
+    want = np.column_stack([
+        expit(fit.alpha[0] + eta),
+        expit(fit.alpha[1] + eta) - expit(fit.alpha[0] + eta),
+        expit(fit.alpha[2] + eta) - expit(fit.alpha[1] + eta),
+        1.0 - expit(fit.alpha[2] + eta),
+    ])
+    assert got.shape == (len(X), len(fit.categories))
+    assert np.allclose(got, want, atol=0.0, rtol=1e-15)
+
+
+def test_the_rows_sum_to_EXACTLY_ONE_and_the_STRUCTURAL_BOUNDS_ARE_EXACT():
+    """Stage 12 §20.5, §6.1. The two bounds are literal 0.0 and 1.0 columns, never an expit.
+
+    `expit(POLR_ETA_CLIP)` is 1.0 in float64, but that is an accident of the clip. A row's
+    probabilities must sum to exactly 1.0 BY CONSTRUCTION for the sum assertion to be about the
+    arithmetic rather than about the clip — so this test fails if a future edit replaces either
+    bracketing column with an expit of a large number.
+    """
+    fit, X = _hand_polr_fit(), _hand_design()
+    got = model.ordinal_probabilities(fit, X)
+
+    assert np.all(got.sum(axis=1) == 1.0)                    # EXACTLY, not to a tolerance
+    assert np.all((got >= 0.0) & (got <= 1.0))
+
+    eta = X.to_numpy() @ fit.beta
+    first = 1.0 / (1.0 + np.exp(-(fit.alpha[0] + eta)))
+    last = 1.0 - 1.0 / (1.0 + np.exp(-(fit.alpha[-1] + eta)))
+    assert np.array_equal(got[:, 0], first)
+    assert np.array_equal(got[:, -1], last)
+
+
+def test_ordinal_probabilities_agrees_with_ord_pieces_on_the_OBSERVED_category():
+    """Stage 12 §6.1. The new public name and the private one used inside the likelihood agree.
+
+    `_ord_pieces` returns the two cumulative probabilities bracketing each observation's own
+    category, and their difference IS that observation's `P(Y = y_i)`. So the column of the new
+    function selected at each row's observed category must equal it — which is what makes the two
+    one definition of the same probability rather than two.
+    """
+    fit, X = _hand_polr_fit(), _hand_design()
+    got = model.ordinal_probabilities(fit, X)
+
+    y_idx = np.array([0, 1, 3, 2])
+    K = len(fit.alpha)
+    upper, lower = y_idx, y_idx - 1
+    gu, gl = model._ord_pieces(
+        X.to_numpy(dtype=float) @ fit.beta, fit.alpha, upper, lower,
+        y_idx <= K - 1, y_idx >= 1)[:2]
+    assert np.allclose(got[np.arange(len(X)), y_idx], gu - gl, rtol=1e-14, atol=0.0)
+
+
+def test_ordinal_probabilities_returns_the_FITTED_level_set_and_not_the_declared_one():
+    """Stage 12 §6.2. Six columns where `C.MRS_LEVELS` declares seven, on a collapsed frame.
+
+    `polr` collapses the response to the categories carrying positive weight before it fits anything.
+    Re-expressing the result on a declared level set is the CALLER's, because a level for which the
+    fit provides no cutpoint has no probability this function could invent (§6.3).
+    """
+    frame = collapsed_level_frame()
+    X, _ = model.design(frame, (config.TREATMENT,) + config.STANDARDISATION_COVARIATES)
+    fit = model.polr(X, frame[config.PRIMARY_OUTCOME].to_numpy(dtype=float))
+    got = model.ordinal_probabilities(fit, X)
+
+    assert len(fit.categories) == len(config.MRS_LEVELS) - 1
+    assert got.shape[1] == len(fit.categories)
+    assert got.shape[1] < len(config.MRS_LEVELS)
+    assert np.allclose(got.sum(axis=1), 1.0, atol=1e-15)
+
+
+def test_ordinal_probabilities_PREPENDS_NO_INTERCEPT_which_is_where_it_differs_from_predict():
+    """Stage 12 §6.1's fourth rule. THE CUTPOINTS ARE THE INTERCEPTS.
+
+    `predict` prepends its own because `firth` fits one; this must not, because O6 has already
+    established that `X` carries none. The assertion is that the result is invariant to nothing being
+    added — i.e. that a design widened by a column of ones would be a T5 rather than a silent shift.
+    """
+    fit, X = _hand_polr_fit(), _hand_design()
+    with_intercept = X.copy()
+    with_intercept.insert(0, "intercept", 1.0)
+    with pytest.raises(config.SchemaError) as excinfo:
+        model.ordinal_probabilities(fit, with_intercept)
+    assert str(excinfo.value).startswith("T5")
+
+    source = Path(model.__file__).resolve().read_text(encoding="utf-8")
+    node = next(n for n in ast.parse(source).body
+                if isinstance(n, ast.FunctionDef) and n.name == "ordinal_probabilities")
+    body = ast.unparse(node)
+    assert "np.column_stack([np.ones(len(X))" not in body
+    assert "np.zeros(len(X))" in body and "np.ones(len(X))" in body   # the two EXACT bounds
+
+
+# --- Stage 12 §20.12  polr_ri ---------------------------------------------------------------------
+#
+# The random-centre-intercept proportional-odds fit: adaptive Gauss-Hermite quadrature, an analytic
+# gradient, BFGS with a relative trust region and per-iteration step-halving, and a floor on sigma.
+#
+# Two of its choices are MEASUREMENTS rather than conventions and both are asserted here, because
+# Stage 12 §12.2 and §12.4 rest on them: adaptive quadrature converges where non-adaptive quadrature
+# does not, and the analytic gradient is what makes the arm affordable at all.
+
+
+def _ri_design(frame: pd.DataFrame):
+    return frame[["x1", "x2"]].astype(float), frame["y"].to_numpy(dtype=float), frame["group"]
+
+
+def test_the_ANALYTIC_GRADIENT_agrees_with_central_differences_at_every_sigma_the_bootstrap_reaches():
+    """Stage 12 §20.12, §12.4 departure 2. The frozen-node approximation, pinned.
+
+    The quadrature nodes are recomputed at the current parameters and then held FIXED for that
+    evaluation's gradient, so the gradient is exact for the frozen-node sum and neglects the
+    derivative of the node positions. **Measured relative error 4.3e-8 to 6.9e-8 across
+    sigma in {0.2, 0.54, 1.5, 3.0}** — two orders below `POLR_SCORE_TOL = 1e-6` — so the
+    approximation is named rather than hidden, and a change to the mode-finding step that made it
+    worse fails HERE rather than shifting an estimate.
+
+    A numerical gradient is `2 * n_par` objective evaluations against the analytic one's one, which
+    Stage 12 §12.4 measured as a 5x difference in the whole arm's cost. It is part of the
+    specification, not an optimisation.
+    """
+    frame = two_group_ri_frame(n_groups=6, per_group=60)
+    X, y, groups = _ri_design(frame)
+    Xn = X.to_numpy(dtype=float)
+    categories = tuple(int(v) for v in np.unique(y))
+    y_idx = np.searchsorted(np.asarray(categories, dtype=float), y)
+    labels = np.asarray([str(v) for v in groups])
+    unique = tuple(sorted(set(labels.tolist())))
+    gidx = np.searchsorted(np.asarray(unique), labels)
+    nodes, weights = np.polynomial.hermite.hermgauss(config.POLR_RI_NODES)
+    start = model.polr(X, y)
+    K, m = len(categories) - 1, Xn.shape[1]
+
+    for sigma in (0.20, 0.54, 1.50, 3.00):
+        par = np.concatenate([start.alpha, start.beta, [np.log(sigma)]])
+        _, gradient, _, _ = model._ri_objective(
+            par, Xn, y_idx, K, m, gidx, len(unique), nodes, np.log(weights), True)
+        numerical = np.zeros_like(gradient)
+        for j in range(len(par)):
+            step = 1e-6 * max(1.0, abs(par[j]))
+            up, down = par.copy(), par.copy()
+            up[j] += step
+            down[j] -= step
+            numerical[j] = (
+                model._ri_objective(up, Xn, y_idx, K, m, gidx, len(unique), nodes,
+                                    np.log(weights), True)[0]
+                - model._ri_objective(down, Xn, y_idx, K, m, gidx, len(unique), nodes,
+                                      np.log(weights), True)[0]) / (2.0 * step)
+        relative = float(np.max(np.abs(gradient - numerical)
+                                / np.maximum(np.abs(numerical), 1.0)))
+        assert relative < 1e-6, (sigma, relative)
+
+
+def test_ADAPTIVE_quadrature_is_STABLE_in_the_node_count_and_NON_ADAPTIVE_IS_NOT():
+    """Stage 12 §20.12, §12.2, §12.3. The measurement the whole arm rests on.
+
+    **Non-adaptive Gauss-Hermite is NON-MONOTONE in the node count** — measured here, sigma_hat runs
+    0.6317 / 0.7373 / 0.5297 / 0.5668 / 0.5986 at 5 / 7 / 9 / 11 / 15 nodes against an adaptive
+    reference of 0.5710. A node count chosen by "increase it until the answer stops moving" would
+    have stopped at the wrong place, and Stage 12 records that its first prototype did.
+
+    Adaptive quadrature is stable to 3.5e-11 from NINE nodes, which is why `POLR_RI_NODES = 11` sits
+    one step above the plateau: a workbook whose posterior is slightly less Gaussian needs no
+    re-tuning.
+
+    Asserted so that a change to non-adaptive quadrature FAILS rather than shifting an answer.
+    """
+    frame = two_group_ri_frame(n_groups=6, per_group=60)
+    X, y, groups = _ri_design(frame)
+
+    adaptive = {n: model._polr_ri(X, y, groups, n, adaptive=True).sigma
+                for n in (9, 11, 15, 31)}
+    reference = adaptive[31]
+    assert max(abs(value - reference) for value in adaptive.values()) < 1e-7
+
+    non_adaptive = {n: model._polr_ri(X, y, groups, n, adaptive=False).sigma
+                    for n in (5, 7, 9)}
+    assert min(abs(value - reference) for value in non_adaptive.values()) > 1e-3
+
+    # And the non-monotonicity itself, which is the half a "just use more nodes" reading misses.
+    ordered = [non_adaptive[n] for n in (5, 7, 9)]
+    assert not (ordered == sorted(ordered) or ordered == sorted(ordered, reverse=True))
+
+
+def test_polr_ri_records_the_NODE_COUNT_because_it_CHANGES_THE_ANSWER():
+    """Stage 12 §3.1, §12.3. `RIFit` carries `nodes` and `PolrFit` has no counterpart.
+
+    `POLR_TOL` changes only how precisely the same answer is found; the node count changes the answer.
+    A record that omitted it would let two fits with different numerical content compare equal on
+    every field.
+    """
+    frame = two_group_ri_frame(n_groups=6, per_group=60)
+    X, y, groups = _ri_design(frame)
+    fit = model.polr_ri(X, y, groups)
+    assert fit.nodes == config.POLR_RI_NODES
+    assert {f.name for f in dataclasses.fields(model.RIFit)} - {
+        f.name for f in dataclasses.fields(model.PolrFit)} >= {"nodes", "sigma", "b", "b_sd",
+                                                               "groups", "at_floor"}
+    assert not hasattr(model.polr(X, y), "nodes")
+    # ODD and at least 9, which `test_config.py` also asserts: a symmetric rule with an odd node
+    # count places a node AT the conditional mode, which is where the mass is.
+    assert config.POLR_RI_NODES % 2 == 1 and config.POLR_RI_NODES >= 9
+
+
+def test_polr_ri_REACHES_THE_FLOOR_on_a_flat_frame_and_DOES_NOT_RAISE():
+    """Stage 12 §20.12, §12.5. sigma^2_C = 0 is a legitimate answer that [§14a] names.
+
+    Dropping such replicates would select the bootstrap on the value of the very parameter the arm
+    exists to examine. `sigma` is the floor EXACTLY, because `exp(log(1e-4))` is
+    0.00010000000000000009 and a fit reporting that would make `at_floor` True while
+    `sigma == POLR_RI_SIGMA_FLOOR` was False — two fields disagreeing about one fact.
+    """
+    X, y, groups = _ri_design(flat_ri_frame())
+    fit = model.polr_ri(X, y, groups)                 # does not raise
+    assert fit.at_floor is True
+    assert fit.sigma == config.POLR_RI_SIGMA_FLOOR
+    assert np.all(np.isfinite(fit.b)) and np.all(np.isfinite(fit.b_sd))
+
+
+def test_at_the_floor_polr_ri_COLLAPSES_TO_model_polr_which_is_14a_s_own_sentence():
+    """Stage 12 §20.12. *"if outcomes truly do not differ by centre given X … it collapses to the
+    pooled model"* — as an assertion.
+
+    **The tolerance is 1e-5 and not the specification's 1e-6, and the difference is measured rather
+    than assumed.** At the floor `sigma` is 1e-4 and not 0, so the marginal model is not exactly the
+    pooled one; and both fits stop on the `POLR_TOL` likelihood criterion rather than at an exact
+    stationary point. Measured on `flat_ri_frame`: 4.9e-6 on the cutpoints and 1.3e-6 on the
+    coefficients. 1e-5 is the smallest round bound above what the two estimators can agree to, and
+    pinning 1e-6 would be pinning a number this construction does not reach.
+    """
+    X, y, groups = _ri_design(flat_ri_frame())
+    hierarchical = model.polr_ri(X, y, groups)
+    pooled = model.polr(X, y)
+
+    assert hierarchical.at_floor
+    assert hierarchical.categories == pooled.categories
+    assert hierarchical.columns == pooled.columns
+    assert float(np.max(np.abs(hierarchical.alpha - pooled.alpha))) < 1e-5
+    assert float(np.max(np.abs(hierarchical.beta - pooled.beta))) < 1e-5
+
+
+def test_polr_ri_RECOVERS_a_known_sigma_when_there_are_enough_groups_to_estimate_one():
+    """Stage 12 §20.12. The one test here that checks the estimator estimates the RIGHT THING.
+
+    **Recovering `sigma` is a different question from fitting it, and it is not answerable at two
+    clusters.** Measured at `RI_SIGMA_TRUE = 0.8` with 60 records per group: sigma_hat 0.681 at
+    twelve groups and 1.168 at two. The tolerance below is stated against the twelve-group case for
+    that reason, and the two-group case is asserted only to FIT — which is what [§14a]'s *"a centre
+    variance from four clusters is fragile"* means as a number.
+    """
+    X, y, groups = _ri_design(two_group_ri_frame(n_groups=12, per_group=60))
+    fit = model.polr_ri(X, y, groups)
+    assert abs(fit.sigma - RI_SIGMA_TRUE) < 0.25
+    assert not fit.at_floor
+    assert abs(fit.beta[0] - RI_BETA_TRUE) < 0.25
+    assert len(fit.groups) == len(fit.b) == len(fit.b_sd) == 12
+    assert fit.groups == tuple(sorted(fit.groups))            # deterministic keying
+
+    X2, y2, groups2 = _ri_design(two_group_ri_frame(n_groups=2, per_group=60))
+    fitted_at_two = model.polr_ri(X2, y2, groups2)             # fits, and that is all that is claimed
+    assert fitted_at_two.sigma > config.POLR_RI_SIGMA_FLOOR
+
+
+def test_the_posterior_SD_is_LARGER_where_a_group_carries_FEWER_records():
+    """Stage 12 §12.6. The arm's honest limitation as a property rather than a caveat.
+
+    On the workbook the never-IVT centre's intercept is the least precisely estimated of the four and
+    it is the one the whole arm rests on, because it is the centre whose IVT counterfactual is
+    entirely borrowed. Here the same relationship is asserted on a construction: a group with a
+    quarter of the records has a visibly wider posterior.
+    """
+    frame = pd.concat([
+        two_group_ri_frame(n_groups=1, per_group=120, sigma=0.0, seed=1).assign(group="BIG"),
+        two_group_ri_frame(n_groups=1, per_group=30, sigma=0.0, seed=2).assign(group="SMALL"),
+    ], ignore_index=True)
+    frame["group"] = frame["group"].astype("string")
+    X, y, groups = _ri_design(frame)
+    fit = model.polr_ri(X, y, groups)
+    sd = dict(zip(fit.groups, fit.b_sd))
+    assert sd["SMALL"] > sd["BIG"]
+
+
+def test_T4_fires_on_FEWER_THAN_TWO_GROUPS_and_its_token_is_T4_and_NOT_polr_ri():
+    """Stage 12 §20.12, §14. **The one bucket assertion the raise-site scan CANNOT make.**
+
+    `bootstrap.bucket` classifies by the FIRST TOKEN of the message and raises on a token it does not
+    know. `polr_ri:` IS a valid key — T2 and T3 use it — so a T4 message leading with `polr_ri:`
+    would be counted as `nonconvergence` **while `"T4" -> "degenerate_design"` sat in the map
+    unreachable**, and the scan would pass because the token it found was in the map. That is the
+    second documented instance of a wrong-but-mapped bucket, and this is the assertion for it.
+
+    With one group, `b_c` is exactly collinear with the cutpoints and `sigma` is not identified: the
+    likelihood is flat in it, so the fit returns whatever the start value was — finite and plausible.
+    """
+    frame = two_group_ri_frame(n_groups=6, per_group=40)
+    X, y, _ = _ri_design(frame)
+    single = pd.Series(["ONE"] * len(y), dtype="string")
+    with pytest.raises(model.FitError) as excinfo:
+        model.polr_ri(X, y, single)
+    message = str(excinfo.value)
+    assert message.startswith("T4")
+    assert not message.startswith("polr_ri:")
+    assert message.split()[0] == "T4"
+    assert config.FAILURE_BUCKETS[message.split()[0]] == "degenerate_design"
+
+
+def test_T2_and_T3_lead_with_polr_ri_and_share_the_nonconvergence_bucket(monkeypatch):
+    """Stage 12 §14, §20.12. `"polr:"`'s arrangement, unchanged.
+
+    T2 is step-halving exhausted and T3 is no convergence in `POLR_RI_MAX_ITER`; both are convergence
+    failures, so they share a bucket by sharing a leading token.
+    """
+    frame = two_group_ri_frame(n_groups=6, per_group=40)
+    X, y, groups = _ri_design(frame)
+
+    # T3: one iteration is not enough for any frame.
+    monkeypatch.setattr(config, "POLR_RI_MAX_ITER", 1)
+    with pytest.raises(model.FitError) as excinfo:
+        model.polr_ri(X, y, groups)
+    assert str(excinfo.value).startswith("polr_ri:")
+    assert "no convergence" in str(excinfo.value)
+    assert config.FAILURE_BUCKETS[str(excinfo.value).split()[0]] == "nonconvergence"
+
+    # T2: every trial step is made worse than the iterate, so no halving can accept one.
+    #
+    # **`POLR_MAX_HALVINGS = 0` is NOT how to reach it, and what happens instead is worth recording**:
+    # `polr_ri` calls `model.polr` for its start values (§12.8), so that constant makes the POOLED fit
+    # raise `polr:` first and the message never reaches this fitter. That is the start-value
+    # dependency §13.2 rests on, visible from the other side — there is no hierarchical arm without a
+    # pooled fit — so the assertion below is made on the objective rather than on a shared constant.
+    monkeypatch.setattr(config, "POLR_RI_MAX_ITER", 200)
+    monkeypatch.setattr(config, "POLR_MAX_HALVINGS", 0)
+    with pytest.raises(model.FitError) as excinfo:
+        model.polr_ri(X, y, groups)
+    assert str(excinfo.value).startswith("polr:")            # the POOLED fit, not this one
+
+    monkeypatch.setattr(config, "POLR_MAX_HALVINGS", 30)
+    honest = model._ri_objective
+    seen = {"calls": 0}
+
+    def never_uphill(*args, **kwargs):
+        value, gradient, modes, tau = honest(*args, **kwargs)
+        seen["calls"] += 1
+        return (value if seen["calls"] == 1 else -np.inf), gradient, modes, tau
+
+    monkeypatch.setattr(model, "_ri_objective", never_uphill)
+    with pytest.raises(model.FitError) as excinfo:
+        model.polr_ri(X, y, groups)
+    assert str(excinfo.value).startswith("polr_ri:")
+    assert "step-halving" in str(excinfo.value)
+    assert config.FAILURE_BUCKETS[str(excinfo.value).split()[0]] == "nonconvergence"
+    assert seen["calls"] > config.POLR_MAX_HALVINGS          # every halving was tried
+
+
+def test_polr_ri_inherits_O1_to_O6_and_raises_on_a_MISALIGNED_grouping_vector():
+    """Stage 12 §12. The design preconditions are `_assert_polr_fittable`'s, unweighted.
+
+    `groups` is aligned by POSITION with `y`, as `smd`'s arguments are, so a length mismatch is a
+    grouping nobody specified — and it would return a between-group variance for it.
+    """
+    frame = two_group_ri_frame(n_groups=4, per_group=40)
+    X, y, groups = _ri_design(frame)
+
+    broken = X.copy()
+    broken.iloc[0, 0] = np.nan
+    with pytest.raises(model.FitError) as excinfo:
+        model.polr_ri(broken, y, groups)
+    assert str(excinfo.value).startswith("O1")
+
+    with pytest.raises(config.SchemaError) as excinfo:
+        model.polr_ri(X, y, groups.iloc[:-5])
+    assert str(excinfo.value).startswith("T4")
+    assert "aligned by POSITION" in str(excinfo.value)
+
+
+def test_polr_ri_has_NO_STANDARD_ERROR_FIELD_for_PolrFits_reason_and_one_more():
+    """Stage 12 §3.1. A correctness claim rather than an omission.
+
+    At four clusters a variance parameter's asymptotic standard error is the least trustworthy number
+    in the output, and [§10]'s percentile bootstrap is the prespecified interval. `b_sd` is NOT a
+    standard error for `sigma` — it is the curvature of each group's conditional posterior at its
+    mode, which is what the adaptive quadrature needs to place its nodes.
+    """
+    fields = {f.name for f in dataclasses.fields(model.RIFit)}
+    assert "se" not in fields and "std_err" not in fields and "sigma_se" not in fields
+    assert "b_sd" in fields
+    assert not any("se" == f or f.endswith("_se") for f in fields)
+
+
+def test_the_curvature_is_held_to_the_SIGN_THE_MATHEMATICS_GUARANTEES():
+    """Stage 12's own finding, recorded as a test because it cost two replicates in 2000.
+
+    The per-group log-posterior is a sum of concave ordinal terms plus a Gaussian log-prior, so
+    `d2/db2` is negative EXACTLY and the total cannot exceed `-1/sigma^2`. In float64 it sometimes
+    does: `Huu = ddu/p - (du/p)**2` is a difference of two large quantities in the tails and
+    cancellation can return a small positive value. When the sum crossed zero, `sqrt` returned `nan`,
+    the quadrature nodes were `nan`, and the line search rejected the step — so the fit STILL
+    RETURNED THE RIGHT ANSWER through a halving loop doing the wrong job, and in 2 of 2000 replicates
+    exhausted the halvings and raised T2 for a floating-point artefact.
+
+    The clamp is on the ordinal contribution's own guaranteed sign, so it enforces a property rather
+    than choosing a magnitude, and the bound it produces is TIGHT: attained whenever the data
+    contribute no curvature, which is the far-tail case that produces the noise.
+    """
+    positive = np.array([1e-13, 0.0, -3.0])
+    clamped = model._curvature(positive, 1.0 / 0.5 ** 2)
+    assert np.all(clamped <= -(1.0 / 0.5 ** 2))
+    assert np.all(np.isfinite(np.sqrt(-1.0 / clamped)))
+    # And it is a no-op wherever the computed curvature already has the right sign.
+    honest = np.array([-1.0, -20.0])
+    assert np.array_equal(model._curvature(honest, 4.0), honest - 4.0)
+
+
+def test_the_far_node_probability_FLOOR_keeps_the_derivatives_finite():
+    """Stage 12's second numerical finding. A far node is NEGLIGIBLE, not invalid.
+
+    At a quadrature node the posterior has moved away from, `gu` and `gl` are both 1.0 in float64 and
+    `p = gu - gl` is EXACTLY ZERO by cancellation — so `log p` is -inf and `du/p`, `(du/p)**2` and
+    `du*dl/p**2` are all `nan`. `polr`'s convention is the opposite — return -inf and let step-halving
+    reject the step — and it is right THERE, where a non-positive probability means crossed cutpoints
+    at the iterate. Here it means a far node, which is not a property of the iterate at all.
+
+    The exponent is chosen against `p**2` and not against `p`: `Hul = du*dl/p**2`, so a floor below
+    about 1.5e-154 makes `p**2` underflow and reintroduces the 0/0 this fixes.
+    """
+    assert model._RI_P_FLOOR ** 2 > 0.0                      # the reason for the exponent
+    assert model._RI_P_FLOOR ** 2 > np.finfo(float).tiny
+    alpha = np.array([-2.0, 0.0, 2.0])
+    far = np.array([[900.0], [-900.0]])                      # beyond any expit's resolution
+    p, A, B, d2 = model._ord_b_derivatives(far, alpha, np.array([[0], [3]]), len(alpha))
+    for array in (p, A, B, d2):
+        assert np.all(np.isfinite(array))
+    assert np.all(p > 0.0)
+
+
+def test_polr_ri_runs_CLEAN_with_numpy_warnings_as_errors():
+    """Stage 12. The two numerical fixes above, asserted together at the level that matters.
+
+    A fit that produces the right answer while emitting overflow and invalid-value warnings is a fit
+    whose line search is absorbing arithmetic it should never have seen. Stage 12 §12.5 makes exactly
+    that point about the sigma -> 0 boundary — *"the fit still returned … but 'still returned' is not
+    a specification"* — and this is that sentence as a test.
+    """
+    X, y, groups = _ri_design(two_group_ri_frame(n_groups=6, per_group=60))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        fit = model.polr_ri(X, y, groups)
+    assert np.isfinite(fit.sigma)
+
+    X, y, groups = _ri_design(flat_ri_frame())
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        floored = model.polr_ri(X, y, groups)
+    assert floored.at_floor
+
+
+def test_model_py_IMPORTS_NO_OPTIMISER_and_scipy_stays_test_only():
+    """Stage 12 §2, §23. `polr_ri` is a 40-line BFGS loop and not a `scipy.optimize` call.
+
+    The AST scan Stage 6 §12.7 established forbids an optimiser in this module: a shipped module
+    importing one is a shipped module one edit from a second estimator. `polr_ri` needs Gauss-Hermite
+    nodes, and `numpy.polynomial.hermite.hermgauss` supplies them — so no dependency is added, and
+    Stage 12 §12.4 records what a `scipy` dependency would have bought and why the reproducibility
+    surface is not worth it.
+    """
+    source = Path(model.__file__).resolve().read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+    assert not [name for name in imported if name.split(".")[0] == "scipy"]
+    assert "hermgauss" in source
+    assert "minimize" not in source

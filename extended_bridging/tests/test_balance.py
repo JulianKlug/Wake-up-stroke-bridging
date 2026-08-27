@@ -528,7 +528,7 @@ def test_a_fifth_risk_factor_becomes_a_negative_control_by_being_declared():
 def test_every_declared_level_of_every_factor_has_a_row(factor):
     # Parametrised over CATEGORICAL, so a third factor is covered by this test as it stands.
     df, ps, _ = fitted()
-    labels = [label for label, _ in balance._levels(df.loc[ps.in_model], factor)]
+    labels = [label for label, _ in balance.levels(df.loc[ps.in_model], factor)]
     assert labels == [f"{factor} = {level}" for level in config.FACTOR_LEVELS[factor]]
 
 
@@ -618,7 +618,7 @@ def test_the_form_the_pilots_actually_use_is_ELEVEN_rows_missing_eight_of_ninete
 
 def test_the_levels_missingness_mask_is_UNREACHABLE_from_assess():
     """§21.3's finding: every `CATEGORICAL` name is a PS covariate, so a record with an absent factor
-    value is complete-cased out of `in_model` before `_levels` ever sees it.
+    value is complete-cased out of `in_model` before `levels` ever sees it.
 
     The mask stays — it is correct, and Stage 12 will need it over a population `complete_cases` did
     not build — and what is asserted is the property that makes it unreachable, which fails if a
@@ -626,10 +626,10 @@ def test_the_levels_missingness_mask_is_UNREACHABLE_from_assess():
     """
     assert [c for c in config.CATEGORICAL if c not in config.PS_COVARIATES] == []
 
-    # and the mask itself does what it claims, asserted directly on `_levels` rather than through a
+    # and the mask itself does what it claims, asserted directly on `levels` rather than through a
     # frame no pipeline can produce
     frame = pd.DataFrame({"center": pd.Series(["HUG", None], dtype="string")})
-    values = dict(balance._levels(frame, "center"))["center = HUG"]
+    values = dict(balance.levels(frame, "center"))["center = HUG"]
     assert values.tolist()[0] == 1.0 and np.isnan(values.tolist()[1])
 
 

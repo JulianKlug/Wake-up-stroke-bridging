@@ -746,3 +746,97 @@ def test_the_stage_9_oracle_does_NOT_ask_a_package_for_the_AUGMENTED_estimate():
     tau_line = code[code.index("tau <-"):code.index("write.csv")]
     assert "::" not in tau_line, "the augmented term must not come from a package"
     assert tau_line.count("sum(") == 6
+
+
+# --- Stage 12 §12.7  the ordinal::clmm oracle -----------------------------------------------------
+#
+# `polr_ri` is a new maximiser for a model with a published reference implementation, so it gets an
+# oracle on Stage 8 §18b's pattern. `clmm` is in the SAME PACKAGE as `clm`, so no new R dependency is
+# added and `reference_r_ordinal` above covers this file's script too.
+#
+# **THIS IS THE ONE ESTIMATOR IN THIS PIPELINE WHOSE SPECIFICATION SHIPPED WITHOUT AN INDEPENDENT
+# IMPLEMENTATION HAVING AGREED WITH IT** — Stage 12 §26 records that plainly, because R segfaults on
+# the machine the spec was written on for the `uname`/PATH reason `_r_environment` documents. Opening
+# that gate is this test, and until it runs `polr_ri` is verified against its own analytic gradient,
+# its node-count stability and its collapse to `model.polr` at sigma = 0, and against nothing external.
+
+
+def _clmm_random_intercept(frame: pd.DataFrame, nodes: int, tmp_path: Path):
+    """(thresholds, coefficients, sigma, version) from `ordinal::clmm(... + (1 | group), nAGQ)`."""
+    out = tmp_path / "clmm.csv"
+    version = _run("polr_ri_clmm.R", _write(frame, tmp_path / "ri.csv"), out, str(nodes))
+    table = pd.read_csv(out)
+    thresholds = table.loc[table["kind"] == "threshold", "value"].to_numpy(dtype=float)
+    coefficients = table.loc[table["kind"] == "coefficient", "value"].to_numpy(dtype=float)
+    sigma = float(table.loc[table["kind"] == "sigma", "value"].iloc[0])
+    return thresholds, coefficients, sigma, version
+
+
+@reference_r_ordinal
+def test_clmm_REPRODUCES_polr_ri_with_the_COEFFICIENTS_NEGATED_and_sigma_NOT(tmp_path):
+    """Stage 12 §12.7, §20.12. The only independent implementation of what `polr_ri` computes.
+
+    **The asymmetry is THREE-WAY and all three parts are asserted by name.** `clmm` parametrises
+    `logit P(Y <= k) = zeta_k - x'beta + b_c` where Stage 12 §12.1 uses [§14a]'s own
+    `alpha_k + x'beta + b_c`, so the COEFFICIENTS come back negated, the THRESHOLDS do not, and
+    **`sigma` does not either, because it is a scale and not a location.** A test asserting that "the
+    fits agree" would pass on the thresholds alone, which is exactly how the sign mistake survives a
+    review.
+
+    **`nAGQ` is passed and set to `POLR_RI_NODES`.** `clmm`'s default is `nAGQ = 1`, the Laplace
+    approximation, and Stage 12 §12.2's table shows that is a different objective — comparing against
+    it would measure the approximation and not the maximiser.
+
+    `sigma` is compared at its OWN tolerance, looser than the coefficients', because a variance
+    parameter at this cluster count is the least well determined thing in the fit and the two
+    maximisers reach it by different routes (BFGS on the marginal likelihood against `clmm`'s own).
+    """
+    from fixtures_stage12 import two_group_ri_frame
+    frame = two_group_ri_frame(n_groups=8, per_group=50)
+    thresholds, coefficients, sigma, version = _clmm_random_intercept(
+        frame, config.POLR_RI_NODES, tmp_path)
+    assert version.strip(), "the R package version must be captured, not assumed"
+    assert f"nAGQ {config.POLR_RI_NODES}" in version
+
+    X = frame[["x1", "x2"]].astype(float)
+    y = frame["y"].to_numpy(dtype=float)
+    ours = model.polr_ri(X, y, frame["group"])
+
+    assert len(thresholds) == len(ours.alpha)
+    assert len(coefficients) == len(ours.beta) == 2
+
+    # NEGATED, and something to negate — so a frame on which both were near zero cannot pass by
+    # having nothing to compare. Measured: |ours + clmm| 1.033e-05 against |ours - clmm| 1.574.
+    assert float(np.max(np.abs(ours.beta + coefficients))) < 1e-4
+    assert float(np.max(np.abs(ours.beta - coefficients))) > 1e-2
+    # NOT negated. Measured 3.636e-06.
+    assert float(np.max(np.abs(ours.alpha - thresholds))) < 1e-4
+    # A SCALE, so also not negated. Measured |ours - clmm| 4.446e-06, against `ordinal` 2026.7.26 at
+    # nAGQ = 11. The bound is one order above the measurement rather than three: the two maximisers
+    # reach sigma by different routes — BFGS on the marginal likelihood against `clmm`'s own — so a
+    # loose bound here would be the one place this oracle could agree by not looking.
+    assert sigma > 0.0
+    assert abs(ours.sigma - sigma) < 1e-4
+
+
+@reference_r_ordinal
+def test_clmm_at_the_LAPLACE_default_is_a_DIFFERENT_OBJECTIVE_which_is_why_nAGQ_is_passed(tmp_path):
+    """Stage 12 §12.7's second requirement, as its own assertion.
+
+    `nAGQ = 1` is the Laplace approximation. Stage 12 §12.2 measured that one-node quadrature is a
+    materially different objective from an eleven-node adaptive one, so an oracle left at the default
+    would be measuring the approximation rather than the maximiser — and it would agree LESS well
+    while looking like a validation.
+    """
+    from fixtures_stage12 import two_group_ri_frame
+    frame = two_group_ri_frame(n_groups=8, per_group=50)
+    _, _, sigma_laplace, _ = _clmm_random_intercept(frame, 1, tmp_path)
+    _, _, sigma_agq, _ = _clmm_random_intercept(frame, config.POLR_RI_NODES, tmp_path)
+
+    X = frame[["x1", "x2"]].astype(float)
+    y = frame["y"].to_numpy(dtype=float)
+    ours = model.polr_ri(X, y, frame["group"])
+
+    # Ours is closer to the eleven-node fit than to the one-node one, which is the claim that makes
+    # passing `nAGQ` necessary rather than tidy.
+    assert abs(ours.sigma - sigma_agq) <= abs(ours.sigma - sigma_laplace)

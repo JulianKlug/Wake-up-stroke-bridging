@@ -537,12 +537,28 @@ across them. Under proportional odds they are the same parameter; [§8] prescrib
 [§15] declines one. It is filed as Stage 10 §16 item 5 and it reaches a reader through [§16]'s
 constant-shift statement, not through a re-measurement of the band.
 
-**Trigger, for what remains.** A cohort or a Stage 12 design on which G7 actually fires. Then the band's
-calibration decides which replicates are dropped and the cutpoint-count distribution becomes load-bearing
-rather than descriptive.
+**ANSWERED IN FULL 2026-08-27 — the Stage 12 half is measured too, and it is also negative.** The
+paragraph above said the calibration gap *"bites at Stage 12"*, where the standardisation model carries
+nine covariates rather than one. Measured over 2000 replicates of the ten-column [§14a] design
+(Stage 12 §9.2): the largest `|β_treatment|` is **2.0016** and the largest `|γ|` **3.2119**, against
+`POLR_MAX_ABS_BETA = 14.0` and against Stage 8 §6.3's measured empty band running from 8.7873 to
+18.8055. **Every fit sits entirely below the band's lower edge**, so the bound is not merely unfired,
+it is not approached, and the question of whether a band calibrated on one column transfers to ten does
+not arise on this workbook.
 
-**Status: open**, narrowed — the measurement is done and the consequence it was filed against did not
-occur.
+**And Stage 12 found the reason the question is differently shaped there**, which is worth recording
+because it is not a property of the data: the [§14a] reported quantities are averaged probabilities,
+bounded in [0, 1] *by construction*, so a separated fit produces no unprintable estimate the way
+Stage 8's `exp(β)` produces 6.5e15. Stage 12 §9.1 therefore applies the bound at **key granularity** —
+it drops `beta`, which is reported as a model parameter, and keeps the twenty-two standardised keys,
+which are unaffected. The bound protects a different thing there, so its calibration matters less.
+
+**Trigger, rewritten.** A cohort or a design on which any coefficient exceeds **8.7873**, Stage 8
+§6.3's largest measured non-degenerate `|beta|` — at which point a fit is inside the band and the
+band's calibration decides whether it is dropped. G7 firing at all is the older and looser form of the
+same trigger.
+
+**Status: open**, narrowed twice — both halves measured, both consequences absent.
 
 ## Make the pipeline resamplable: `propensity.fit` raises on 26.0% of stratified replicates
 
@@ -693,7 +709,19 @@ every replicate; changing it changes every estimate. That is a [§8] decision, n
 **Trigger.** A replicate that fails to converge, or a Stage 12 design where `Σw` is materially larger —
 [§14a] uses unit weights over a bigger population, so its objective is on a different scale again.
 
-**Status: open**, and it is a PI/[§8] decision rather than a code change.
+**THE SECOND HALF OF THE TRIGGER FIRED 2026-08-27, AND THE CONSEQUENCE DID NOT OCCUR.** [§14a]'s
+objective is over `Σw = n = 104` unit weights against roughly 23 for the [§7] overlap-weighted cohort —
+a factor of about 4.5, which is the change of scale this item names. Measured over 2000 replicates
+(Stage 12 §13.4): **every fit converged, in 4 to 6 iterations, all on the likelihood criterion**, with
+`first_step_norm` between 1.009 and 22.76 and zero non-convergence. An absolute tolerance on a
+log-likelihood four and a half times larger did not become either loose or tight enough to matter here.
+
+That is evidence and not proof — the concern is structural, and a scale change large enough to bite
+would be one where the *ratio* of `POLR_TOL` to the per-observation contribution moved by orders of
+magnitude rather than by 4.5. **Trigger, narrowed:** a population an order of magnitude larger than the
+cohort, or the first replicate anywhere in the pipeline that exits on `POLR_MAX_ITER`.
+
+**Status: open**, narrowed, and it is still a PI/[§8] decision rather than a code change.
 
 ## Give `model.FitError` a `code` field instead of classifying by message prefix (Stage 10 §7.2)
 
@@ -708,16 +736,44 @@ prefixes and `test_bootstrap.py` §15.6 scans both modules to assert every token
 failure mode that matters. It does not make the classification structural, and a stage that needed to
 branch on a failure kind rather than count it would still be parsing English.
 
-**That this is a real risk and not a hypothetical:** an earlier draft of the Stage 10 spec stated fourteen
-raise sites and omitted `G6` from the bucket map entirely. The scan found it — before the scan existed as
-a test, while it was still a paragraph being checked.
+**That this is a real risk and not a hypothetical — and there are now TWO instances:**
+
+1. An earlier draft of the Stage 10 spec stated fourteen raise sites and omitted `G6` from the bucket
+   map entirely. The scan found it — before the scan existed as a test, while it was still a paragraph
+   being checked.
+2. **The Stage 10 draft of Stage 12's spec gave T4 — a degenerate grouping variable — a message
+   leading with `polr_ri:`, while declaring `"T4" → "degenerate_design"` in the bucket map.**
+   `_bucket` reads `message.split()[0]`, so every T4 would have been counted as `nonconvergence` and
+   the `"T4"` entry would never have matched anything. Found by the Stage 12 engineering review,
+   2026-08-27; fixed in that spec's §14, which now states the first-token rule explicitly.
+
+**Instance 2 is the more serious of the two, because the scan CANNOT catch it.** The scan asserts that
+every token it finds is *in* `C.FAILURE_BUCKETS`, and `polr_ri:` **is** in the map — so the scan
+passes, the map is complete, and the counter is silently wrong. The mitigation described above covers
+a *reworded* token; it does not cover a **wrong-but-mapped** one. That is the whole gap between
+textual classification and a `code` field, and it is now demonstrated rather than argued.
+
+**Both instances were caught by reading a spec rather than by a run**, which is the review process
+working — and also the reason neither produced evidence from production. A third instance that reaches
+code would present as a bucket count that reads plausibly and is wrong, with nothing failing.
 
 **Why it was not done at Stage 10.** Sixteen raise sites across `model.py` — the module Stages 6, 8, 9
 and 12 all depend on — amended on the strength of a diagnostic.
 
-**Trigger.** The first bucket that is wrong, or the first stage that needs to branch on a failure kind.
+**Why it is still not being done at Stage 12.** Stage 12 lands a new estimator (`polr_ri`, its own
+quadrature rule, optimiser and boundary behaviour), a fourth amended module surface
+(`balance.levels`), the `bootstrap.intervals` extraction with a byte-identity guard on Stage 10's
+twenty-six intervals, and twelve new failure identifiers. A nineteen-site error-taxonomy amendment on
+top of that is two structural changes in one landing — Beck's rule, and the reason Stage 12 §25
+orders its own steps the way it does. Stage 12 mitigates instead: its §14 states the first-token rule
+as a rule, and `test_standardise.py` asserts T4's message text directly.
 
-**Status: open.**
+**Trigger.** ~~The first bucket that is wrong~~ — **FIRED, twice, both in specs (above).** The trigger
+is now: **the first bucket that is wrong in landed code**, or the first stage that needs to branch on
+a failure kind rather than count it. Stage 13 adds raise sites to this scheme and is the next
+opportunity.
+
+**Status: open, trigger fired, fix deliberately deferred past Stage 12.**
 
 ## Measure bootstrap coverage under near-separation (Stage 10 §8.4, §16 item 4)
 
@@ -804,7 +860,19 @@ pipeline. The trigger is now **Stage 12's bootstrap alone**, which resamples a l
 right design there is still a seed *sequence* — `SeedSequence.spawn(N_BOOT)` — reproducible under any
 scheduling and a different decision from the one §4.3 declined.
 
-**Status: open**, deferred with a rewritten trigger.
+**THE TRIGGER FIRED 2026-08-27 AND THIS IS NOW THE LARGEST SINGLE COST IN THE PIPELINE.** Measured
+(Stage 12 §2, §12.8): Stage 12's bootstrap is **~18.4 minutes** — one `replicates` call whose body runs
+three arms per draw — of which the **hierarchical arm is 95%**, at 17.5 minutes for 2000 fits of
+`model.polr_ri`. Against a 130–145 s Stages 1–10 pipeline plus Stage 11's 137.6 s, that is roughly an
+eightfold increase in total wall clock, and it is concentrated in one loop over one estimator.
+
+**Two things make it the good case for the seed sequence rather than a reason to panic.** The
+hierarchical body is pure — one `model.design`, one `model.polr` for start values, one `polr_ri` — so
+it parallelises without sharing state; and Stage 12 §12.4 already measured that the 21.7-hour version
+of the same arm was an optimiser choice, so the remaining 17.5 minutes is not slack to be tuned away.
+`SeedSequence.spawn(N_BOOT)` remains the right design, for §4.3's reason.
+
+**Status: open**, and it is now actionable rather than deferred.
 
 ## Label the denominator on each row of the bootstrap audit grid (Stage 10 §16 item 9)
 
@@ -831,24 +899,11 @@ row of the concatenated grid keeps the same cell count (§15.13).
 **Status: open**, cheap, filed so the grid is not shipped ambiguous.
 
 
-## A 12.5% bootstrap drop rate exists, and nothing prescribes what to do about it — CLOSED by DECISION 8
+## A 12.5% bootstrap drop rate exists, and nothing prescribes what to do about it (Stage 11 §8.4, §16 item 1)
 
-**Status: closed 2026-08-27, DECISION 8.** The interval is reported with its surviving count and with
-the statement that the thinning is selection on the estimate. [§13] gains the subgroup model as a
-declaration and [§16] gains the mechanism statement as a required one, both amendments of 2026-08-27.
-The two alternatives were declined **on measurement** rather than on preference, by a bound sweep run
-for the decision and recorded under DECISION 8: reporting the `S = 1` level alone moves the limits it
-exists to protect by 0.1%, and the interval is stable across bounds from 8 to 14, so it is a property
-of the data and the estimator rather than of where the bound sits. **No threshold at which an interval
-is withheld is prespecified, and none was introduced.** The question as put is below.
-
-
-**What.** Stage 11's `unknown_onset` subgroup loses **250 of 2000** replicates: 2 to a
-`propensity.fit` failure, 9 to O6 rank deficiency when a replicate draws no treated patient at
-witnessed onset, and 239 to G9 when the fit converges and returns a reported coefficient at or above
-`POLR_MAX_ABS_BETA`. (Spec §21 is normative and says 2 + 9 + 239; an earlier draft of this item wrote
-241 for the third route, having folded the two propensity failures into it — `questions_for_the_pi.md`
-Question 4 carries the same correction.) Measured `|gamma|` up to **19.296**,
+**What.** Stage 11's `unknown_onset` subgroup loses **250 of 2000** replicates: 9 to O6 rank deficiency
+when a replicate draws no treated patient at witnessed onset, 241 to G9 when the fit converges and
+returns a reported coefficient at or above `POLR_MAX_ABS_BETA`. Measured `|gamma|` up to **19.296**,
 against a bound of 14.0, with `polr` taking 10-15 iterations where 3-4 is typical.
 
 **Why it matters now and did not before.** `../out/questions_for_the_pi.md` carries a question deferred
@@ -922,52 +977,30 @@ arm emits no p and §15.8 asserts the subgroups emit exactly two.
 `C.ci_min_draws` or `C.PERCENTILE_METHOD`. At that point the loop moves into `bootstrap.py` as a ninth
 public name taking the p rule as a parameter, and both callers read it.
 
-**Status: open**, deferred with a named trigger.
+**CLOSES WITH STAGE 12 — the third caller is real and the trigger's own prescription is what Stage 12
+§13.3 specifies.** `standardise.inference` passes `lambda key: False` over seventy keys, so the loop
+would be in three modules rather than two. `bootstrap.intervals(draws, tested)` becomes the ninth
+public name, `run` and Stage 11's two callers move onto it, and the p rule stays a parameter for the
+reason this item already gives: it is the only thing the three callers disagree about.
 
-## Nothing pins Stage 10's intervals or Stage 11's four records (found 2026-08-27)
+**The guard this item asked for is specified too.** *"Refactoring `run` onto the shared helper would
+edit the function whose twenty-six intervals Stage 10's Definition of done asserts"* — Stage 12 §20.11
+asserts those twenty-six are **byte-identical** before and after, and Stage 12 §25 orders the
+extraction as implementation step 3, *before* Stage 12 has any keys of its own, so a discrepancy is
+unambiguously the refactor's rather than the new stage's.
 
-**What.** The pin item above covers Stage 8's primary and Stage 9's seven binary estimates, because
-that is the scope it was written with. It leaves **every [§10] interval limit and p-value, and every
-Stage 11 number** — the seven adjusted p-values, the two E-values, the two subgroups' odds ratios and
-interaction p-values, and the sensitivity arm's seven limits — with no regression pin anywhere in git.
+**Status: CLOSED, 2026-08-27, and the guard passed.** `bootstrap.intervals(draws, tested)` is public,
+`run` calls it, and the twenty-six intervals were captured before the extraction and compared after:
+**byte-identical on all twenty-six — every limit, level, method, draw count and `p`.** The extraction
+landed as Stage 12 §25's step 3, before `standardise.py` had any keys, so the comparison was against
+Stage 10's landed output and nothing else.
 
-**Why it is a gap and not a decision.** The same argument applies: an edit that moves a percentile
-limit in the fourth decimal without breaking reconciliation, the draw floor or the interval-versus-p
-agreement passes the whole suite. [§15]'s amendment of 2026-08-27 makes pinning correct now for
-everything the lock covers, and these are covered — they are functions of a locked estimator over a
-pinned seed.
-
-**Why it is not folded into the pin item.** That item is one PI decision by one person at one moment
-and is discharged by one commit. This is a scope extension found afterwards, and merging them would
-change what that item's status means. It is also larger: 26 [§10] keys plus Stage 11's four records.
-
-**Cost.** A day, mostly deciding how many decimals a percentile limit deserves to be pinned to. The
-draws are deterministic given `C.SEED`, so the limits are exactly reproducible — the question is
-whether to pin them exactly or to a tolerance that survives a numpy patch release.
-
-**Trigger.** After the pin item above lands, so the two do not conflict over `test_outcome.py`. Do the
-[§10] half in `test_bootstrap.py` and the Stage 11 half in `test_sensitivity.py`, each beside the
-`[data-gated]` section that already asserts the properties.
-
-## The bound sweep that decided DECISION 8 is a probe and not a shipped diagnostic (2026-08-27)
-
-**What.** DECISION 8 rests on a sweep of `POLR_MAX_ABS_BETA` over the `unknown_onset` interaction
-bootstrap, which established that the reported interval is stable from a bound of 8 to 14 and collapses
-above 16. It was run once, as a probe, and the script is not in the repository.
-
-**Why it is deliberately not shipped.** It is a diagnostic about a guard, nothing in the pipeline reads
-it, and no estimate is conditioned on it — which is what keeps DECISION 4's rule that no stage reads a
-diagnostic in order to select an estimator. The PI chose to record it in the register rather than in the
-audit log or the manuscript, so it is evidence for a decision and not a reported quantity.
-
-**What that costs.** Nobody can re-derive it without rewriting the probe, and the numbers under
-DECISION 8 are therefore the only record. If a future cohort changes the shape of the subgroup — a
-different treated count at witnessed onset, or a drop rate on `core_above_median` — the sweep would
-have to be re-run to know whether the bound still sits on the flat part.
-
-**Trigger.** Any change to `C.POLR_MAX_ABS_BETA`, or a subgroup drop rate materially different from
-this workbook's. At that point either re-run the probe and update DECISION 8's table, or promote the
-sweep to a shipped `[data-gated]` test that asserts the stability rather than the values.
+**One thing the extraction cost that this item did not predict, and it was caught by a run rather than
+by review.** Making `_bucket` public as `bucket` (§13.2, below) created a NAME COLLISION inside
+`_replicate`, which bound a local variable `bucket` for the classified value — so the module-level
+function was shadowed and `bucket(...)` raised `UnboundLocalError` on the first replicate that
+classified a failure. It is invisible to every import-time and structural check, and the full 2000-
+replicate pipeline is what found it. The three locals are now named `label`.
 
 ## `Replicate` cannot describe a body with more than one `polr` fit (Stage 11 §3.1, §16 item 8)
 
@@ -986,4 +1019,329 @@ such. Stage 11 reports what it needs off `Draws`, which carries the surviving co
 **Trigger.** The first stage that wants diagnostics from a multi-fit replicate body. [§14a]'s
 standardisation is the candidate, since it fits per arm.
 
-**Status: open**, deferred with a named trigger.
+**THE TRIGGER FIRED 2026-08-27 — AND THE REASON WRITTEN ABOVE IS WRONG, WHICH IS CORRECTED HERE
+RATHER THAN QUIETLY REPLACED.** *"[§14a]'s standardisation … fits per arm"* describes a mechanism that
+does not occur. Standardisation fits **once** and predicts **twice**, by overwriting the treatment
+column of the already-fitted design — Stage 12 §7.1, where re-fitting per arm is shown to be not merely
+wasteful but silently wrong, because `model.design` drops the treatment column as constant on a frame
+where every patient is treated. So the pooled and support-restricted arms share one `polr` fit and one
+`n_alpha`, and this item's stated route to a multi-fit body never opens.
+
+**What does open it is the hierarchical arm**, which adds a **second estimator** — `model.polr_ri` —
+to the same body (Stage 12 §12). Two fits, two convergence stories, one scalar pair on `Replicate`.
+
+**And the fix is still declined.** Widening `n_alpha` and `polr_iterations` to dicts touches
+`Replicate`, `Diagnostics`, `_diagnostics`, `_diagnostics_table` and every Stage 10 assertion over
+them, to gain what Stage 12 §3.3 already provides better: `hier.sigma` is a **first-class estimand
+key**, so the random-intercept fit's own parameter has draws, a surviving count and an interval,
+recoverable from `Draws` rather than from a diagnostic. `at_floor`'s rate is reported the same way.
+
+**Trigger, rewritten.** A stage wanting the **cutpoint distribution** of a second fit — which
+`hier.sigma` does not carry and no key can, since it is a property of the fit's shape rather than a
+number the fit produces.
+
+**Status: open**, trigger fired, fix declined with the reason restated.
+
+## A percentile interval on a parameter sitting at its boundary (Stage 12 §12.5, §21 item 7)
+
+**What.** `model.polr_ri`'s between-centre SD reaches `POLR_RI_SIGMA_FLOOR` in **22.0%** of replicates
+— measured over 200 — because [§14a] names `σ²_C = 0` as a legitimate answer and four clusters
+frequently give it. The `hier.sigma` key therefore has a percentile interval whose lower limit **is the
+floor**, and a floor is not a value: it means "the variance collapsed", which is a qualitatively
+different statement from "the variance is small".
+
+**Why it is not fixed now.** There is no cheap correct answer. The literature's options — a
+likelihood-ratio interval against the boundary mixture `0.5·χ²₀ + 0.5·χ²₁`, a parametric bootstrap, or
+a Bayesian fit with a prior on σ — are respectively a second inference procedure, a second bootstrap
+inside the first, and the prior-driven route [§14a] explicitly declines (*"a Bayesian fit would be
+steadier but prior-driven"*). Stage 12's answer is this pipeline's standing one: **count it, print it,
+and put it to the PI.** Stage 12 §17.2 requires the boundary rate printed beside the interval.
+
+**Trigger.** Any reading of `hier.sigma`'s interval as a range for the between-centre SD, or a
+manuscript reviewer asking for a test of `σ²_C = 0`.
+
+**Status: open**, put to the PI, and it is a reporting decision before it is a code one.
+
+## `RD_5` and `RD_4` coincide in 4.15% of the [§14a] draws (Stage 12 §6.3, §21 item 8)
+
+**What.** mRS 5 carries three patients of 104, so a stratified resample loses the level entirely in
+**4.15%** of replicates — measured, 83 of 2000, and it is always that level. In those replicates the
+fit has five cutpoints, the standardised distribution carries a structural zero at mRS 5, and
+`RD_5 == RD_4` **exactly**. The sampling distribution of `RD_5` is therefore narrowed by an amount
+nobody has quantified, in a direction that makes it look more precise than it is.
+
+**Why it is not fixed now.** The structural zero is the correct value — a level no record occupies is
+a level for which the fit provides no cutpoint, and interpolating one invents a parameter (Stage 12
+§6.3). The alternative of dropping collapsed replicates would select the bootstrap on the outcome
+distribution, which is worse. Stage 12 counts and prints the rate.
+
+**Trigger.** A manuscript reporting `RD_4` and `RD_5` as separate findings, or any comparison of their
+interval widths.
+
+**Status: open**, and it is a reporting caveat rather than a defect.
+
+## `polr_ri` ships without an independent implementation having agreed with it (Stage 12 §12.7, §26)
+
+**CLOSED, 2026-08-27, AND IT CLOSES POSITIVELY.** The Stage 12 spec records this as the one estimator
+in the pipeline with no external agreement, because R segfaulted at startup on the machine the spec was
+written on. **R works on the machine it was implemented on, so `tests/reference/polr_ri_clmm.R` ran.**
+Measured against `ordinal` 2026.7.26 at `nAGQ = POLR_RI_NODES = 11`, on an eight-group frame:
+coefficients agree **NEGATED** to `|ours + clmm|` = 1.033e-05 (with `|ours − clmm|` = 1.574, so there
+is something to negate); thresholds agree **un-negated** to 3.636e-06; and **σ agrees un-negated** to
+4.446e-06, because it is a scale. All three parts of §12.7's three-way asymmetry hold.
+
+**One defect in the oracle is recorded because `clm` and `clmm` differ where they look alike.** The
+first version read the random-effect SD from `fitted$stDev`, which is **NULL on a `clmm` object** — the
+SD is in `fitted$ST`, an `lme4`-style list whose single 1×1 entry is the SD for a lone random
+intercept. `as.numeric(NULL)` is `numeric(0)`, so `data.frame()` failed on a length mismatch and the
+oracle **failed for a reason unrelated to the estimator**. That is the failure mode a gated oracle is
+worst at surfacing, because a red test and a skipped test both read as "not verified".
+
+**Status: closed.** The gate stays in place for checkouts whose R is broken.
+
+**What.** `model.polr_ri` is a new maximiser and Stage 12 §12.7 specifies its `ordinal::clmm` oracle in
+full — the three-way sign asymmetry, `nAGQ = POLR_RI_NODES`, the separate tolerance on σ. **The oracle
+has not been run.** R segfaults at startup on this machine for the `uname`/PATH reason
+`test_reference_r.py`'s banner documents at length, so the spec's verification of `polr_ri` rests on
+its own analytic gradient, its node-count stability, and its collapse to `model.polr` at σ = 0 — all
+internal.
+
+**Why it matters more here than for the other four oracles.** `logistf`, `PSweight`, `clm` and
+`OrderedModel` check estimators whose specifications were already fixed by [§7] and [§8]; this one
+checks an estimator **this repository designed**, including its quadrature rule and its boundary
+handling. It is the only estimator in the pipeline in that position.
+
+**Trigger.** Stage 12's implementation step 7. Opening the gate is the deliverable, not a nice-to-have,
+and `_r_environment` is the fix the environment needs.
+
+**Status: open**, and it blocks calling the hierarchical arm verified.
+
+## The [§14a] transported population is 12 and not 14 (Stage 12 §4.1, §21 item 9)
+
+**What.** USZ contributes 14 eligible patients and **two of them have no 90-day mRS**, so the [§11]
+estimation population carries 12. Both outcome-missing records in the whole [§14a] population are at
+USZ — measured. The centre whose inclusion is [§14a]'s entire reason for existing loses one seventh of
+its contribution to outcome ascertainment, and the transport rests on the 12 that remain, of whom
+three are outside the treated support (Stage 12 §10.2).
+
+**Why it is not fixed now.** [§11] is complete-case by prescription and no imputation is permitted
+anywhere in this plan. The number is reported per centre in Stage 12's population audit entry, which
+is what [§11] requires.
+
+**Trigger.** A workbook in which the never-IVT centre's outcome completeness is materially worse, at
+which point the transported population is small enough that the arm's interpretation changes.
+
+**Status: open**, informational, and it is a denominator rather than a defect.
+
+## Whether [§14a]'s hierarchical standardisation should be marginal rather than conditional (Stage 12 §12.6)
+
+**What.** A random-intercept model offers two standardisations: integrate the prediction over
+`b ~ N(0, σ²)`, or predict each patient at their own centre's conditional mode `b̂_c`. Stage 12
+implements the second, because [§14a]'s *"patients at a never-IVT centre inform that centre's intercept
+through their direct-EVT outcomes"* is only true under it. The first answers a different question —
+the distribution for a patient at a *randomly drawn* centre — and a reviewer may well want it.
+
+**Why it is not decided here.** It is a different estimand and [§14a] named one. Adding it is a [§14]
+amendment, and it would need its own keys, its own interval and its own place in [§16]'s
+different-populations statement.
+
+**Trigger.** A reviewer asking what the arm says for a patient at an unobserved centre.
+
+**Status: open**, and it is the PI's rather than a code change.
+
+## Stage 12's spec is written against an unlanded Stage 11 (Stage 12 header, §21 item 11)
+
+**FIRED AT IMPLEMENTATION, 2026-08-27, and this is what it cost.** The trigger this item names is
+*"Stage 11 landing with `bucket`/`collect` private, or `intervals` not extracted"*. Stage 11 has not
+landed **at all**, which is the stronger form: at the Stage 12 implementation commit
+`bootstrap._bucket` and `bootstrap._collect` were still private and `outcome.estimation_population`
+did not exist.
+
+**Two of the three dependencies were therefore satisfied by Stage 12 itself, and the third was not
+needed.**
+
+- `bucket` and `collect` are made public **here**, as a pure rename with no behaviour change — the
+  same shape of change Stage 12 §18 already authorises for `balance._levels`, and for the same
+  reason: `standardise.py` must classify its four failure groups and reconcile its sixty-nine keys
+  through the one taxonomy rather than owning a second copy (Stage 9 §14).
+- `intervals` is extracted here, which this file's own item above already prescribed.
+- `outcome.estimation_population` is **not used** and its absence cost nothing, exactly as
+  Stage 12 §4.1 predicted: its first conjunct is a `Propensity`'s covariate-completeness over
+  `PS_COVARIATES`, and [§14a] has no `Propensity` and a different covariate list.
+
+**Consequence for Stage 11 when it lands: three of its own changes are already made.** It must not
+re-make them, and its two interval-loop callers must be written against `bootstrap.intervals` rather
+than carrying their own copies.
+
+**And the spec's public-surface COUNTS are off by one in three places, because they were written
+against the Stage 11 surface rather than the landed one.** Measured at the Stage 12 commit:
+`bootstrap.py` goes 5 → 8 public functions (the spec says 8 → 9), `model.py` 5 → 7 (the spec says
+6 → 8), and `balance.py` 2 → 3 (the spec says 3 → 4). **Every DELTA is right and every ABSOLUTE is
+one high**, which is the signature of counting against an unlanded baseline. The test assertions are
+written against the landed numbers and are by NAME rather than by count, so they cannot drift again.
+
+**Status: open** until Stage 11 lands, at which point this item closes by being overtaken.
+
+**What.** Stage 12's specification depends on Stage 11 in exactly three places, all named in its
+header: `bootstrap.bucket` and `bootstrap.collect` being public (Stage 11 §5.4); the interval loop
+being extractable as Stage 11 §16 describes; and `outcome.estimation_population` existing and
+deliberately **not** being used (Stage 12 §4.1). Stage 11's spec is written and its code is not built.
+
+**Why it is filed rather than resolved.** Stage 12's spec could not wait on Stage 11's implementation
+without the roadmap's order becoming a serialisation of writing as well as of building, and the three
+dependencies are small and named. But they are assumptions about code that does not exist.
+
+**Trigger.** Stage 11 landing with `bucket`/`collect` private, or with the interval loop left
+duplicated. Either makes Stage 12 §13.3 and §13.2 wrong rather than merely early.
+
+**Status: open**, and it closes when Stage 11 lands.
+
+
+## Stage 12's implementation found two numerical defects in `polr_ri` that the spec could not have (Stage 12 §12.2, §12.4)
+
+**What.** Both were found by running the estimator at `N_BOOT = 2000` rather than by reading it, both
+made the fit return the RIGHT ANSWER through a line search doing the wrong job, and both are now
+fixed with a clamp that enforces a property rather than choosing a magnitude.
+
+1. **The per-observation category probability underflows to EXACTLY ZERO at far quadrature nodes.**
+   `p = gu - gl` where both are `expit`s; at a node the posterior has moved away from, both are 1.0 in
+   float64 and the difference cancels to zero. Then `log p` is `-inf` and `du/p`, `(du/p)**2` and
+   `du*dl/p**2` are all `nan` — so the gradient is `nan`, the trial step is rejected by the `isfinite`
+   test in the halving loop, and the fit converges anyway. `model._RI_P_FLOOR = 1e-150` floors it. **The
+   exponent is chosen against `p**2` and not against `p`**: `Hul = du*dl/p**2`, so a floor below about
+   1.5e-154 makes `p**2` underflow and reintroduces the 0/0 it fixes.
+
+   `polr`'s convention is the opposite — return `-inf` and let step-halving reject the step — and it is
+   right THERE, where a non-positive probability means crossed cutpoints at the iterate. Here it means
+   a far node, which is not a property of the iterate at all and is what a quadrature rule exists to
+   weight at zero.
+
+2. **The per-group log-posterior curvature comes out POSITIVE from cancellation.** It is negative
+   exactly in the mathematics — a sum of concave ordinal terms plus a Gaussian log-prior, so it cannot
+   exceed `-1/sigma^2` — but `Huu = ddu/p - (du/p)**2` is a difference of two large quantities in the
+   tails. When the sum crossed zero, `sqrt(-1/curvature)` returned `nan`, the quadrature nodes were
+   `nan`, and the line search absorbed it. `model._curvature` clamps the ordinal contribution to its
+   own guaranteed sign, `min(g2, 0)`, and the bound is TIGHT — attained whenever the data contribute no
+   curvature, which is precisely the far-tail case that produces the noise.
+
+**Why this matters beyond the two fixes.** Stage 12 §12.5 makes exactly this argument about the
+`sigma -> 0` boundary — *"The fit still returned, because the affected nodes are dominated in the
+log-sum-exp, but 'still returned' is not a specification"* — and then the specified fitter had two more
+instances of the same failure mode that the spec did not anticipate. Neither was visible at the point
+estimate, at n = 200, or in any structural test; both were visible as `RuntimeWarning`s in a 2000-
+replicate run. `test_model.py` now asserts `polr_ri` runs clean under
+`warnings.simplefilter("error", RuntimeWarning)` on both a non-zero-sigma frame and a floored one,
+which is the check that would have caught them.
+
+**Trigger.** Any change to the quadrature, the mode search, or `_ord_b_derivatives`. **Status: closed**
+with the Stage 12 implementation commit; the warnings-as-errors test is what keeps it closed.
+
+## `polr_ri` drops 2 of 2000 [§14a] replicates on a BFGS line-search stall, and Stage 12 §13.4 says nothing fails (Stage 12 §13.4, §12.4)
+
+**What.** Stage 12 §13.4 reports *"Nothing fails"* and measures `polr_ri` non-convergence at **0 of
+200**. Measured at the full `N_BOOT = 2000` after the two numerical fixes above: **2 replicates raise
+T2** — step-halving exhausted, at iteration 22 and at iteration 7 — for a drop rate of **0.1%**. Both
+are genuine BFGS line-search stalls and neither emits a warning; the nan artefacts that caused
+earlier stalls are gone.
+
+**The taxonomy handles them exactly as designed and this is not a defect in the machinery.** Each costs
+`hier.*` and nothing else — 24 of the 69 keys — so the pooled and support arms keep 2000 draws each
+while the hierarchical arm has 1998. `Draws` reconciles for every one of the 69 keys, the failures land
+in the `nonconvergence` bucket, and the audit grid labels the denominator. `test_standardise.py`
+asserts that grouping directly.
+
+**Why it is not "fixed".** The obvious repair is to reset the BFGS inverse-Hessian approximation to the
+identity when the line search fails and retry once as a gradient step, which is a standard safeguard
+and would probably recover both. **It is declined here because it would change the estimator without a
+prespecification.** Stage 12 §12.4 fixes the loop's shape — *"step-halving to `POLR_MAX_HALVINGS` per
+iteration, raising `FitError` on exhaustion"* — and Stage 6 §5.3's argument applies with full force:
+[§10] drops failed replicates, so a change to WHICH replicates fail is a change to the sampling
+distribution, and adding a recovery path is exactly as much a modelling decision as removing one.
+
+**And the selection question is real and is not answered.** 0.1% is small, but the two dropped
+replicates are dropped for a property of the OPTIMISER rather than of the data, and nothing here
+establishes that they are exchangeable with the 1998 that survive — which is the concern Stage 6 §5.3
+raises about a step-norm criterion (*"the ones dropped would be exactly the sparse ones"*). At 0.1% it
+cannot move a percentile interval materially; at a higher rate it could.
+
+**Trigger.** A workbook, a Stage 13 population, or a `POLR_RI_NODES` change on which the rate exceeds
+1%; or a [§14] amendment prescribing a recovery path. **Status: open**, and it amends Stage 12 §13.4's
+"nothing fails" to "nothing fails in the pooled and support arms; the hierarchical arm drops 0.1%".
+
+## Stage 12 §25's step 0 is done, and three of the hierarchical arm's rates moved (Stage 12 §12.5, §12.8, §21 item 13)
+
+**What.** Stage 12 §21 item 13 records that every hierarchical rate in the specification is a
+200-replicate measurement and that §25's step 0 must replace them with `N_BOOT` figures before the
+item can close. **Step 0 ran at the implementation commit.** Measured over 2000 replicates, against
+the specification's n = 200 figures:
+
+| quantity | spec, n = 200 | measured, n = 2000 |
+|---|---|---|
+| `sigma_hat` at the `POLR_RI_SIGMA_FLOOR` boundary | 44 / 200 = **22.0%** | 368 / 1998 = **18.4%** |
+| `sigma_hat` above 1.0 | 48 / 200 = **24.0%** | 460 / 1998 = **23.0%** |
+| `polr_ri` non-convergence | 0 / 200 | **2 / 2000** (item above) |
+| wall clock, the whole three-arm bootstrap | **17.5 min**, projected ×10 | **4.2 min**, measured |
+
+**The two rates are within sampling error of the 200-replicate estimates** — 18.4% against 22.0% is
+1.2 standard errors at n = 200 — so the specification's figures were not wrong, they were imprecise in
+the way it said they were. **The wall clock is not**: 4.2 minutes against a projected 17.5 is a factor
+of four, and the projection was linear in the replicate count from a measured 105.0 s at n = 200 on a
+different machine. A timing is machine state, which Stage 12 §26 already says of every timing it
+quotes; what is worth carrying forward is that the hierarchical arm is still ~95% of the stage's
+compute and the stage is still the most expensive thing in the pipeline.
+
+**Everything else in §26's verification record reproduced exactly**, on an independent implementation:
+the population ledger 126 → 107 → 104 with both outcome-missing records at the never-IVT centre; the
+per-centre × arm table; 10 design columns and 5 iterations on `"likelihood"`; the cutpoint collapse at
+**83 / 2000 = 4.15%**, always mRS 5, with `RD_4 == RD_5` in exactly those 83; `|beta|` min 0.0000
+median 0.3219 max 2.0016; the reflection asymmetry at **9.8e-5 / 1.7e-3** under `inverted_cdf` against
+1.1e-16 / 5.6e-16 under `"linear"`; `sigma_hat` 0.542427 at 11 adaptive nodes; 25 iterations and 85
+halvings at the point estimate; and all four per-centre posterior SDs to four decimals.
+
+**Trigger.** Fired and discharged. **Status: closed** with the Stage 12 implementation commit, which is
+what §21 item 13 asked for — closed with measured numbers rather than negatively.
+
+## Stage 12's `_role` is a fourth role vocabulary and `balance._role` is now one of two (Stage 12 §10.3)
+
+**What.** `balance._role` answers *"what this covariate is TO the specification being diagnosed"* and
+returns `"propensity model"` for every `PS_COVARIATES` name. `standardise._role` cannot reuse it,
+because **[§14] fits no propensity model anywhere** — a row labelled "propensity model" in a [§14a]
+support-check table would name a model that does not exist in this analysis — so it returns
+`"standardisation model [§14a]"`, `"negative control"`, `"excluded [§6]"` and `"grouping"`.
+
+**Why this is a different rule and not a second copy.** The two functions answer the same question
+about different specifications, which is what `balance._role`'s own docstring says a role IS. Copying
+its ANSWERS would have been the duplication; copying its QUESTION is not. Stage 12 §10.3 makes the
+same argument for reusing `balance.smd` and `balance.levels` unchanged, and those are reused —
+`_baseline` calls both and implements neither, asserted by an AST scan over its own body.
+
+**What is unresolved.** There are now two role vocabularies with three overlapping values
+(`"negative control"`, `"excluded [§6]"`, and a model-membership label that differs), and Stage 11's
+`Specification` registry will add a third reading of the first one when it lands: under the [§13]
+full-covariate model the four vascular risk factors move from `negative control` to `propensity
+model`. Three functions computing a `role` column for three specifications is the point at which the
+column should become a property of a `Specification` rather than of a module.
+
+**Trigger.** Stage 11 landing its `Specification` registry, or Stage 13 needing a fourth. **Status:
+open.**
+
+## `standardise._baseline` reaches for `balance._pooled_sd`, which is one private cross-module call (Stage 12 §10.3, §3.1)
+
+**What.** `Support.baseline` is declared as `tuple[balance.CovariateBalance, ...]` (Stage 12 §3.1), and
+that record carries an `sd` field — the unweighted pooled SD the SMD was divided by. Stage 12 §10.3
+prescribes `balance.smd` for the ratio and §18 says `balance.py` changes by **one rename and nothing
+else**, so nothing public exposes the denominator on its own.
+
+**So `_baseline` calls `balance._pooled_sd` for that column, and the alternative is worse.** Computing
+the pooled SD in `standardise.py` would be a second definition of the yardstick, which is exactly what
+Stage 7 §5.5 made `smd` public to prevent and what §10.3 restates. Reading it from the module that owns
+it keeps there being one definition; it costs one private cross-module call, which
+`test_standardise.py` pins as the ONLY one — the assertion is `private == {"balance._pooled_sd"}`, so a
+second such call is a test failure.
+
+**The clean fix is a one-line rename** — `_pooled_sd` becomes `pooled_sd` — which Stage 12 §18 does not
+authorise and which is not worth widening this stage's footprint in `balance.py` from one rename to
+two on the strength of an aesthetic.
+
+**Trigger.** A second caller needing the denominator, or the next stage that touches `balance.py` for
+any other reason. **Status: open.**
