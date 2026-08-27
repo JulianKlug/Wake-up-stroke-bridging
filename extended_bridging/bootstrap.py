@@ -38,7 +38,7 @@ body as a callable.
     │    ├─ keys  = _estimand_keys(est, sec) twenty-six of them           (§3.3)        │
     │    ├─ replicates(...)                  ONE Generator, in order      (§4.3)        │
     │    │     resample(...) -> _replicate(...) -> Replicate                            │
-    │    ├─ _collect / _diagnostics          per estimand GROUP           (§7.1, §7.3)  │
+    │    ├─ collect / diagnostics            per estimand GROUP           (§7.1, §7.3)  │
     │    ├─ _record_replicates(...)          one `model` entry            (§10.1)       │
     │    └─ percentile_ci / bootstrap_p      per estimand                 (§8, §9)      │
     └──────────────────────────────────────────────────────────────────────────────────┘
@@ -50,10 +50,29 @@ body as a callable.
 gitignored audit log is the only place any interval on this workbook exists [Stage 10 §4.5].
 
 **What this module does not touch** [Stage 10 §0.2]. ``balance`` is not imported and no interval is
-put on an SMD. ``propensity.py`` is not amended — §5's central claim — and none of its privates is
-reached into. The estimators are called and not edited. And the point estimate is READ and never
-recomputed: a percentile limit is an order statistic of the replicate distribution and is not a
-function of the point value.
+put on an SMD. None of ``propensity.py``'s privates is reached into. The estimators are called and
+not edited. And the point estimate is READ and never recomputed: a percentile limit is an order
+statistic of the replicate distribution and is not a function of the point value.
+
+*Stage 10 §5's central claim was that ``propensity.py`` had a zero-line diff, and its Definition of
+done item 2 checked it. That claim is about STAGE 10'S COMMIT and stays historically true; it is not
+a live check.* Stage 11 amends ``propensity.py`` to give it two named entry points over one private
+``_fit``, and it does so precisely because Stage 6 §6.4's guard kept its meaning — the seam is a
+named ``C.Specification`` and not the ``covariates=`` keyword that guard forbids [Stage 11 §4.3].
+This module gained R9 in the same edit, because ``_replicate`` calls ``propensity.fit``
+unconditionally and a ``run`` over the [§13] arm's ``Propensity`` would otherwise return
+twenty-six intervals whose point estimates are the arm's and whose replicates are the primary's.
+
+**The public surface is EIGHT names and the privates are nine as §3.2 counts them — eleven as this
+module actually carries them** [Stage 11 §5.4]. Stage 10 §3.2 said five and twelve, and its list of
+privates has always omitted ``_padded`` and ``_spread``, which §10.1 requires and describes without
+naming; ``test_bootstrap.py`` asserts the LIST rather than the number for exactly that reason. ``bucket``, ``collect`` and ``diagnostics`` became public at Stage 11 rather than
+being written a second time in ``sensitivity.py``: a second classifier would be a second definition
+of the separation-versus-convergence split Stage 8 §11 asked to be kept apart, a second ``Draws``
+loop would be a second implementation of the reconciliation property ``Draws.__post_init__`` exists
+to enforce, and a second diagnostics tally would be a second answer to "how many replicates fitted
+five cutpoints". **No private alias is kept for any of the three**, so a reader cannot find two
+spellings of one function.
 
 This module is **not** exempt from the Stage 1 §7 raw-name scan and must never become exempt.
 
@@ -125,12 +144,12 @@ class Replicate:
 
     **`values` and `failures` PARTITION the attempted keys** — a key is in exactly one of them,
     never both and never neither. That partition is the whole of §15.4's reconciliation property:
-    `_collect` sums over replicates key by key, and if a replicate can lose a key silently the
+    `collect` sums over replicates key by key, and if a replicate can lose a key silently the
     three numbers in `Draws` stop adding up. A dict-of-value plus a dict-of-bucket makes the
     partition a property of the type rather than of the loop that fills it — which is what
     `__post_init__` below turns from a sentence into a raise.
 
-    It is declared here and not left to the implementation because `_collect` and `_diagnostics`
+    It is declared here and not left to the implementation because `collect` and `diagnostics`
     both destructure it, and every other structure this stage carries is a documented frozen
     dataclass. This one carries every number the stage reports.
 
@@ -467,7 +486,7 @@ def _tested(key: str) -> bool:
     return key == "beta" or key.endswith(".rd")
 
 
-def _bucket(message: str) -> str:
+def bucket(message: str) -> str:
     """The `C.FAILURE_BUCKETS` entry for a raised `FitError`, by the FIRST TOKEN of its message.
 
     `model.FitError` carries no code -- it is `class FitError(RuntimeError)` with no attributes
@@ -624,8 +643,8 @@ def _replicate(draw: pd.DataFrame, keys: tuple[str, ...], paths: dict[str, str],
     try:
         ps = propensity.fit(draw, audit)                       # [Stage 6] — refit, never reused
     except model.FitError as failure:
-        bucket = _bucket(str(failure))
-        return Replicate(values={}, failures={key: bucket for key in keys},
+        failed = bucket(str(failure))
+        return Replicate(values={}, failures={key: failed for key in keys},
                          n_alpha=None, polr_iterations=None, sum_w=None, n_in_model=None)
 
     values: dict[str, float] = {}
@@ -643,8 +662,8 @@ def _replicate(draw: pd.DataFrame, keys: tuple[str, ...], paths: dict[str, str],
         n_alpha = len(est.fit.alpha)
         polr_iterations = est.fit.iterations
     except model.FitError as failure:
-        bucket = _bucket(str(failure))
-        failures.update({key: bucket for key in primary_keys})
+        failed = bucket(str(failure))
+        failures.update({key: failed for key in primary_keys})
 
     _shared_design(draw, ps)                                   # invariant 6, per replicate (§6.4)
 
@@ -658,7 +677,7 @@ def _replicate(draw: pd.DataFrame, keys: tuple[str, ...], paths: dict[str, str],
     for key in C.BINARY_OUTCOMES:
         group = tuple(k for k in keys if k.startswith(f"{key}."))
         if key in sec.failures:
-            failures.update({k: _bucket(sec.failures[key]) for k in group})
+            failures.update({k: bucket(sec.failures[key]) for k in group})
             continue
         estimate = sec.estimates[key]
         values[f"{key}.rd"] = float(estimate.rd)
@@ -676,7 +695,7 @@ def _replicate(draw: pd.DataFrame, keys: tuple[str, ...], paths: dict[str, str],
 
 # --- collecting the replicates [§7] ---------------------------------------------------------------------
 
-def _collect(collected: tuple[object, ...], keys: tuple[str, ...]) -> dict[str, Draws]:
+def collect(collected: tuple[object, ...], keys: tuple[str, ...]) -> dict[str, Draws]:
     """One `Draws` per estimand key, over the replicates that ATTEMPTED it (§7.1, §7.3).
 
     `n_attempted` is counted and not assumed: it is the number of replicates in which the key
@@ -707,15 +726,15 @@ def _collect(collected: tuple[object, ...], keys: tuple[str, ...]) -> dict[str, 
                 drawn.append(value)
                 attempted += 1
             elif key in replicate.failures:
-                bucket = replicate.failures[key]
-                counts[bucket] = counts.get(bucket, 0) + 1
+                failed = replicate.failures[key]
+                counts[failed] = counts.get(failed, 0) + 1
                 attempted += 1
         out[key] = Draws(quantity=key, draws=np.asarray(drawn, dtype=float),
                          n_attempted=attempted, failures=counts)
     return out
 
 
-def _diagnostics(collected: tuple[object, ...]) -> Diagnostics:
+def diagnostics(collected: tuple[object, ...]) -> Diagnostics:
     """`Replicate`'s eight fields aggregated into `Diagnostics`' six (§15.15).
 
     **A `None` is DROPPED and never counted as a zero**, which is the one way each of these four
@@ -943,7 +962,7 @@ def _record_replicates(draws: dict[str, Draws], diagnostics: Diagnostics, audit:
 
 def _assert_run_inputs(df: pd.DataFrame, ps: propensity.Propensity, est: outcome.Primary,
                        sec: outcome.Secondary) -> None:
-    """R1-R8, in two phases, collected. Every one is `C.SchemaError` and this stage adds no FitError.
+    """R1-R9, in two phases, collected. Every one is `C.SchemaError` and this stage adds no FitError.
 
     Stage 9 §4.4a's boundary is the rule rather than a paraphrase: *"the boundary is
     can-this-be-READ vs is-the-DATA-judgeable -- NOT mask-checks vs the-rest."* A column-presence
@@ -958,6 +977,11 @@ def _assert_run_inputs(df: pd.DataFrame, ps: propensity.Propensity, est: outcome
     A stratum of size 1 satisfies R6 and contributes no variability -- it resamples to itself in
     every replicate. That is not an error and is not guarded: it is what stratifying on a
     near-determining variable means, and [§10] chose it knowing so (§4.4).
+
+    **R9 is Stage 11's and it is in phase 1 with the other object checks** [Stage 11 §4.5]. It is
+    about which propensity specification the `Propensity` carries, which is a property of the CALL
+    like the other eight, and it is the one guard here whose absence is silent in every observable
+    way: with R9 removed the call succeeds and returns twenty-six intervals.
     """
     # PHASE 1 -- can this frame, this Propensity and this Secondary be READ?
     bad: list[str] = []
@@ -989,6 +1013,18 @@ def _assert_run_inputs(df: pd.DataFrame, ps: propensity.Propensity, est: outcome
             f"{int(ps.in_model.isna().sum())} missing value(s). It is boolean and TOTAL by "
             "construction [Stage 6 §4.4], and pandas reads a non-boolean Series as LABELS -- so a "
             "masked read raises KeyError rather than reporting a mask problem [Stage 9 §4.4a].")
+    if ps.spec is not C.PROPENSITY_PRIMARY:
+        bad.append(
+            f"R9  the Propensity carries the {ps.spec.label} specification {ps.spec.sap} and `run` "
+            f"estimates the [§10] bootstrap of the {C.PROPENSITY_PRIMARY.label} one. `_replicate` "
+            "calls `propensity.fit` UNCONDITIONALLY (bootstrap.py, `_replicate`), so this call "
+            "would return twenty-six intervals whose point estimates are this specification's and "
+            "whose N_BOOT replicates are the primary's — every number finite, `Draws` reconciling, "
+            "R3 and R5 passing, and nothing raising. A [§13] sensitivity arm gets its own "
+            "`replicates` body over `sensitivity._arm_replicate`, which refits ITS specification "
+            "inside the loop [Stage 11 §4.5, §5.4]. Compared by IDENTITY and not by equality: the "
+            "registry holds exactly two instances, and identity is the comparison a copied record "
+            "cannot satisfy.")
     if set(sec.estimates) != set(C.BINARY_OUTCOMES):
         bad.append(
             f"R5  the Secondary carries estimates for {sorted(sec.estimates)} against "
@@ -1099,9 +1135,9 @@ def run(df: pd.DataFrame, ps: propensity.Propensity, est: outcome.Primary,
         C.N_BOOT, C.SEED, C.BOOT_STRATUM,
     )
 
-    draws = _collect(collected, keys)                            # §7.1, §7.3, per group
-    diagnostics = _diagnostics(collected)                        # §7.4, §7.5, §9.2, §10.2
-    _record_replicates(draws, diagnostics, audit)                # §10.1
+    draws = collect(collected, keys)                            # §7.1, §7.3, per group
+    diags = diagnostics(collected)                               # §7.4, §7.5, §9.2, §10.2
+    _record_replicates(draws, diags, audit)                      # §10.1
 
     intervals: dict[str, Interval] = {}
     for key, d in draws.items():
@@ -1111,4 +1147,4 @@ def run(df: pd.DataFrame, ps: propensity.Propensity, est: outcome.Primary,
         p = bootstrap_p(d.draws) if _tested(key) else None       # §9.1, §9.3 -- 8 of 26
         intervals[key] = Interval(lo, hi, C.CI_LEVEL, C.PERCENTILE_METHOD, len(d.draws), p)
 
-    return Bootstrap(C.SEED, C.N_BOOT, draws, intervals, diagnostics)
+    return Bootstrap(C.SEED, C.N_BOOT, draws, intervals, diags)

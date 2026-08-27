@@ -60,6 +60,7 @@ import propensity
 from fixtures_stage10 import (ALPHA_TRUE, B_INNER, BETA_TRUE, COVERAGE_SEED, M_OUTER,
                               boundary_draws, known_effect_population, separable_ordinal_frame,
                               two_centre_frame, unfittable_nuisance_frame)
+from fixtures_stage11 import subgroup_frame
 from test_data import hand_source
 
 DATA_GATED = pytest.mark.skipif(
@@ -163,14 +164,15 @@ def test_the_coverage_generator_produces_THE_DECLARED_NUMBER_OF_CATEGORIES():
 
 # --- 15.1  the preconditions, one frame per branch ------------------------------------------------------
 #
-# Eight branches, eight frames, each derived from the fixture cohort by breaking exactly one thing.
+# NINE branches from Stage 11 §4.5, nine frames, each derived from the fixture cohort by breaking
+# exactly one thing.
 # Every one asserts a `SchemaError` WHOSE MESSAGE NAMES ITS OWN CONDITION — not merely that something
 # raised — because a collected assertion that reports the wrong branch is worse than one that reports
 # nothing. Stage 9 §15.1a's rule applies unchanged: a frame testing phase k must be PRISTINE for
 # phases 1 through k-1.
 
 BRANCH_PHASE: Final[dict[str, int]] = {
-    "R1": 1, "R2": 1, "R3": 1, "R4": 1, "R5": 1, "R6": 2, "R7": 2, "R8": 2}
+    "R1": 1, "R2": 1, "R3": 1, "R4": 1, "R5": 1, "R6": 2, "R7": 2, "R8": 2, "R9": 1}
 
 
 def broken_run(branch: str, monkeypatch):
@@ -204,6 +206,17 @@ def broken_run(branch: str, monkeypatch):
         bent = dict(sec.estimates)
         bent["ph2"] = dataclasses.replace(bent["ph2"], augmented_path="partial")
         return df, ps, est, outcome.Secondary(estimates=bent), audit
+    if branch == "R9":
+        # The [§13] arm's Propensity, handed to `run`. Stage 11 §4.5: `_replicate` calls
+        # `propensity.fit` unconditionally, so without R9 this returns twenty-six intervals whose
+        # point estimates are the arm's and whose replicates are the primary's specification.
+        #
+        # `subgroup_frame()` and not `two_centre_frame()`: `C.PROPENSITY_FULL` names four covariates
+        # Stage 10's fixture does not carry, so `fit_full` on it is a bare KeyError rather than the
+        # arm's Propensity — which would test the frame instead of the guard.
+        wide = subgroup_frame()
+        wide_ps, wide_est, wide_sec, wide_audit = fitted(wide)
+        return wide, propensity.fit_full(wide, wide_audit), wide_est, wide_sec, wide_audit
     if branch == "R8":
         # `run` takes no `level`, so the ONLY way to reach R8 is to move the constant — which is why
         # test_config.py carries `N_BOOT >= ci_min_draws(CI_LEVEL)` as a static assertion beside it.
@@ -230,6 +243,42 @@ def test_each_precondition_branch_raises_a_SchemaError_NAMING_ITS_OWN_CONDITION(
         bootstrap.run(df, ps, est, sec, audit)
     assert branch in message_of(e), (
         f"{branch}'s frame raised, but the message names a different branch:\n{message_of(e)}")
+
+
+def test_WITHOUT_R9_run_SUCCEEDS_and_returns_a_FULL_TABLE_that_is_a_lie_about_the_arm(boot_n):
+    """Stage 11 §4.5 and §15.2's companion. A guard whose absence is never demonstrated is a guard
+    nobody can price.
+
+    With the check monkeypatched out, `run` over the [§13] arm's `Propensity` returns every interval
+    it would return for the primary. Every number is finite. `Draws.__post_init__` reconciles. R3
+    passes — the index is aligned. R5 passes — the `Secondary` is complete. Nothing raises, and the
+    arm's interval is a lie about the arm: the point estimates came from the full-covariate weights
+    and all `boot_n` replicates refitted the [§7] specification.
+    """
+    df = subgroup_frame()                # carries what C.PROPENSITY_FULL names — see `broken_run`
+    ps, est, sec, audit = fitted(df)
+    arm = propensity.fit_full(df, audit)
+
+    with pytest.raises(config.SchemaError) as e:
+        bootstrap.run(df, arm, est, sec, audit)
+    assert "R9" in message_of(e)
+
+    landed = bootstrap._assert_run_inputs
+
+    def without_r9(frame, propensity_object, primary, secondary):
+        return landed(frame, dataclasses.replace(propensity_object,
+                                                 spec=config.PROPENSITY_PRIMARY),
+                      primary, secondary)
+
+    original = bootstrap._assert_run_inputs
+    bootstrap._assert_run_inputs = without_r9
+    try:
+        boot = bootstrap.run(df, arm, est, sec, audit)
+    finally:
+        bootstrap._assert_run_inputs = original
+
+    assert len(boot.intervals) == len(boot.draws) == 26
+    assert all(np.isfinite([i.lo, i.hi]).all() for i in boot.intervals.values())
 
 
 def test_PHASE_1_FAILURES_ARE_COLLECTED_and_a_two_failure_frame_reports_BOTH():
@@ -547,7 +596,7 @@ def test_len_draws_plus_failures_equals_n_attempted_for_EVERY_key():
     the three numbers stop reconciling."""
     keys = ("beta", "rd_0", "sich.rd")
     collected = synthetic_replicates(keys, 50, {3: ("beta",), 7: ("beta", "rd_0"), 11: keys})
-    draws = bootstrap._collect(collected, keys)
+    draws = bootstrap.collect(collected, keys)
     for key, d in draws.items():
         assert len(d.draws) + sum(d.failures.values()) == d.n_attempted
     assert len(draws["beta"].draws) == 47 and draws["beta"].failures == {"separation": 3}
@@ -681,9 +730,9 @@ def test_G7_FIRES_on_it_and_the_CONVERGENCE_bucket_stays_ZERO():
                                                  n_in_model=40))
         except model.FitError as failure:
             collected.append(bootstrap.Replicate(
-                values={}, failures={"beta": bootstrap._bucket(str(failure))},
+                values={}, failures={"beta": bootstrap.bucket(str(failure))},
                 n_alpha=None, polr_iterations=None, sum_w=None, n_in_model=None))
-    draws = bootstrap._collect(tuple(collected), keys)
+    draws = bootstrap.collect(tuple(collected), keys)
     assert draws["beta"].failures.get("separation", 0) > 0
     assert draws["beta"].failures.get("nonconvergence", 0) == 0
 
@@ -697,8 +746,8 @@ def test_the_SINGLE_COUNTER_MUTATION_reads_zero_on_the_same_frame():
         outcome._assert_reportable(model.polr(X, y, w))
     single_counter = 1                                          # what a merged counter would report
     assert single_counter > 0                                   # ...and this says nothing
-    assert bootstrap._bucket(message_of(e)) == "separation"
-    assert bootstrap._bucket(message_of(e)) != "nonconvergence"
+    assert bootstrap.bucket(message_of(e)) == "separation"
+    assert bootstrap.bucket(message_of(e)) != "nonconvergence"
 
 
 @DATA_GATED
@@ -713,7 +762,12 @@ def test_the_workbooks_counters_read_zero_and_zero(run_once):
 
 # --- 15.6  the bucket map is scanned, not trusted --------------------------------------------------------
 
-FITERROR_MODULES: Final[tuple[str, ...]] = ("model.py", "outcome.py", "propensity.py")
+# Stage 11 §9 grows this scope in the same edit that adds G8 and G9 to `C.FAILURE_BUCKETS`. The
+# alternative — putting the two raises in `outcome.py` so the existing scope covered them — was
+# declined, because Stage 8 §12 makes `outcome.py` the only shipped module that may name the [§5]
+# primary outcome and a subgroup estimator in it would be that rule spent for a scan's convenience.
+FITERROR_MODULES: Final[tuple[str, ...]] = ("model.py", "outcome.py", "propensity.py",
+                                            "sensitivity.py")
 
 
 def raise_sites() -> list[tuple[str, int, str]]:
@@ -759,20 +813,24 @@ def test_the_scan_finds_NINETEEN_sites_and_the_SPECS_SIXTEEN_is_its_own_scope():
     re-scanning reproduces exactly those sixteen. What the specification's SCOPE omitted is
     `propensity.py`, which raises `model.FitError` three more times, with the tokens `ESS:` and
     `F5`, both on `propensity.fit`'s own path — which is precisely the path §7.1 says fails a WHOLE
-    replicate. Without them `_bucket` turns a droppable sparse replicate into a crash.
+    replicate. Without them `bucket` turns a droppable sparse replicate into a crash.
 
     Pinned as a COUNT PER MODULE rather than as a total, because that is what makes the departure
     legible rather than a number nobody can locate.
     """
     sites = raise_sites()
     per_module = {name: sum(1 for m, _, _ in sites if m == name) for name in FITERROR_MODULES}
-    assert per_module == {"model.py": 14, "outcome.py": 3, "propensity.py": 3}
-    assert len(sites) == 20
+    assert per_module == {"model.py": 14, "outcome.py": 3, "propensity.py": 3,
+                          "sensitivity.py": 2}
+    assert len(sites) == 22
     # `outcome.py` is THREE and not the specification's two, and the third is S8 — which §5.4 moved
     # from `SchemaError` to `FitError` in this very stage, so the specification's own count of the
     # sites it was creating is one behind itself.
     assert sorted(t for m, _, t in sites if m == "outcome.py") == ["G6", "G7", "S8"]
     assert sorted(set(t for m, _, t in sites if m == "propensity.py")) == ["ESS:", "F5"]
+    # Stage 11's two, and they are the G series continued — G8 the interaction column dropped as
+    # constant, G9 a REPORTED quantity reaching POLR_MAX_ABS_BETA (Stage 11 §9).
+    assert sorted(t for m, _, t in sites if m == "sensitivity.py") == ["G8", "G9"]
 
 
 def test_every_declared_bucket_token_is_ACTUALLY_RAISED_somewhere():
@@ -786,7 +844,7 @@ def test__bucket_RAISES_on_an_unrecognised_token_and_does_not_default():
     """A default would make the scan cosmetic: it would pass, the map would be incomplete, and the
     counter Stage 8 §11 asked to be separate would be silently merged (§15.6)."""
     with pytest.raises(config.SchemaError) as e:
-        bootstrap._bucket("Z9  a token from a raise site nobody declared")
+        bootstrap.bucket("Z9  a token from a raise site nobody declared")
     assert "Z9" in message_of(e)
 
 
@@ -794,7 +852,7 @@ def test__bucket_RAISES_on_an_unrecognised_token_and_does_not_default():
                                           ("polr:", "nonconvergence"), ("Firth:", "nonconvergence"),
                                           ("G6", "degenerate_design"), ("F5", "degenerate_design")])
 def test__bucket_maps_each_token_to_the_bucket_7_2_names(token, bucket):
-    assert bootstrap._bucket(f"{token}  a message") == bucket
+    assert bootstrap.bucket(f"{token}  a message") == bucket
 
 
 # --- 15.8  the interval, the p-value, and the definition `[roadmap, amended]` ----------------------------
@@ -1221,22 +1279,45 @@ def test_THE_FOUR_GENERAL_FUNCTIONS_name_NO_covariate_NO_outcome_and_NO_centre(f
     assert not forbidden & names, f"{function} names {sorted(forbidden & names)}"
 
 
-def test_the_public_surface_is_FIVE_NAMES_and_the_privates_are_the_declared_ONES():
+def test_the_public_surface_is_EIGHT_NAMES_and_the_privates_are_the_declared_ONES():
     """§3.2's count, re-derived rather than repeated. Stage 9 §22.3 item 5 records three drafts of
-    its own carrying three different private counts, which is what this assertion prevents."""
+    its own carrying three different private counts, which is what this assertion prevents.
+
+    **Stage 10 said five and twelve; Stage 11 §5.4 makes it eight and nine.** `bucket`, `collect`
+    and `diagnostics` went public rather than being written a second time in `sensitivity.py` — a
+    second classifier would be a second definition of the separation-versus-convergence split
+    Stage 8 §11 asked to be kept apart, a second `Draws` loop a second implementation of the
+    reconciliation property `Draws.__post_init__` exists to enforce, and a second tally a second
+    answer to "how many replicates fitted five cutpoints". Stages 12 and 13 are their third caller.
+    """
     tree = ast.parse(SOURCE)
     functions = [n.name for n in tree.body if isinstance(n, ast.FunctionDef)]
     public = [n for n in functions if not n.startswith("_")]
     private = [n for n in functions if n.startswith("_")]
-    assert public == ["resample", "replicates", "percentile_ci", "bootstrap_p", "run"]
-    # §3.2 counts twelve. This module has thirteen, and the thirteenth is `_padded` — §10.1's own
-    # requirement that the grid be concatenated and the short rows padded, which the specification
-    # describes and does not list, and which is a COPY of `propensity._padded` rather than an import
-    # of it precisely because §0.2's claim is that `propensity.py` is untouched.
+    assert public == ["resample", "replicates", "percentile_ci", "bootstrap_p",
+                      "bucket", "collect", "diagnostics", "run"]
+    # THE LIST IS THE COUNT, and the spec's number has been two short since Stage 10. §3.2 enumerates
+    # twelve privates and this module carries fourteen: the two it does not list are `_padded` and
+    # `_spread`, both of which §10.1 REQUIRES — the concatenated grid with its short rows padded, and
+    # the spread rendering — and describes without naming. Three of the fourteen are now public, so
+    # ELEVEN remain against Stage 11 §5.4's restated nine, and the gap is the same two.
     assert sorted(private) == sorted([
-        "_assert_run_inputs", "_replicate", "_bucket", "_collect", "_diagnostics", "_tested",
+        "_assert_run_inputs", "_replicate", "_tested",
         "_estimand_keys", "_shared_design", "_counters_table", "_diagnostics_table",
         "_replicates_detail", "_record_replicates", "_padded", "_spread"])
+
+
+def test_NO_FORWARDING_ALIAS_IS_LEFT_ON_ANY_OF_THE_THREE():
+    """Stage 11 §5.4: the three cease to exist under their private names rather than becoming
+    one-line forwarders, so a reader cannot find two spellings of one function and the rename is
+    provably complete rather than provably started."""
+    for gone in ("_bucket", "_collect", "_diagnostics"):
+        assert not hasattr(bootstrap, gone)
+    assert callable(bootstrap.bucket) and callable(bootstrap.collect)
+    assert callable(bootstrap.diagnostics)
+    # `_diagnostics_table` is a DIFFERENT name and is NOT renamed. A sweep matching `_diagnostics`
+    # without anchoring the open paren rewrites it wrongly (Stage 11 T5).
+    assert callable(bootstrap._diagnostics_table)
 
 
 def test_run_WRITES_NO_LOOP_OF_ITS_OWN_and_the_loop_is_replicates(boot_n):
@@ -1382,7 +1463,7 @@ def test_the_LOG_IS_BYTE_IDENTICAL_ACROSS_TWO_HASH_SEEDS(tmp_path):
     assert "bootstrap_replicates" in outputs[0]
 
 
-# --- 15.15  `_diagnostics`, and what a `None` means -------------------------------------------------------
+# --- 15.15  `diagnostics`, and what a `None` means -------------------------------------------------------
 
 def test_the_four_scalar_distributions_sum_to_the_LIVE_count_and_NOT_to_N_BOOT(monkeypatch, boot_n):
     """A `None` counted as a `0` would put a spurious mode at zero in three distributions at once

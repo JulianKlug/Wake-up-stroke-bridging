@@ -868,6 +868,63 @@ def test_FAILURE_BUCKETS_values_are_exactly_the_four_declared_buckets():
         "separation", "constant_outcome", "nonconvergence", "degenerate_design"}
     assert config.FAILURE_BUCKETS["G7"] == "separation"
     assert config.FAILURE_BUCKETS["S8"] == "constant_outcome"
+    # Stage 11 §9 adds two tokens and NOT a fifth bucket: G8 is a design that lost a column and G9
+    # is G7's guard on a different set of coefficients, so the four values above are unchanged.
+    assert config.FAILURE_BUCKETS["G8"] == "degenerate_design"
+    assert config.FAILURE_BUCKETS["G9"] == "separation"
+
+
+# --- Stage 11 §15.10  the registry has exactly two, and a third cannot appear un-spec'd -------------
+
+def test_the_propensity_specification_registry_holds_exactly_the_two_declared_ones():
+    """[§13] lists SIX propensity-and-population rows and DECISION 4 promoted exactly ONE.
+
+    Pinned by identity and by length, so a third specification cannot arrive without this test
+    failing — which is the point: a third row is a [§13] amendment and not an import-time addition
+    (Stage 11 §0.2, §4.2).
+    """
+    assert config.PROPENSITY_SPECIFICATIONS == (
+        config.PROPENSITY_PRIMARY, config.PROPENSITY_FULL)
+    assert len(config.PROPENSITY_SPECIFICATIONS) == 2
+
+
+def test_the_full_specification_is_the_primary_plus_the_negative_controls():
+    """"It spends the negative controls" as a static check rather than a sentence (Stage 11 §5.3)."""
+    assert (config.PROPENSITY_FULL.covariates
+            == config.PROPENSITY_PRIMARY.covariates + config.NEGATIVE_CONTROLS)
+    assert config.PROPENSITY_PRIMARY.covariates is config.PS_COVARIATES
+    assert config.PROPENSITY_FULL.covariates is config.PS_COVARIATES_FULL
+
+
+def test_exactly_one_specification_has_an_empty_suffix_and_all_suffixes_are_distinct():
+    """`Audit.entry` is first-match (data.py:273-275), so two specifications sharing a suffix make
+    every programmatic read return the first one's entry while the rendered log looks complete
+    (Stage 11 §4.4). The EMPTY suffix is the primary's, so no landed step name moves."""
+    suffixes = [spec.suffix for spec in config.PROPENSITY_SPECIFICATIONS]
+    assert suffixes.count("") == 1
+    assert config.PROPENSITY_PRIMARY.suffix == ""
+    assert len(set(suffixes)) == len(suffixes)
+
+
+def test_step_leaves_a_landed_step_name_byte_identical_under_the_primary_specification():
+    for base in ("covariate_completeness", "design_matrix", "propensity_fit", "overlap_weights",
+                 "balance_smd", "overlap_by_centre", "outcome_completeness", "primary_fit",
+                 "cumulative_rd"):
+        assert config.PROPENSITY_PRIMARY.step(base) == base
+        assert config.PROPENSITY_FULL.step(base) == f"{base}_full_covariate"
+
+
+def test_a_specification_rejects_attribute_assignment():
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        config.PROPENSITY_PRIMARY.label = "something else"       # type: ignore[misc]
+
+
+def test_no_subgroup_name_is_in_either_declared_specification():
+    """`config.py`'s own assertion, read through the registry rather than through the two tuples:
+    a subgroup cannot become an adjustment variable by a specification being convenient
+    (Stage 11 §8.2)."""
+    for spec in config.PROPENSITY_SPECIFICATIONS:
+        assert not set(spec.covariates) & set(config.SUBGROUPS)
 
 
 def test_sex_labels_stay_none_until_the_query_is_answered():

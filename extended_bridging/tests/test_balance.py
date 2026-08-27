@@ -385,7 +385,8 @@ def test_the_table_has_one_row_per_declared_level_and_the_decomposition_is_fourt
     df, ps, _ = fitted()
     sub = df.loc[ps.in_model]
     rows = balance._table(sub, sub[config.TREATMENT].to_numpy(dtype=float),
-                          ps.w.loc[ps.in_model].to_numpy(dtype=float), config.BALANCE_SET)
+                          ps.w.loc[ps.in_model].to_numpy(dtype=float), config.BALANCE_SET,
+                          config.PROPENSITY_PRIMARY)
     assert len(rows) == declared_level_count()
 
     from_ps = sum(len(config.FACTOR_LEVELS[c]) if c in config.CATEGORICAL else 1
@@ -400,7 +401,8 @@ def test_the_three_roles_partition_the_table_with_no_row_unlabelled():
     df, ps, _ = fitted()
     sub = df.loc[ps.in_model]
     rows = balance._table(sub, sub[config.TREATMENT].to_numpy(dtype=float),
-                          ps.w.loc[ps.in_model].to_numpy(dtype=float), config.BALANCE_SET)
+                          ps.w.loc[ps.in_model].to_numpy(dtype=float), config.BALANCE_SET,
+                          config.PROPENSITY_PRIMARY)
     counts = {role: sum(1 for row in rows if row.role == role)
               for role in ("propensity model", "negative control", "excluded [§6]")}
     assert counts == {"propensity model": 14, "negative control": 4, "excluded [§6]": 1}
@@ -416,13 +418,79 @@ def test_penumbra_ml_is_in_the_table_and_is_NOT_a_negative_control():
     """
     assert "penumbra_ml" in config.BALANCE_ONLY
     assert "penumbra_ml" not in config.NEGATIVE_CONTROLS
-    assert balance._role("penumbra_ml") == "excluded [§6]"
+    assert balance._role("penumbra_ml", config.PROPENSITY_PRIMARY) == "excluded [§6]"
     assert set(config.BALANCE_ONLY) - set(config.NEGATIVE_CONTROLS) == {"penumbra_ml"}
 
 
 @pytest.mark.parametrize("name", config.NEGATIVE_CONTROLS)
 def test_every_vascular_risk_factor_is_a_negative_control(name):
-    assert balance._role(name) == "negative control"
+    assert balance._role(name, config.PROPENSITY_PRIMARY) == "negative control"
+
+
+# --- Stage 11 §15.3  the role column moves with the specification and the table does not -------------
+
+@pytest.mark.parametrize("name", config.NEGATIVE_CONTROLS)
+def test_every_vascular_risk_factor_STOPS_being_a_control_under_the_full_specification(name):
+    """[§13]'s arm SPENDS the negative controls, and `_role`'s first branch is what spends them.
+
+    Stage 7 §11 promised exactly this — the role column moves and the table does not — and it is
+    what the whole seam buys: `assess` keeps its signature, `BALANCE_SET` does not move, and one
+    column reads differently because the `Propensity` says which specification it came from.
+    """
+    assert balance._role(name, config.PROPENSITY_FULL) == "propensity model"
+
+
+def test_penumbra_ml_is_excluded_under_BOTH_declared_specifications():
+    """The only covariate in no propensity model at all, and after the arm the only negative control
+    the analysis has left is none — which is what [§13] means by "the controls have already served
+    their purpose" (Stage 11 §5.3)."""
+    for spec in config.PROPENSITY_SPECIFICATIONS:
+        assert balance._role("penumbra_ml", spec) == "excluded [§6]"
+
+
+def test_the_two_specifications_give_the_SAME_rows_in_the_SAME_order_with_four_re_roled():
+    df, ps, audit = fitted()
+    arm = propensity.fit_full(df, audit)
+    primary_rows = balance.assess(df, ps, audit).covariates
+    arm_rows = balance.assess(df, arm, audit).covariates
+
+    assert [r.covariate for r in primary_rows] == [r.covariate for r in arm_rows]
+    moved = {a.covariate for a, b in zip(primary_rows, arm_rows) if a.role != b.role}
+    assert moved == set(config.NEGATIVE_CONTROLS)
+    # and nothing but the role moved: the SMDs are the specification's own, so they DO move, but the
+    # shape of the table is a property of BALANCE_SET alone (Stage 7 §4.1).
+    assert len(primary_rows) == len(arm_rows) == declared_level_count()
+
+
+def test_the_role_strings_are_module_constants_and_not_literals_at_two_sites():
+    """Stage 14 matches on `row.role` BY VALUE across two `Balance` objects, which is
+    `CentreOverlap.status`' own argument one stage on (Stage 11 §4.4)."""
+    assert (balance._IN_MODEL, balance._CONTROL, balance._EXCLUDED) == (
+        "propensity model", "negative control", "excluded [§6]")
+    assert {balance._IN_MODEL, balance._CONTROL, balance._EXCLUDED} == {
+        row.role for row in balance._table(
+            *_table_arguments(), config.BALANCE_SET, config.PROPENSITY_PRIMARY)}
+
+
+def _table_arguments():
+    df, ps, _ = fitted()
+    sub = df.loc[ps.in_model]
+    return (sub, sub[config.TREATMENT].to_numpy(dtype=float),
+            ps.w.loc[ps.in_model].to_numpy(dtype=float))
+
+
+def test_the_balance_carries_the_specification_it_diagnoses():
+    df, ps, audit = fitted()
+    assert balance.assess(df, ps, audit).spec is config.PROPENSITY_PRIMARY
+    arm = propensity.fit_full(df, audit)
+    assert balance.assess(df, arm, audit).spec is config.PROPENSITY_FULL
+
+
+def test_assess_reads_the_specification_off_the_Propensity_and_takes_no_keyword_for_it():
+    """A `spec=` keyword would be a second place the specification could be named, one edit away
+    from a table whose roles describe a different fit than its SMDs (Stage 11 §4.4)."""
+    assert list(inspect.signature(balance.assess).parameters) == ["df", "ps", "audit"]
+    assert "C.PS_COVARIATES" not in MODULE.read_text(encoding="utf-8")
 
 
 def test_a_fifth_risk_factor_becomes_a_negative_control_by_being_declared():
@@ -474,7 +542,7 @@ def test_the_reference_levels_model_design_drops_are_PRESENT_here():
     sub = df.loc[ps.in_model]
     labels = [row.covariate for row in balance._table(
         sub, sub[config.TREATMENT].to_numpy(dtype=float),
-        ps.w.loc[ps.in_model].to_numpy(dtype=float), config.BALANCE_SET)]
+        ps.w.loc[ps.in_model].to_numpy(dtype=float), config.BALANCE_SET, config.PROPENSITY_PRIMARY)]
     for factor, level in config.REFERENCE_LEVELS.items():
         assert f"{factor} = {level}" in labels
     assert "center = HUG" in labels and "onset_type = witnessed" in labels
@@ -512,7 +580,8 @@ def test_the_design_shortcut_is_SIXTEEN_rows_and_omits_exactly_the_three_indicat
     df, ps, _ = workbook
     sub = df.loc[ps.in_model]
     rows = balance._table(sub, sub[config.TREATMENT].to_numpy(dtype=float),
-                          ps.w.loc[ps.in_model].to_numpy(dtype=float), config.BALANCE_SET)
+                          ps.w.loc[ps.in_model].to_numpy(dtype=float), config.BALANCE_SET,
+                          config.PROPENSITY_PRIMARY)
     columns = design_column_names(sub, config.BALANCE_SET)
     assert len(rows) == 19 and len(columns) == 16
 
@@ -625,7 +694,8 @@ def pooled_yardstick(df: pd.DataFrame, ps: propensity.Propensity) -> dict[str, f
     """§5.5's one yardstick, harvested from the table over `in_model` exactly as §8 harvests it."""
     sub = df.loc[ps.in_model]
     rows = balance._table(sub, sub[config.TREATMENT].to_numpy(dtype=float),
-                          ps.w.loc[ps.in_model].to_numpy(dtype=float), config.BALANCE_SET)
+                          ps.w.loc[ps.in_model].to_numpy(dtype=float), config.BALANCE_SET,
+                          config.PROPENSITY_PRIMARY)
     return {row.covariate: row.sd for row in rows}
 
 
@@ -727,7 +797,7 @@ def test_a_centre_rows_sd_is_the_POOLED_one_and_never_the_centres_own():
     rows = balance._table(
         sub, sub[config.TREATMENT].to_numpy(dtype=float),
         ps.w.loc[(df["center"] == centre) & ps.in_model].to_numpy(dtype=float),
-        [c for c in config.BALANCE_SET if c != "center"], sds)
+        [c for c in config.BALANCE_SET if c != "center"], config.PROPENSITY_PRIMARY, sds)
     for row in rows:
         assert (row.sd == sds[row.covariate]) or (np.isnan(row.sd) and np.isnan(sds[row.covariate]))
         # and every label really is a key of `sds`, so `_table`'s .get fallback is measured inert
@@ -742,12 +812,13 @@ def test_the_centre_indicators_are_dropped_INSIDE_a_centre_and_judged_pooled():
     names = [c for c in config.BALANCE_SET if c != "center"]
     labels = [row.covariate for row in balance._table(
         df.loc[at], df.loc[at, config.TREATMENT].to_numpy(dtype=float),
-        ps.w.loc[at].to_numpy(dtype=float), names, sds)]
+        ps.w.loc[at].to_numpy(dtype=float), names, config.PROPENSITY_PRIMARY, sds)]
     assert not any(label.startswith("center = ") for label in labels)
     # and pooled they are judged: the whole declared set, centre levels included
     pooled_labels = [row.covariate for row in balance._table(
         df.loc[ps.in_model], df.loc[ps.in_model, config.TREATMENT].to_numpy(dtype=float),
-        ps.w.loc[ps.in_model].to_numpy(dtype=float), config.BALANCE_SET, sds)]
+        ps.w.loc[ps.in_model].to_numpy(dtype=float), config.BALANCE_SET,
+        config.PROPENSITY_PRIMARY, sds)]
     assert "center = HUG" in pooled_labels
 
 
@@ -948,7 +1019,8 @@ def balance_with(rows):
     """A `Balance` over hand-built covariate rows, with a real `CentreOverlap` for `pooled`."""
     df, ps, _ = fitted()
     pooled = balance._centre(df, ps, None, pooled_yardstick(df, ps))
-    return balance.Balance(covariates=tuple(rows), centres=(), pooled=pooled)
+    return balance.Balance(covariates=tuple(rows), centres=(), pooled=pooled,
+                           spec=config.PROPENSITY_PRIMARY)
 
 
 def test_unbalanced_excludes_the_undefined_rows_and_worst_returns_them_instead():
@@ -1065,8 +1137,10 @@ def test_the_within_centre_worst_is_on_the_POOLED_yardstick_and_the_local_one_wo
         at = (df["center"] == row.centre) & ps.in_model
         arms = df.loc[at, config.TREATMENT].to_numpy(dtype=float)
         weights = ps.w.loc[at].to_numpy(dtype=float)
-        pooled_rows = balance._table(df.loc[at], arms, weights, names, sds)
-        local_rows = balance._table(df.loc[at], arms, weights, names)      # sds=None — the defect
+        pooled_rows = balance._table(
+            df.loc[at], arms, weights, names, config.PROPENSITY_PRIMARY, sds)
+        local_rows = balance._table(                                   # sds=None — the defect
+            df.loc[at], arms, weights, names, config.PROPENSITY_PRIMARY)
 
         assert row.worst == pytest.approx(expected[row.centre], abs=5e-4)
         worst_pooled = max((r for r in pooled_rows if np.isfinite(r.weighted)),
@@ -1087,7 +1161,8 @@ def test_a_centre_rows_sd_equals_the_pooled_rows_for_the_same_covariate_on_the_w
     at = (df["center"] == "HUG") & ps.in_model
     rows = balance._table(df.loc[at], df.loc[at, config.TREATMENT].to_numpy(dtype=float),
                           ps.w.loc[at].to_numpy(dtype=float),
-                          [c for c in config.BALANCE_SET if c != "center"], sds)
+                          [c for c in config.BALANCE_SET if c != "center"],
+                          config.PROPENSITY_PRIMARY, sds)
     for row in rows:
         assert row.sd == sds[row.covariate]
 
@@ -1105,7 +1180,7 @@ def test_dropping_the_centre_indicators_inside_a_centre_changes_no_centres_worst
         at = (df["center"] == row.centre) & ps.in_model
         with_centre = balance._table(
             df.loc[at], df.loc[at, config.TREATMENT].to_numpy(dtype=float),
-            ps.w.loc[at].to_numpy(dtype=float), config.BALANCE_SET, sds)
+            ps.w.loc[at].to_numpy(dtype=float), config.BALANCE_SET, config.PROPENSITY_PRIMARY, sds)
         defined = [r.weighted for r in with_centre if np.isfinite(r.weighted)]
         assert max(defined, key=abs) == pytest.approx(row.worst, abs=1e-12)
 
@@ -1509,7 +1584,8 @@ def misaligned_propensity(ps: propensity.Propensity, which: str) -> propensity.P
         e=shifted(ps.e) if which == "e" else ps.e,
         w=shifted(ps.w) if which == "w" else ps.w,
         in_model=shifted(ps.in_model) if which == "in_model" else ps.in_model,
-        ess=ps.ess, fit=ps.fit, dropped=ps.dropped)
+        ess=ps.ess, fit=ps.fit, dropped=ps.dropped,
+        spec=config.PROPENSITY_PRIMARY)
 
 
 @pytest.mark.parametrize("which", ["e", "w", "in_model"])
@@ -1563,12 +1639,13 @@ def test_WITHOUT_B1_ENTIRELY_the_positional_read_produces_a_COMPLETE_FINITE_tabl
     sub = df.loc[ps.in_model]
     a = sub[config.TREATMENT].to_numpy(dtype=float)
     wrong = ps.w.loc[ps.in_model].to_numpy(dtype=float)[::-1]      # the same values, wrong records
-    rows = balance._table(sub, a, wrong, config.BALANCE_SET)
+    rows = balance._table(sub, a, wrong, config.BALANCE_SET, config.PROPENSITY_PRIMARY)
     assert len(rows) == declared_level_count()
     assert all(np.isfinite(row.weighted) for row in rows)
     # and it disagrees with the truth, silently
     right = {row.covariate: row.weighted for row in balance._table(
-        sub, a, ps.w.loc[ps.in_model].to_numpy(dtype=float), config.BALANCE_SET)}
+        sub, a, ps.w.loc[ps.in_model].to_numpy(dtype=float), config.BALANCE_SET,
+        config.PROPENSITY_PRIMARY)}
     assert any(row.weighted != right[row.covariate] for row in rows)
 
 
@@ -1576,7 +1653,8 @@ def three_valued_mask(ps: propensity.Propensity) -> propensity.Propensity:
     mask = ps.in_model.astype("object")
     mask.iloc[0] = pd.NA
     return propensity.Propensity(e=ps.e, w=ps.w, in_model=mask, ess=ps.ess, fit=ps.fit,
-                                 dropped=ps.dropped)
+                                 dropped=ps.dropped,
+                                 spec=config.PROPENSITY_PRIMARY)
 
 
 def test_B2_fires_on_a_three_valued_mask_and_records_nothing():
@@ -1663,7 +1741,8 @@ def test_B5_fires_when_in_model_leaves_one_arm_and_names_both_arms_and_their_cou
     single = propensity.Propensity(
         e=ps.e, w=ps.w,
         in_model=(ps.in_model & (df[config.TREATMENT] == 1)).astype(bool),
-        ess=ps.ess, fit=ps.fit, dropped=ps.dropped)
+        ess=ps.ess, fit=ps.fit, dropped=ps.dropped,
+        spec=config.PROPENSITY_PRIMARY)
     with pytest.raises(config.SchemaError) as excinfo:
         balance.assess(df, single, audit)
     message = message_of(excinfo)
@@ -1692,7 +1771,8 @@ def test_phase_two_collects_B4_and_B5_together(monkeypatch):
     single = propensity.Propensity(
         e=ps.e, w=ps.w,
         in_model=(ps.in_model & (df[config.TREATMENT] == 1)).astype(bool),
-        ess=ps.ess, fit=ps.fit, dropped=ps.dropped)
+        ess=ps.ess, fit=ps.fit, dropped=ps.dropped,
+        spec=config.PROPENSITY_PRIMARY)
     with pytest.raises(config.SchemaError) as excinfo:
         balance.assess(df, single, audit)
     message = message_of(excinfo)
@@ -1835,7 +1915,8 @@ def test_an_unpenalised_MLE_score_balances_every_in_model_row_and_the_FIRTH_scor
     w = pd.Series(np.nan, index=df.index, dtype="float64")
     w.loc[ps.in_model] = np.where(a == 1.0, 1.0 - e.loc[ps.in_model], e.loc[ps.in_model])
     unpenalised = propensity.Propensity(e=e, w=w, in_model=ps.in_model, ess=ps.ess, fit=ps.fit,
-                                        dropped=ps.dropped)
+                                        dropped=ps.dropped,
+                                        spec=config.PROPENSITY_PRIMARY)
 
     # a FRESH Audit: this companion is an oracle and must not append to the pipeline's log
     mle_balance = balance.assess(df, unpenalised, data.Audit(data.WORKBOOK))
@@ -1910,5 +1991,9 @@ def test_every_count_in_both_details_is_interpolated_and_never_written_out():
     detail_source = source[source.index("def _smd_detail"):source.index("def _overlap_detail")]
     for written_out in ("four vascular", "19 declared", "14 [§6]", "0.10 after"):
         assert written_out not in detail_source
-    assert "len(C.NEGATIVE_CONTROLS)" in detail_source
+    # Stage 11 §4.3 moves this one further than §21.4's finding 7 did. `len(C.NEGATIVE_CONTROLS)` is
+    # a CONFIGURATION count and is false in the [§13] arm, where all of them are adjusted for — so
+    # the sentence counts the rows THIS table gave the control role, and reads zero in the arm.
+    assert "len(C.NEGATIVE_CONTROLS)" not in detail_source
+    assert "row.role == _CONTROL" in detail_source
     assert "len(C.BALANCE_SET)" in detail_source

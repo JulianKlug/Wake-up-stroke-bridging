@@ -412,6 +412,71 @@ def test_THE_CONTRAST_blanking_a_PS_COVARIATE_moves_BOTH_masks_together():
     assert audit.entry("model", "outcome_completeness").n == 0   # the outcome mask removed nobody
 
 
+# --- Stage 11 §15.7  the [§11] mask is ONE definition, and it is public --------------------------------
+
+def _masked():
+    """(df, ps, audit) over the ordinal fixture cohort — the frame this stage can actually fit."""
+    df, audit = built(ordinal_cohort())
+    return df, propensity.fit(df, audit), audit
+
+
+def test_estimation_population_IS_the_mask_primary_binds():
+    """The extraction is proved EQUIVALENT and not merely intended to be (Stage 11 §8.5, §15.12).
+
+    Stage 11's subgroup replicate body needs this mask on a drawn frame and cannot have the `Primary`
+    that carries it without paying for a primary fit it does not read. So the mask became a named
+    definition with two callers — and the one thing that could go wrong is the extraction not being
+    the same mask, which would move every downstream number at once.
+    """
+    df, ps, audit = _masked()
+    mask = outcome.estimation_population(df, ps)
+    est = outcome.primary(df, ps, audit)
+    assert mask.equals(est.in_estimate)
+    assert mask.dtype == bool and not mask.isna().any()          # boolean and TOTAL — §4.1
+    assert mask.index.equals(df.index)
+
+
+def test_estimation_population_is_in_model_AND_the_outcome_being_present():
+    """A THIRD population and not a restatement of `in_model`: a record with complete covariates and
+    a missing outcome keeps its weight and loses its estimate (§4.1)."""
+    df, ps, _ = _masked()
+    blanked = df.copy()
+    blanked[config.PRIMARY_OUTCOME] = blanked[config.PRIMARY_OUTCOME].astype("Int64")
+    blanked.loc[blanked.index[0], config.PRIMARY_OUTCOME] = pd.NA
+    mask = outcome.estimation_population(blanked, ps)
+    assert int(mask.sum()) == int(ps.in_model.sum()) - int(bool(ps.in_model.iloc[0]))
+    assert (mask <= ps.in_model).all()
+
+
+def test_the_mask_is_SPELLED_ONCE_in_the_module():
+    """`primary` and `_assert_primary_inputs` both need it, and Stage 11 §6.1 rejects exactly this
+    shape for the family partition: two computations of one prespecified thing with nothing
+    asserting they agree."""
+    assert SOURCE.count("ps.in_model & df[C.PRIMARY_OUTCOME].notna()") == 1
+    definition = SOURCE[SOURCE.index("def estimation_population"):]
+    definition = definition[:definition.index("\n\n\n")]
+    assert "ps.in_model & df[C.PRIMARY_OUTCOME].notna()" in definition
+
+
+def test_the_three_primary_step_names_go_through_the_specification():
+    """`primary` is called TWICE over one cohort from Stage 11 onward and `Audit.entry` is
+    first-match, so two unsuffixed `primary_fit` entries would make every programmatic read return
+    the [§7] estimate's while the rendered log looked complete (Stage 11 §4.4, §10)."""
+    df, ps, audit = _masked()
+    before = len(audit.entries)
+    outcome.primary(df, ps, audit)
+    primary_steps = [e.step for e in audit.entries[before:]]
+    assert primary_steps == ["outcome_completeness", "primary_fit", "cumulative_rd"]
+
+    arm = propensity.fit_full(df, audit)
+    between = len(audit.entries)
+    outcome.primary(df, arm, audit)
+    arm_steps = [e.step for e in audit.entries[between:]]
+    assert arm_steps == [f"{base}_full_covariate" for base in primary_steps]
+    assert not set(primary_steps) & set(arm_steps)
+    assert audit.entry("model", "primary_fit").n == int(ps.in_model.sum())
+
+
 # --- 14.5  the orientation, and the sign every reference implementation has [roadmap] -------------------
 
 def test_THE_ORIENTATION_CRITERION_on_a_construction_whose_truth_is_KNOWN():
@@ -1535,12 +1600,33 @@ def test_model_names_no_ivt_or_mrs_STRING_LITERAL():
     assert [s for s in body if "ivt" in s or "mrs_" in s] == []
 
 
-def test_outcome_is_the_ONLY_SHIPPED_MODULE_naming_PRIMARY_OUTCOME():
+def test_only_outcome_and_sensitivity_NAME_PRIMARY_OUTCOME_and_the_second_is_SPENT_DELIBERATELY():
+    """Stage 8 §12's rule, and Stage 11 spends it once — from the side that section did not consider.
+
+    §12 made `outcome.py` the only shipped module that may name the [§5] primary outcome, so that no
+    second estimator of it could appear anywhere else. Stage 11 §9 quotes the rule from the other
+    direction, declining to put the subgroup `FitError` raises in `outcome.py` because *"a subgroup
+    estimator in it would be that rule spent for a scan's convenience"* — and then implements the
+    subgroup estimator in `sensitivity.py`, which must therefore name the response it fits.
+
+    **It is unavoidable and it is bounded.** [§13]'s subgroup clause is explicitly *on the primary
+    outcome*, so the module implementing it names the primary outcome or takes the column from a
+    parameter no prespecified signature has. What the rule EXISTS to prevent is preserved and is
+    asserted below: `sensitivity.py` names no OTHER [§5] outcome key, and the only ordinal fit it
+    performs is the [§13] interaction design — the primary estimate itself is `outcome.primary`'s and
+    is called, never reimplemented.
+    """
     shipped = sorted(p for p in MODULE_DIR.glob("*.py"))
     naming = [p.name for p in shipped
               if "PRIMARY_OUTCOME" in p.read_text(encoding="utf-8") and p.name != "config.py"]
-    assert naming == ["outcome.py"]
+    assert naming == ["outcome.py", "sensitivity.py"]
     assert "PRIMARY_OUTCOME" not in (MODULE_DIR / "model.py").read_text(encoding="utf-8")
+
+    sensitivity_source = (MODULE_DIR / "sensitivity.py").read_text(encoding="utf-8")
+    for key in config.BINARY_OUTCOMES:
+        assert key not in sensitivity_source
+    assert "outcome.primary(" in sensitivity_source              # called, never reimplemented
+    assert sensitivity_source.count("model.polr(") == 1          # the ONE fit Stage 11 adds
 
 
 # --- 14.14  the preconditions ---------------------------------------------------------------------------
@@ -1549,7 +1635,8 @@ def _reindexed(ps: propensity.Propensity, which: str, index) -> propensity.Prope
     """`ps` with ONE of its three Series carried on a different index. §14.14."""
     fields = {"e": ps.e, "w": ps.w, "in_model": ps.in_model}
     fields[which] = fields[which].reindex(index)
-    return propensity.Propensity(**fields, ess=ps.ess, fit=ps.fit, dropped=ps.dropped)
+    return propensity.Propensity(**fields, ess=ps.ess, fit=ps.fit, dropped=ps.dropped,
+                                 spec=config.PROPENSITY_PRIMARY)
 
 
 MISALIGNMENTS = {
@@ -1638,7 +1725,8 @@ def test_G2_fires_on_a_three_valued_mask(blank):
     mask = ps.in_model.astype(object)
     mask.iloc[0] = blank
     bad = propensity.Propensity(e=ps.e, w=ps.w, in_model=mask, ess=ps.ess, fit=ps.fit,
-                                dropped=ps.dropped)
+                                dropped=ps.dropped,
+                                spec=config.PROPENSITY_PRIMARY)
     with pytest.raises(config.SchemaError) as e:
         outcome.primary(df, bad, audit)
     assert "G2" in message_of(e) and "boolean and TOTAL" in message_of(e)
@@ -1701,7 +1789,8 @@ def test_G4_fires_on_a_one_armed_estimation_population_naming_BOTH_arms_and_thei
     one_armed = df[df[config.TREATMENT] == 1]
     ps_one = propensity.Propensity(
         e=ps.e.loc[one_armed.index], w=ps.w.loc[one_armed.index],
-        in_model=ps.in_model.loc[one_armed.index], ess=ps.ess, fit=ps.fit, dropped=ps.dropped)
+        in_model=ps.in_model.loc[one_armed.index], ess=ps.ess, fit=ps.fit, dropped=ps.dropped,
+        spec=config.PROPENSITY_PRIMARY)
     with pytest.raises(config.SchemaError) as e:
         outcome.primary(one_armed, ps_one, audit)
     text = message_of(e)
@@ -1724,7 +1813,8 @@ def test_G5_fires_on_a_HAND_BUILT_propensity_with_a_nan_weight_inside_in_estimat
     w = ps.w.copy()
     w.iloc[0] = np.nan
     bad = propensity.Propensity(e=ps.e, w=w, in_model=ps.in_model, ess=ps.ess, fit=ps.fit,
-                                dropped=ps.dropped)
+                                dropped=ps.dropped,
+                                spec=config.PROPENSITY_PRIMARY)
     with pytest.raises(config.SchemaError) as e:
         outcome.primary(df, bad, audit)
     text = message_of(e)
@@ -1769,18 +1859,21 @@ def _broken(kind: str):
         mask = ps.in_model.astype(object)
         mask.iloc[0] = pd.NA
         return df, propensity.Propensity(e=ps.e, w=ps.w, in_model=mask, ess=ps.ess, fit=ps.fit,
-                                         dropped=ps.dropped), audit
+                                         dropped=ps.dropped,
+                                         spec=config.PROPENSITY_PRIMARY), audit
     if kind == "G3":
         return df.drop(columns=[config.TREATMENT]), ps, audit
     if kind == "G4":
         one = df[df[config.TREATMENT] == 1]
         return one, propensity.Propensity(
             e=ps.e.loc[one.index], w=ps.w.loc[one.index], in_model=ps.in_model.loc[one.index],
-            ess=ps.ess, fit=ps.fit, dropped=ps.dropped), audit
+            ess=ps.ess, fit=ps.fit, dropped=ps.dropped,
+            spec=config.PROPENSITY_PRIMARY), audit
     w = ps.w.copy()
     w.iloc[0] = np.nan
     return df, propensity.Propensity(e=ps.e, w=w, in_model=ps.in_model, ess=ps.ess, fit=ps.fit,
-                                     dropped=ps.dropped), audit
+                                     dropped=ps.dropped,
+                                     spec=config.PROPENSITY_PRIMARY), audit
 
 
 @pytest.mark.parametrize("kind", G1_TO_G5)
@@ -1825,7 +1918,8 @@ def test_a_frame_failing_G1_AND_G4_reports_ONLY_G1_and_says_the_others_were_not_
     ps = propensity.fit(df, audit)
     one = df[df[config.TREATMENT] == 1]
     bad = propensity.Propensity(
-        e=ps.e, w=ps.w, in_model=ps.in_model, ess=ps.ess, fit=ps.fit, dropped=ps.dropped)
+        e=ps.e, w=ps.w, in_model=ps.in_model, ess=ps.ess, fit=ps.fit, dropped=ps.dropped,
+        spec=config.PROPENSITY_PRIMARY)
     with pytest.raises(config.SchemaError) as e:
         outcome.primary(one, bad, audit)
     text = message_of(e)
@@ -1842,7 +1936,8 @@ def test_G1_and_G2_together_give_ONE_error_naming_TWO():
     mask = ps.in_model.astype(object)
     mask.iloc[0] = pd.NA
     bad = propensity.Propensity(e=ps.e, w=ps.w.reindex(df.index[::-1]), in_model=mask,
-                                ess=ps.ess, fit=ps.fit, dropped=ps.dropped)
+                                ess=ps.ess, fit=ps.fit, dropped=ps.dropped,
+                                spec=config.PROPENSITY_PRIMARY)
     with pytest.raises(config.SchemaError) as e:
         outcome.primary(df, bad, audit)
     text = message_of(e)
@@ -1858,7 +1953,8 @@ def test_G4_and_G5_together_give_ONE_error_naming_TWO():
     w.iloc[0] = np.nan
     bad = propensity.Propensity(
         e=ps.e.loc[one.index], w=w, in_model=ps.in_model.loc[one.index],
-        ess=ps.ess, fit=ps.fit, dropped=ps.dropped)
+        ess=ps.ess, fit=ps.fit, dropped=ps.dropped,
+        spec=config.PROPENSITY_PRIMARY)
     with pytest.raises(config.SchemaError) as e:
         outcome.primary(one, bad, audit)
     text = message_of(e)
@@ -2009,7 +2105,8 @@ def hand_propensity(df: pd.DataFrame, out: int = 0) -> propensity.Propensity:
         e=e.where(in_model), w=w.where(in_model), in_model=in_model,
         ess={code: float(w[in_model & (df[config.TREATMENT] == code)].sum())
              for code in config.TREATMENT_LABELS},
-        fit=None, dropped=())
+        fit=None, dropped=(),
+        spec=config.PROPENSITY_PRIMARY)
 
 
 def golden_propensity(df: pd.DataFrame) -> propensity.Propensity:
@@ -2030,7 +2127,8 @@ def golden_propensity(df: pd.DataFrame) -> propensity.Propensity:
         e=e, w=w, in_model=in_model,
         ess={code: float(w[df[config.TREATMENT] == code].sum())
              for code in config.TREATMENT_LABELS},
-        fit=None, dropped=())
+        fit=None, dropped=(),
+        spec=config.PROPENSITY_PRIMARY)
 
 
 def secondary_run(df=None, ps=None, **kwargs):

@@ -345,6 +345,25 @@ FAILURE_BUCKETS: Final[dict[str, str]] = {
     "O4": "degenerate_design", "O5": "degenerate_design", "O6": "degenerate_design",
     "F3": "degenerate_design", "F4": "degenerate_design", "F6": "degenerate_design",
     "F5": "degenerate_design", "ESS:": "degenerate_design",
+    # Two tokens added for Stage 11, and the scan scope grows with them [Stage 11 §9].
+    #
+    # G8 is the treatment x subgroup interaction column dropped as CONSTANT — no treated patient at
+    # the named level — which model.design removes silently, after which polr fits a two-column
+    # model, converges, and returns a result in which gamma does not exist. Measured 0 of 2000 on
+    # this cohort and specified anyway, because the route that DOES fire is a different one: an
+    # empty (A=1, S=0) cell makes A and A x S identical rather than constant, which is rank
+    # deficiency and which O6 already catches and already buckets. Both are degenerate_design: the
+    # design lost a column, one visibly and one to collinearity.
+    #
+    # G9 is a REPORTED quantity reaching POLR_MAX_ABS_BETA — max(|beta|, |gamma|, |beta+gamma|), and
+    # deliberately NOT |delta|, which is a nuisance that grows legitimately when a level's outcome
+    # distribution is concentrated. It is `separation` and not `nonconvergence` because it is G7's
+    # guard on a different set of coefficients, and Stage 8 §11 requires the two counters kept
+    # apart. Measured 239 of 1989 fitted replicates on `unknown_onset` and 0 on
+    # `core_above_median`: this bound is NOT inert, and five treated patients at witnessed onset is
+    # why [Stage 11 §8.4].
+    "G8": "degenerate_design",
+    "G9": "separation",
 }
 
 
@@ -570,6 +589,61 @@ PS_COVARIATES_FULL: Final[tuple[str, ...]] = PS_COVARIATES + (
 # PS_COVARIATES_FULL becomes a negative control here in the same edit, and cannot fail to.
 NEGATIVE_CONTROLS: Final[tuple[str, ...]] = tuple(
     c for c in PS_COVARIATES_FULL if c not in PS_COVARIATES)
+
+# --- the propensity specifications [§7, §13] --------------------------------------------------
+#
+# TWO, and there is a registry, because [§13] lists SIX propensity-and-population sensitivity rows
+# and DECISION 4 (PI, 2026-08-24) promoted exactly ONE of them from deferred to prespecified. A
+# third arrives as a third Specification WITH a [§13] amendment behind it; test_config.py asserts
+# the registry has these two and that PROPENSITY_FULL.covariates is PROPENSITY_PRIMARY's plus
+# NEGATIVE_CONTROLS, so "it spends the negative controls, by construction and not by accident"
+# [roadmap Stage 11] is a static check rather than a sentence.
+#
+# `suffix` is what keeps two fits over ONE cohort apart in ONE audit log. Audit.entry is first-match
+# (data.py:273-275), so two fits recording `propensity_fit` would make every programmatic read
+# return the primary's while the rendered log looked complete — measured, and it is why the payload
+# is a record and not a tuple [Stage 11 §4.2, §4.4]. THE PRIMARY'S SUFFIX IS THE EMPTY STRING, so
+# every step name Stages 6 and 7 already record is byte-identical and the four landed ledger
+# assertions do not move. test_config.py asserts exactly one declared specification has an empty
+# suffix and that all suffixes are distinct.
+#
+# `covariates` is the REQUESTED list and never the post-design survivors: in_model is
+# complete_cases(df, covariates), so the requested list is what decided the [§11] denominator, and a
+# covariate dropped as constant is still adjusted for [Stage 11 §4.2].
+
+
+@dataclass(frozen=True)
+class Specification:
+    """One prespecified propensity specification. There are two and there is a registry.
+
+    `suffix` is what keeps two fits over the same cohort apart in ONE audit log, and it is a
+    declared string rather than a name computed from `covariates` for the reason `Source` is a
+    declared object in ``data.py``: a label derived from a value is a label that changes when the
+    value does, silently, and this one is what ``Audit.entry`` matches on.
+
+    **The primary's suffix is the EMPTY STRING, and that is load-bearing rather than tidy.** Every
+    step name Stages 6 and 7 already record is ``spec.step(base)`` with ``suffix = ""``, so it is
+    byte-identical and the four landed ledger assertions do not move on a run without the arm.
+
+    `covariates` is the REQUESTED list and never the surviving one [Stage 11 §4.3].
+    """
+
+    label: str                    # what a table prints beside the numbers
+    covariates: tuple[str, ...]   # the REQUESTED list — Stage 11 §4.3
+    suffix: str                   # the audit step suffix; "" for [§7] — Stage 11 §4.4
+    sap: str                      # the section that prescribes it
+
+    def step(self, base: str) -> str:
+        return base + self.suffix
+
+
+PROPENSITY_PRIMARY: Final[Specification] = Specification(
+    "[§7] prespecified", PS_COVARIATES, "", "[§7]")
+PROPENSITY_FULL: Final[Specification] = Specification(
+    "[§13] full-covariate sensitivity", PS_COVARIATES_FULL, "_full_covariate",
+    "[§13], DECISION 4")
+PROPENSITY_SPECIFICATIONS: Final[tuple[Specification, ...]] = (
+    PROPENSITY_PRIMARY, PROPENSITY_FULL)
 
 # The [§9] balance set: the full [§6] confounder set plus everything BALANCE_ONLY carries, which
 # is the four negative controls and penumbra_ml. NOT the propensity model's covariate list —

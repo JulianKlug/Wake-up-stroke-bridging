@@ -118,9 +118,16 @@ from data import Audit, _fmt
 _COMPARATOR: Final[int] = min(C.TREATMENT_LABELS)
 _TREATED: Final[int] = max(C.TREATMENT_LABELS)
 
-# The three audit step names. Named as constants rather than written at the three `audit.record` call
+# The three audit step BASES. Named as constants rather than written at the three `audit.record` call
 # sites because the acceptance suite asserts the entries appear in this order at positions captured
 # before the call, and a test comparing against a string literal it also writes is a test of nothing.
+#
+# **Every one reaches `audit.record` through `ps.spec.step`** [Stage 11 §4.4, §10]. `primary` is
+# called TWICE over one cohort from Stage 11 onward — once under [§7] and once under [§13]'s
+# full-covariate specification — and `Audit.entry` is first-match (data.py:273-275), so two
+# unsuffixed `primary_fit` entries would make every programmatic read return the [§7] estimate's
+# while the rendered log looked complete. The primary specification's suffix is the empty string, so
+# the three names below are byte-identical on a run without the arm and no landed assertion moves.
 _STEP_COMPLETENESS: Final[str] = "outcome_completeness"
 _STEP_FIT: Final[str] = "primary_fit"
 _STEP_RD: Final[str] = "cumulative_rd"
@@ -152,6 +159,30 @@ class Primary:
     cumulative: dict[int, dict[int, float]]  # P(Y <= k | arm), keyed threshold then arm code — §8
     in_estimate: pd.Series                   # boolean, TOTAL — the [§11] population — §4.1
     fit: model.PolrFit
+
+
+# --- the [§11] estimation population [§4.1] ---------------------------------------------------------
+
+def estimation_population(df: pd.DataFrame, ps: propensity.Propensity) -> pd.Series:
+    """The [§11] population the primary estimate is computed on: weighted AND outcome present.
+
+    Boolean and TOTAL on `df`'s index, exactly as `Propensity.in_model` is and for Stage 6 §9's
+    reason: the deliberateness of an absence lives in a mask, never in a value.
+
+    **Public, and it is a DEFINITION rather than a step** — `weighted_proportion`'s own argument
+    applied to the quantity that argument names: *"a second implementation in a later stage would be
+    a second definition of the denominator, and [§11] requires the denominator."* `primary` binds it
+    once and every line of that function reads the result; `_assert_primary_inputs`' phase 2 reads
+    the same definition rather than spelling it again; and Stage 11's subgroup replicate body needs
+    this mask on a DRAWN frame without paying for a primary fit it does not read, which is why the
+    definition is a name and not three words inside one function (Stage 11 §8.5).
+
+    It is a THIRD population and not a restatement of `in_model`: a record whose covariates are
+    complete and whose outcome is missing keeps its weight and loses its estimate (§4.1). Nothing
+    here is applied — the mask is returned for a caller to report and to log, which is
+    `model.complete_cases`' rule one stage on.
+    """
+    return ps.in_model & df[C.PRIMARY_OUTCOME].notna()
 
 
 # --- the weighted per-arm proportion, and RD_k [§8] --------------------------------------------------
@@ -283,7 +314,7 @@ def _assert_primary_inputs(df: pd.DataFrame, ps: propensity.Propensity) -> None:
 
     # PHASE 2 — readable. These two describe the DATA, over the population §4.1 defines.
     bad = []
-    in_estimate = ps.in_model & df[C.PRIMARY_OUTCOME].notna()
+    in_estimate = estimation_population(df, ps)             # the ONE definition — Stage 11 §8.5
 
     present = [code for code in C.TREATMENT_LABELS
                if int((df.loc[in_estimate, C.TREATMENT] == code).sum())]
@@ -474,10 +505,11 @@ def _record_outcome_completeness(df: pd.DataFrame, ps: propensity.Propensity,
     n_removed = int(removed.sum())
     if len(case_ids) != n_removed:
         raise C.SchemaError(
-            f"{_STEP_COMPLETENESS} removes {n_removed} record(s) from the ATO population and can "
+            f"{ps.spec.step(_STEP_COMPLETENESS)} removes {n_removed} record(s) from the ATO "
+            f"population and can "
             f"name {len(case_ids)}. An estimate whose denominator the log cannot reconstruct is an "
             "estimate nobody can check [§11].")
-    audit.record("model", _STEP_COMPLETENESS, n_removed,
+    audit.record("model", ps.spec.step(_STEP_COMPLETENESS), n_removed,
                  f"[§11] complete-case per estimate. {int(in_estimate.sum())} of "
                  f"{int(ps.in_model.sum())} weighted record(s) carry the [§5] primary outcome and "
                  f"are estimated; {n_removed} do not, and every one of them is named above. Such a "
@@ -632,7 +664,7 @@ def primary(df: pd.DataFrame, ps: propensity.Propensity, audit: Audit) -> Primar
     """
     _assert_primary_inputs(df, ps)                                     # G1-G3 | G4-G5
 
-    in_estimate = ps.in_model & df[C.PRIMARY_OUTCOME].notna()          # §4.1 — bound ONCE
+    in_estimate = estimation_population(df, ps)                        # §4.1 — bound ONCE
     _record_outcome_completeness(df, ps, in_estimate, audit)           # entry 1
 
     sub = df.loc[in_estimate]
@@ -647,11 +679,11 @@ def primary(df: pd.DataFrame, ps: propensity.Propensity, audit: Audit) -> Primar
     _assert_reportable(fit)                                            # G7, §6
 
     n = int(in_estimate.sum())
-    audit.record("model", _STEP_FIT, n, _fit_detail(fit, n), table=_fit_table(fit))
+    audit.record("model", ps.spec.step(_STEP_FIT), n, _fit_detail(fit, n), table=_fit_table(fit))
 
     rd, cumulative = cumulative_rd(y, a, w)                            # §8
     totals = {code: float(w[a == float(code)].sum()) for code in C.TREATMENT_LABELS}
-    audit.record("model", _STEP_RD, len(C.MRS_THRESHOLDS), _rd_detail(totals, n),
+    audit.record("model", ps.spec.step(_STEP_RD), len(C.MRS_THRESHOLDS), _rd_detail(totals, n),
                  table=_rd_table(rd, cumulative))
 
     beta = float(fit.beta[0])

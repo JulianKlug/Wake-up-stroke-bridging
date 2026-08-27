@@ -38,29 +38,43 @@ module is ``specs/stage6_propensity_and_weights.md``; nothing here is invented o
     ┌──────────────────────────────────────────────────────────────────────────┐
     │  STAGE 6b — propensity.py        reads config.py, data.Audit, model      │
     │                                                                          │
-    │   fit(df, audit) -> Propensity                                           │
-    │     ├─ _assert_fit_inputs(df)                 F1, F2 → SchemaError       │
-    │     ├─ complete_cases(df, PS_COVARIATES)      92 of 93        (§4.4)     │
-    │     ├─ _record_exclusion(...)                 entry 1                    │
-    │     ├─ design(df[in_model], PS_COVARIATES)    11 columns      (§4)       │
-    │     ├─ firth(X, a)                            7 iterations    (§5)       │
+    │   fit(df, audit)      -> _fit(df, PROPENSITY_PRIMARY, audit)   [§7]      │
+    │   fit_full(df, audit) -> _fit(df, PROPENSITY_FULL, audit)      [§13]     │
+    │                                                                          │
+    │   _fit(df, spec, audit) -> Propensity                                    │
+    │     ├─ _assert_fit_inputs(df)                F1, F2 → SchemaError        │
+    │     ├─ complete_cases(df, spec.covariates)   92 of 93        (§4.4)      │
+    │     ├─ _record_exclusion(...)                entry 1, spec.step          │
+    │     ├─ design(df[in_model], spec.covariates) 11 or 16 columns (§4)       │
+    │     ├─ firth(X, a)                           7 iterations    (§5)        │
     │     ├─ _assert_probabilities(...)             F5 → FitError   (§5.5)     │
-    │     ├─ weights, per-arm ESS                                   (§6)       │
-    │     └─ four `model` audit entries                             (§7)       │
+    │     ├─ weights, per-arm ESS                                  (§6)        │
+    │     └─ four `model` audit entries, spec.step(base)           (§7)        │
     └──────────────────────────────────────────────────────────────────────────┘
                        │
                        ▼
-     Propensity(e, w, in_model, ess, fit, dropped)  →  Stages 7-11
+     Propensity(e, w, in_model, ess, fit, dropped, spec)  →  Stages 7-11
 
-``fit`` appends four entries of the ``model`` kind to the ``Audit`` that ``load()`` created. It writes
-no file, as no stage before it does — and the audit log is the **only** place in this repository the
+**There are TWO named entry points and no covariate keyword** [Stage 11 §4]. Stage 6 §6.4 declined a
+``covariates=`` parameter because the [§13] propensity-specification rows are *different target
+populations* and a parameter makes them look like options, and it left a promissory note — that when
+one of them is un-deferred it arrives *"as a named specification with a [§13] amendment, not as a
+keyword"*. DECISION 4 un-deferred exactly one, so the note is paid here: ``C.Specification`` is a
+frozen record, the registry holds exactly two instances, and each has its own public entry point
+taking ``(df, audit)`` and nothing else. **The record and not a bare covariate tuple**, because the
+seam has four jobs and a tuple does one: the audit step names must not collide, and ``Audit.entry``
+is first-match — so two fits recording ``propensity_fit`` would make every programmatic read return
+the primary's while the rendered log looked complete [Stage 11 §4.2, §4.4].
+
+``_fit`` appends four entries of the ``model`` kind to the ``Audit`` that ``load()`` created, each
+named ``spec.step(base)``. The primary's suffix is the empty string, so every step name Stages 6 and
+7 already record is byte-identical. It writes no file, as no stage before it does — and the audit log is the **only** place in this repository the
 fitted coefficients ever appear [Stage 6 §7.3].
 
 This module is **not** exempt from the Stage 1 §7 raw-name scan and must never become exempt.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -83,6 +97,14 @@ class Propensity:
 
     A return value and never a column on the frame [Stage 6 §0.2], so a caller that wants the point
     score and a replicate's score at once has to hold two objects and name them.
+
+    **``spec`` is appended and carries NO DEFAULT** [Stage 11 §4.3]. A default of
+    ``C.PROPENSITY_PRIMARY`` would keep every direct construction site green, and that is exactly
+    the hazard: an arm-derived ``Propensity`` that forgot the field would role-label in
+    ``balance._role`` as the primary's, and every number downstream would read as the [§7]
+    specification's. Without a default those sites raise ``TypeError`` — loud, and each a one-line
+    fix. ``dataclasses.replace`` carries the field correctly and stays the safe way to bend a
+    ``Propensity``.
     """
 
     e: pd.Series                # float64, the cohort's index, np.nan where not in_model (§8)
@@ -91,6 +113,7 @@ class Propensity:
     ess: dict[int, float]       # keyed by arm code, as TREATMENT_LABELS is
     fit: model.Fit
     dropped: tuple[str, ...]    # design columns dropped as constant, in design order
+    spec: C.Specification       # which prespecified specification this is — Stage 11 §4.2
 
 
 # --- the effective sample size [§7] ----------------------------------------------------------------
@@ -184,7 +207,12 @@ def _assert_probabilities(fitted: model.Fit, case_ids: pd.Series) -> None:
 
 # --- the four audit entries [§7] ---------------------------------------------------------------------
 #
-# Four rules about the tables, three of them inherited from Stages 4 and 5:
+# **Every one of the eight helpers below takes the `C.Specification`** [Stage 11 §4.3], because each
+# either read `C.PS_COVARIATES` or asserted "[§6]", and three of their `detail` strings are FALSE
+# under the [§13] specification — one of them with no referent at all: `_weights_detail` said
+# "conditional on this specification", and with two fits in one log "this" points at nothing.
+#
+# Five rules about the tables, three of them inherited from Stages 4 and 5:
 #
 #   * Every declared thing is rendered whether or not the data fills it. `design_matrix` has a row for
 #     an absent centre reading `dropped: constant`, because a column that vanishes from a table is a
@@ -195,24 +223,32 @@ def _assert_probabilities(fitted: model.Fit, case_ids: pd.Series) -> None:
 #   * `_fmt` is the only float formatter and `missing` the only rendering of an absent value.
 #   * The `all` row of `overlap_weights` carries an ESS computed over both arms POOLED, and says so —
 #     not the sum of the two arms', which is not a Kish sum of anything.
+#   * Every step name is `spec.step(base)` and never a literal, because `Audit.entry` is first-match
+#     and the arm records the same four bases over the same cohort [Stage 11 §4.4].
 
 
-def _completeness_detail(df: pd.DataFrame, in_model: pd.Series) -> str:
+def _completeness_detail(df: pd.DataFrame, in_model: pd.Series, spec: C.Specification) -> str:
     n_excluded = int((~in_model).sum())
     return (
-        f"[§11] complete-case on the [§6] covariates: {int(in_model.sum())} of {len(df)} cohort "
+        f"[§11] complete-case on the {spec.label} propensity specification's "
+        f"{len(spec.covariates)} covariate(s) {spec.sap}: {int(in_model.sum())} of {len(df)} cohort "
         f"record(s) carry every one and are fitted; {n_excluded} record(s) do not, and every one of "
         "them is named above. Such a record stays in the cohort and loses its weight — `e` and `w` "
         "are absent for it and "
         "`in_model` is False — because a covariate that was never recorded is not a [§3] restriction. "
         "So the ATO target population is this complete-case set rather than the [§3] cohort, which is "
-        "stated here rather than left implicit [Stage 6 §4.4]. The per-centre breakdown of every "
+        "stated here rather than left implicit [Stage 6 §4.4]. It is a property of THIS "
+        "specification's covariate list and not of the cohort: a specification adding a covariate "
+        "that carries its own missingness excludes more records, so two specifications' denominators "
+        "have to be compared rather than assumed equal [Stage 11 §5.2]. The per-centre breakdown of "
+        "every "
         "absence is in `absence_by_cohort_column`, under Missingness and denominators; this entry "
         "carries only what it uniquely owns, which is what the missingness cost THIS fit.")
 
 
-def _completeness_table(df: pd.DataFrame, in_model: pd.Series) -> tuple[tuple[str, ...], ...]:
-    """One row per [§6] covariate, in PS_COVARIATES order — every declared one, complete or not.
+def _completeness_table(df: pd.DataFrame, in_model: pd.Series,
+                        spec: C.Specification) -> tuple[tuple[str, ...], ...]:
+    """One row per covariate of `spec`, in its declared order — every one, complete or not.
 
     `excluded_by` is the column that earns this entry. `absence_by_cohort_column` answers "what is
     missing"; only this answers "what did the missingness cost this fit", which is [§11]'s
@@ -222,13 +258,14 @@ def _completeness_table(df: pd.DataFrame, in_model: pd.Series) -> tuple[tuple[st
     rows = tuple(
         (c, str(int(df[c].isna().sum())),
          "yes" if int((df[c].isna() & ~in_model).sum()) else "no")
-        for c in C.PS_COVARIATES)
+        for c in spec.covariates)
     return (header, *rows)
 
 
-def _design_detail(X: pd.DataFrame, dropped: tuple[str, ...]) -> str:
+def _design_detail(X: pd.DataFrame, dropped: tuple[str, ...], spec: C.Specification) -> str:
     return (
-        f"[§6] design matrix: {X.shape[1]} column(s) plus an intercept over {X.shape[0]} fitted "
+        f"{spec.label} design matrix {spec.sap}: {X.shape[1]} column(s) plus an intercept over "
+        f"{X.shape[0]} fitted "
         f"record(s), reference-coded on REFERENCE_LEVELS. {len(dropped)} column(s) dropped as "
         f"constant{': ' + ', '.join(dropped) if dropped else ''}. Factor levels are DECLARED "
         "(FACTOR_LEVELS), not observed, so the width is a property of config.py and not of the "
@@ -240,7 +277,7 @@ def _design_detail(X: pd.DataFrame, dropped: tuple[str, ...]) -> str:
 
 
 def _design_table(X: pd.DataFrame, dropped: tuple[str, ...],
-                  covariates: Sequence[str]) -> tuple[tuple[str, ...], ...]:
+                  spec: C.Specification) -> tuple[tuple[str, ...], ...]:
     """One row per level of every declared factor, plus one per linear covariate. §7.5.
 
     Ranges over the DECLARATION, never over the matrix: a level absent from both X and `dropped` is a
@@ -249,19 +286,20 @@ def _design_table(X: pd.DataFrame, dropped: tuple[str, ...],
     coefficients appear. `center_CHUV = 0.41` means *relative to HUG*; without HUG on the page the
     number is uninterpretable.
 
-    It takes the covariate list, and that is not incidental: from `X.columns` and `dropped` alone the
+    It takes the SPECIFICATION and reads `spec.covariates` off it, and that is not incidental: from
+    `X.columns` and `dropped` alone the
     reference rows can only be *inferred*, by looking for `{factor}_{level}` name prefixes among the
     surviving columns and guessing which declared level is missing — which happens to work and is the
     wrong shape, since a linear covariate sharing a prefix would be misread as a dummy and
     REFERENCE_LEVELS has to be consulted regardless.
 
-    Row order is `covariates`' order, which is NOT the design matrix's column order (get_dummies
+    Row order is `spec.covariates`' order, which is NOT the design matrix's column order (get_dummies
     appends the dummies). That is deliberate: the matrix's order exists to map a coefficient to a name,
     and this table's order exists to be read by a human against the declared covariate list.
     """
     header = ("column", "term", "factor", "level", "status")
     rows: list[tuple[str, ...]] = []
-    for c in covariates:
+    for c in spec.covariates:
         if c not in C.CATEGORICAL:
             rows.append((c, "linear", "—", "—",
                          "dropped: constant" if c in dropped else "kept"))
@@ -275,9 +313,10 @@ def _design_table(X: pd.DataFrame, dropped: tuple[str, ...],
     return (header, *rows)
 
 
-def _fit_detail(fitted: model.Fit, e: pd.Series) -> str:
+def _fit_detail(fitted: model.Fit, e: pd.Series, spec: C.Specification) -> str:
     return (
-        f"[§7] Firth-penalised logistic regression, converged in {fitted.iterations} iteration(s) on "
+        f"[§7] Firth-penalised logistic regression under the {spec.label} specification "
+        f"{spec.sap}, converged in {fitted.iterations} iteration(s) on "
         f"the {fitted.converged_on} criterion. Fitted probabilities range "
         f"{_fmt(e.min())} to {_fmt(e.max())}, all finite and strictly interior (F5). "
         f"{fitted.rescales} step(s) were shortened by the trust region and {fitted.halvings} "
@@ -299,7 +338,7 @@ def _fit_table(fitted: model.Fit) -> tuple[tuple[str, ...], ...]:
     return (header, *((name, _fmt(value)) for name, value in zip(names, fitted.beta)))
 
 
-def _weights_detail() -> str:
+def _weights_detail(spec: C.Specification) -> str:
     return (
         "[§7] overlap weights: w = 1 − e for the treated arm and w = e for the control arm, the ATO "
         "tilt h(X) = e(X){1 − e(X)} split between the arms. Bounded in [0, 1] by construction and "
@@ -308,8 +347,11 @@ def _weights_detail() -> str:
         "weight exploding as e → 0) cannot arise. "
         "The ATO target population is h(X) = e(X){1 − e(X)}, so CHANGING THE PROPENSITY "
         "SPECIFICATION CHANGES THE POPULATION, not merely the precision of the estimate — and both "
-        "the effective sample sizes and the weighted-population description below are conditional on "
-        "this specification [§7, Stage 6 §6.4]. The second table describes who that weighted "
+        "the effective sample sizes and the weighted-population description below are conditional "
+        f"on the {spec.label} specification {spec.sap} and on no other. **The specification is NAMED "
+        "here rather than called `this`**, because more than one propensity model is fitted over this "
+        "cohort and `this` points at nothing in a log carrying two of them [§7, Stage 6 §6.4, "
+        "Stage 11 §4.3]. The second table describes who that weighted "
         "population comprises: overlap weighting up-weights patients near equipoise and down-weights "
         "those whose treatment was nearly determined, so it is not the unweighted cohort. It is a "
         "description and not a balance assessment — [§9]'s standardised mean differences are Stage "
@@ -339,8 +381,8 @@ def _weights_table(df: pd.DataFrame, in_model: pd.Series, w: pd.Series,
 
 
 def _weighted_population_table(df: pd.DataFrame, in_model: pd.Series, w: pd.Series,
-                               covariates: Sequence[str]) -> tuple[tuple[str, ...], ...]:
-    """One row per [§6] covariate — per LEVEL for a factor — unweighted and ATO-weighted, by arm. §7.6.
+                               spec: C.Specification) -> tuple[tuple[str, ...], ...]:
+    """One row per covariate of `spec` — per LEVEL for a factor — unweighted and ATO-weighted. §7.6.
 
     [§7] asks for two things and the ESS discharges only one: "report the effective sample size per
     arm and DESCRIBE THE WEIGHTED POPULATION. Because the ATO population is defined statistically,
@@ -366,7 +408,7 @@ def _weighted_population_table(df: pd.DataFrame, in_model: pd.Series, w: pd.Seri
                 *(_fmt(np.average(v[a], weights=ww[a])) for a in arms.values()))
 
     rows: list[tuple[str, ...]] = []
-    for c in covariates:
+    for c in spec.covariates:
         if c in C.CATEGORICAL:
             for level in C.FACTOR_LEVELS[c]:
                 rows.append((f"{c} = {level}",
@@ -397,7 +439,8 @@ def _padded(table: tuple[tuple[str, ...], ...], width: int) -> tuple[tuple[str, 
     return tuple(row + ("—",) * (width - len(row)) for row in table)
 
 
-def _record_exclusion(df: pd.DataFrame, in_model: pd.Series, audit: Audit) -> None:
+def _record_exclusion(df: pd.DataFrame, in_model: pd.Series, spec: C.Specification,
+                      audit: Audit) -> None:
     """The complete-case entry, which must name as many patients as it says it excluded.
 
     This is the rule `_MUST_NAME_CASES` cannot express for this kind [Stage 6 §7.1] — `model` carries
@@ -410,7 +453,7 @@ def _record_exclusion(df: pd.DataFrame, in_model: pd.Series, audit: Audit) -> No
 
     Without either, `len(case_ids)` equals `n` by construction and the check is dead code. That is not
     hypothetical — `Audit.record` normalises with `tuple(sorted(str(c) for c in case_ids))`
-    (data.py:255), which sorts but does not deduplicate, and `str(pd.NA)` is the four characters
+    (data.py:271), which sorts but does not deduplicate, and `str(pd.NA)` is the four characters
     `<NA>`. A draft collecting a plain `sorted(...)` list could never raise.
 
     The raise comes BEFORE `audit.record`, again as Stage 5 does it. Recording first and reading the
@@ -422,17 +465,18 @@ def _record_exclusion(df: pd.DataFrame, in_model: pd.Series, audit: Audit) -> No
     n_excluded = int((~in_model).sum())
     if len(case_ids) != n_excluded:
         raise C.SchemaError(
-            f"covariate_completeness excludes {n_excluded} record(s) and can name {len(case_ids)}. "
+            f"{spec.step('covariate_completeness')} excludes {n_excluded} record(s) and can name "
+            f"{len(case_ids)}. "
             "An estimate whose denominator the log cannot reconstruct is an estimate nobody can "
             "check [§11]. A duplicated or missing case_id is forbidden by Stage 2's A2, so this is a "
             "belt over those braces — written here because this is the first stage whose denominator "
             "differs from the cohort's [Stage 6 §4.4].")
-    audit.record("model", "covariate_completeness", n_excluded,
-                 _completeness_detail(df, in_model), case_ids=case_ids,
-                 table=_completeness_table(df, in_model))
+    audit.record("model", spec.step("covariate_completeness"), n_excluded,
+                 _completeness_detail(df, in_model, spec), case_ids=case_ids,
+                 table=_completeness_table(df, in_model, spec))
 
 
-# --- the public entry point --------------------------------------------------------------------------
+# --- the private fit and the two public entry points -------------------------------------------------
 #
 # Six things about the order below, each of which is a failure if moved [Stage 6 §8]:
 #
@@ -451,18 +495,31 @@ def _record_exclusion(df: pd.DataFrame, in_model: pd.Series, audit: Audit) -> No
 #     the mask lost it.
 #   * `_assert_probabilities` sits BETWEEN the fit and the weights, because a degenerate `e` becomes a
 #     weight of exactly 0.0 one line later and stops being visible.
+#
+# And one about the shape [Stage 11 §4.3]: `_fit` is private and `fit`/`fit_full` are one line each,
+# so BOTH public entry points keep `(df, audit)` with no defaults — `test_propensity.py`'s signature
+# guard survives verbatim, parametrised over the two names rather than rewritten, and the door it is
+# keeps its hinges.
 
 
-def fit(df: pd.DataFrame, audit: Audit) -> Propensity:
-    """The [§7] propensity score and overlap weights over the [§3] cohort.
+def _fit(df: pd.DataFrame, spec: C.Specification, audit: Audit) -> Propensity:
+    """The propensity score and overlap weights of ONE declared specification, over the [§3] cohort.
 
-    Takes no covariate list: the propensity specification is PS_COVARIATES and the estimand is
-    indexed by it [§7, Stage 6 §6.4]. `pilots/analysis.py:953` takes `covars or C.PS_COVARIATES`; that
-    is declined, because the [§13] propensity-specification rows are *different target populations*
-    and a parameter makes them look like options. When they are un-deferred they arrive as a named
-    specification with a [§13] amendment, not as a keyword.
+    **Private, and the two public names below are its only callers** [Stage 11 §4.1, §4.3]. It takes
+    a `C.Specification` and not a covariate list, and it is not part of the public surface, so a
+    caller cannot reach a third specification without one being declared in `config.py` with a [§13]
+    amendment behind it. A `covariates=` keyword on a public entry point was declined twice — once at
+    Stage 6 §6.4 and once here — and the second reason is the decisive one: under
+    `covars or C.PS_COVARIATES` a call site that forgets the keyword produces the PRIMARY
+    specification, and every number downstream reads as the sensitivity arm's.
 
-    Returns a Propensity; adds no column to `df` and edits nothing. Appends four `model` entries.
+    Every audit step name goes through `spec.step`, because `Audit.entry` is first-match
+    (data.py:273-275) and two fits over one cohort otherwise record the same four names. With the
+    primary's empty suffix nothing landed moves; with the arm's, six entries are disjoint from six
+    [Stage 11 §4.4].
+
+    Returns a Propensity carrying `spec`; adds no column to `df` and edits nothing. Appends four
+    `model` entries.
 
     Raises SchemaError on F1/F2 and on D1-D4, and model.FitError on F3/F4/F5/F6 or a fit that does not
     converge. Stage 10 catches the second to drop and count a replicate, and may catch nothing else: a
@@ -470,13 +527,13 @@ def fit(df: pd.DataFrame, audit: Audit) -> Propensity:
     """
     _assert_fit_inputs(df)                                     # F1, F2
 
-    in_model = model.complete_cases(df, C.PS_COVARIATES)
-    _record_exclusion(df, in_model, audit)                     # §7.2, entry 1
+    in_model = model.complete_cases(df, spec.covariates)
+    _record_exclusion(df, in_model, spec, audit)               # §7.2, entry 1
 
-    X, dropped = model.design(df.loc[in_model], C.PS_COVARIATES)
-    audit.record("model", "design_matrix", X.shape[1] + 1,
-                 _design_detail(X, dropped),
-                 table=_design_table(X, dropped, C.PS_COVARIATES))
+    X, dropped = model.design(df.loc[in_model], spec.covariates)
+    audit.record("model", spec.step("design_matrix"), X.shape[1] + 1,
+                 _design_detail(X, dropped, spec),
+                 table=_design_table(X, dropped, spec))
 
     a = df.loc[in_model, C.TREATMENT].to_numpy(dtype=float)
     fitted = model.firth(X, a)                                 # raises FitError; no fallback [§5.5]
@@ -487,13 +544,62 @@ def fit(df: pd.DataFrame, audit: Audit) -> Propensity:
     w = pd.Series(np.nan, index=df.index, dtype="float64")
     w.loc[in_model] = np.where(a == 1.0, 1.0 - fitted.p, fitted.p)
 
-    audit.record("model", "propensity_fit", int(in_model.sum()),
-                 _fit_detail(fitted, e), table=_fit_table(fitted))
+    audit.record("model", spec.step("propensity_fit"), int(in_model.sum()),
+                 _fit_detail(fitted, e, spec), table=_fit_table(fitted))
 
     per_arm = {code: ess(w[in_model & (df[C.TREATMENT] == code)]) for code in C.TREATMENT_LABELS}
     weights = _weights_table(df, in_model, w, per_arm)
-    population = _weighted_population_table(df, in_model, w, C.PS_COVARIATES)
-    audit.record("model", "overlap_weights", int(in_model.sum()), _weights_detail(),
+    population = _weighted_population_table(df, in_model, w, spec)
+    audit.record("model", spec.step("overlap_weights"), int(in_model.sum()),
+                 _weights_detail(spec),
                  table=weights + _padded(population, len(weights[0])))
 
-    return Propensity(e=e, w=w, in_model=in_model, ess=per_arm, fit=fitted, dropped=dropped)
+    return Propensity(e=e, w=w, in_model=in_model, ess=per_arm, fit=fitted, dropped=dropped,
+                      spec=spec)
+
+
+def fit(df: pd.DataFrame, audit: Audit) -> Propensity:
+    """The [§7] propensity score and overlap weights over the [§3] cohort. THE estimand's fit.
+
+    Takes no covariate list: the propensity specification is `C.PROPENSITY_PRIMARY` and the estimand
+    is indexed by it [§7, Stage 6 §6.4]. `pilots/analysis.py:953` takes `covars or C.PS_COVARIATES`;
+    that was declined, because the [§13] propensity-specification rows are *different target
+    populations* and a parameter makes them look like options.
+
+    **That refusal carried a promissory note and Stage 11 paid it** — *"when they are un-deferred
+    they arrive as a named specification with a [§13] amendment, not as a keyword"*. DECISION 4 (PI,
+    2026-08-24) un-deferred exactly one of the six [§13] rows, so there are now TWO named entry
+    points over one private `_fit`, each taking `(df, audit)` and neither taking a default. The other
+    is `fit_full` below. A third row arrives as a third `C.Specification`, never as an argument here
+    [Stage 11 §4].
+
+    Returns a Propensity whose `spec` is `C.PROPENSITY_PRIMARY`; adds no column to `df` and edits
+    nothing. Appends four `model` entries under their UNSUFFIXED names, so every landed ledger
+    assertion stays byte-identical.
+
+    Raises SchemaError on F1/F2 and on D1-D4, and model.FitError on F3/F4/F5/F6 or a fit that does not
+    converge. Stage 10 catches the second to drop and count a replicate, and may catch nothing else: a
+    SchemaError here is a bug in the resampler, not a sparse replicate.
+    """
+    return _fit(df, C.PROPENSITY_PRIMARY, audit)
+
+
+def fit_full(df: pd.DataFrame, audit: Audit) -> Propensity:
+    """The [§13, DECISION 4] full-covariate propensity score and overlap weights. A SENSITIVITY fit.
+
+    `C.PROPENSITY_FULL` adds the four vascular risk factors [§6] declares as balance negative
+    controls, which is exactly `C.NEGATIVE_CONTROLS` — so this specification SPENDS them, and the
+    balance table's `role` column says so without one row moving [Stage 7 §4.1, Stage 11 §4.4].
+
+    **This is a different target population and not a better-adjusted version of the same one.** The
+    ATO estimand is indexed by the propensity score itself: h(X) = e(X){1 − e(X)} moves when the
+    specification does, so the number this fit weights toward is not the [§7] estimand measured more
+    carefully. `Propensity.spec` is what keeps the two apart downstream, and `bootstrap.run`'s R9
+    raises rather than accepting this object — `run`'s replicate body calls `fit` unconditionally, so
+    a `run` over this `Propensity` would return intervals whose point estimates are the arm's and
+    whose replicates are the primary's specification, with every number finite [Stage 11 §4.5].
+
+    Takes no covariate list, for `fit`'s reason. Appends the same four `model` entries under names
+    suffixed `_full_covariate`, so `Audit.entry`'s first-match lookup cannot return the primary's.
+    """
+    return _fit(df, C.PROPENSITY_FULL, audit)
