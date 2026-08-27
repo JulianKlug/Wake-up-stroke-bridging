@@ -735,30 +735,103 @@ reassurance.
 
 ## Stage 12 — All-centre standardisation [§14a]
 
-Independent of Stages 6–10; **no propensity model is fitted anywhere in this stage.**
+**Spec:** `specs/stage12_all_centre_standardisation.md`.
+
+Independent of Stages 6–10; **no propensity model is fitted anywhere in this stage — and it reads no
+Stage 6–11 result either.** It takes the unrestricted classified frame and nothing else [Stage 5 §9],
+so it runs whether or not the [§7] arm has been run. Measured: 126 → 107 eligible → **104** with the
+[§11] completeness applied, at all four centres, of which USZ contributes 12 and no contrast
+[Stage 12 §4.1].
 
 **Build.**
 - One proportional-odds model over all eligible patients at all centres:
-  `logit P(Y ≤ k | A, X) = α_k + βA + γᵀX`, with `X` = the [§6] covariates **minus centre**.
+  `logit P(Y ≤ k | A, X) = α_k + βA + γᵀX`, with `X` = the [§6] covariates **minus centre** —
+  `config.STANDARDISATION_COVARIATES`, which already exists and is labelled [§14a]. Unweighted, one
+  fit, `model.polr` unchanged.
 - Standardisation: duplicate every patient with `A = 1` and `A = 0`, predict the full category
   distribution `P(Y = j | A = a, X)` for `j = 0…6`, average over all N eligible patients.
+  - **The duplication is on the fitted DESIGN and never on the frame** [Stage 12 §7.1]. Re-running
+    `model.design` on a frame where everyone is treated drops the treatment column as constant, and
+    the "counterfactual" is then predicted from a model with no exposure in it — silently. The
+    overwrite-a-column pattern `outcome._counterfactuals` uses is the one that is safe.
+  - **Category prediction from a `PolrFit` does not exist yet** and is the one genuinely new
+    capability the standardisation needs; `model.predict` is Firth-only. It goes in `model.py`.
 - Outputs: the two standardised mRS distributions; cumulative `RD_k`; standardised mRS 0–2 risk
   difference; standardised mortality difference.
+  - **The last two are not new numbers.** The mRS 0–2 risk difference *is* `RD_2` and the mortality
+    difference *is* `−RD_5` — measured, to 8.3e-17. They are reported under [§14a]'s names, derived
+    from the distributions and asserted equal, never computed a second way [Stage 12 §7.3].
+  - **But their intervals are not reflections of each other**, because `PERCENTILE_METHOD =
+    "inverted_cdf"` is not a symmetric quantile definition: measured, the mortality limits and the
+    reflected `RD_5` limits differ by up to **1.7e-3** on the risk-difference scale, against 5.6e-16
+    under numpy's default. Stage 10 §8.2's pin is what makes [§10]'s p-value agree with its interval,
+    and it is the same pin that breaks reflection symmetry [Stage 12 §7.4].
+  - **A resample loses mRS 5 in 4.15% of replicates** — the level carries three patients — in which
+    the fit has five cutpoints, the standardised distribution carries a structural zero at that level,
+    and **`RD_5` equals `RD_4` exactly**. Counted and printed beside the `RD_5` interval
+    [Stage 12 §6.2, §6.3].
 - **Support check:** treated-arm distribution of each continuous covariate, the proportion of
   patients from never-IVT centres falling outside it, and a baseline table comparing IVT-treated
   patients with never-IVT-centre patients.
-- Sensitivity: restrict the standardisation population to patients inside the treated support.
+  - "Continuous" resolves to **not a declared factor**, and the two readings are measured equivalent
+    on v7 — `sex`, `prestroke_mrs` and `atrial_fib` exclude nobody — so the wider one is chosen
+    because it cannot be wrong where the narrow one is right [Stage 12 §10.1].
+  - The never-IVT set is the **complement of `cohort.treating_centres`**, computed and never declared,
+    which is the note `cohort.py:112-119` wrote to this stage. Measured: 12 never-IVT patients, 3 of
+    them outside the treated box; 93 of 104 inside it, and all 11 outside are comparator patients.
+  - The baseline table calls `balance.smd` with unit weights [Stage 7 §5.5] and its four `center` rows
+    are the **grouping variable**, roled as such and never read as imbalance.
+- Sensitivity: restrict the standardisation population to patients inside the treated support. **The
+  averaging population is restricted and the fit is not** — the alternative changes two things at once
+  — and the box is recomputed inside every replicate because it is a statistic [Stage 12 §11].
 - Sensitivity: random centre intercept, one common treatment effect, no interaction and no random
-  slope.
+  slope. **This is a new estimator and it is 95% of the stage's compute** [Stage 12 §12]:
+  - Nothing in the environment can fit it — `statsmodels` has no ordinal mixed model at any API and
+    `scipy` is test-only — so `model.polr_ri` is written: adaptive Gauss–Hermite over the single
+    variance parameter, an analytic gradient, and BFGS under `polr`'s own trust-region and halving
+    discipline.
+  - **The quadrature must be adaptive, and that is measured rather than assumed.** Non-adaptive
+    Gauss–Hermite is off by 0.48 log-likelihood units at 31 nodes at σ = 3 and is non-monotone in the
+    node count; adaptive is off by 8.9e-4 at **three** nodes. 24.0% of replicates fit σ̂ above 1, where
+    the non-adaptive rule is not converged, so this is what makes the arm computable at all.
+  - `POLR_RI_NODES = 11` is a `config.py` constant because **it changes an answer**: non-adaptive
+    quadrature returns a between-centre SD 33% to 53% too large at 5, 7 and 9 nodes.
+  - **σ̂ reaches the boundary in 22.0% of replicates** — [§14a] names `σ²_C = 0` as a legitimate answer
+    — which needs a prespecified floor, is not a failure, and makes the interval on σ̂ one whose lower
+    limit means "the boundary". The rate is printed beside it.
+  - The standardisation conditions on each centre's own conditional mode `b̂_c`, which is what [§14a]'s
+    *"patients at a never-IVT centre inform that centre's intercept"* requires. **USZ's intercept is
+    the least precisely estimated of the four and the arm rests on it**: 12 patients, none treated.
+  - Validated against `ordinal::clmm`, in the R gate `polr_clm.R` already opens.
 - Inference: patient-level bootstrap stratified by centre — resample, refit, predict everyone under
   both regimes, average, recompute, percentile intervals.
+  - **All four strata are resampled, USZ included**, which is the question Stage 10 §12.2 left to this
+    stage. Its patients are members of the population being averaged over, so their sampling
+    variability belongs in the interval; the counter-argument is recorded and is a [§14] question
+    [Stage 12 §13.1].
+  - One `replicates` call, three arms per draw, seventy estimand keys, **no p-value on any of them** —
+    [§14] prescribes percentile intervals and states no null, and [§13]'s families must not acquire a
+    fifth by counting these keys.
+  - **Nothing fails: 2000 of 2000 replicates survive**, against Stage 11's 12.5% on `unknown_onset`.
+    The design is wider than [§8]'s but the population is larger and unweighted, so no replicate can
+    concentrate its effective sample the way an overlap-weighted fit can [Stage 12 §13.4].
+  - Cost, measured: ~18.4 minutes, of which the hierarchical arm is 95%. This is now the largest
+    single cost in the pipeline and the sole live trigger for parallelising the replicate loop.
 
 **Accept when.** The standardised category probabilities sum to 1 within each regime; the cumulative
 probabilities are monotone; the estimate is labelled an **ATE in the all-centre eligible population**
 and carries the statement that it is not the [§7] ATO and the two are not a like-for-like comparison.
+**The first two are true by construction** of differencing a monotone sequence bracketed by exact 0
+and exact 1 — measured worst error 6.7e-16 across every arm of every replicate — so they are
+self-checks against a coding error and must not be read as diagnostics that inform about the model
+[Stage 12 §6.1, §20.5]. The third is computed from the two records' own denominators, never written
+as an adjective.
 
 **Guard.** `exp(β)` here is a *conditional* odds ratio. It may be emitted as a model parameter and must
-never be labelled as the standardised marginal effect.
+never be labelled as the standardised marginal effect. **Enforced structurally and not by label**:
+no Stage 12 record has a field called `odds_ratio`, so a formatter written against `Primary` and
+pointed at a `Standardisation` raises rather than printing a conditional quantity under a marginal
+heading [Stage 12 §8].
 
 ## Stage 13 — Feasible-policy analysis [§14b]
 

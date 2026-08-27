@@ -483,12 +483,28 @@ across them. Under proportional odds they are the same parameter; [§8] prescrib
 [§15] declines one. It is filed as Stage 10 §16 item 5 and it reaches a reader through [§16]'s
 constant-shift statement, not through a re-measurement of the band.
 
-**Trigger, for what remains.** A cohort or a Stage 12 design on which G7 actually fires. Then the band's
-calibration decides which replicates are dropped and the cutpoint-count distribution becomes load-bearing
-rather than descriptive.
+**ANSWERED IN FULL 2026-08-27 — the Stage 12 half is measured too, and it is also negative.** The
+paragraph above said the calibration gap *"bites at Stage 12"*, where the standardisation model carries
+nine covariates rather than one. Measured over 2000 replicates of the ten-column [§14a] design
+(Stage 12 §9.2): the largest `|β_treatment|` is **2.0016** and the largest `|γ|` **3.2119**, against
+`POLR_MAX_ABS_BETA = 14.0` and against Stage 8 §6.3's measured empty band running from 8.7873 to
+18.8055. **Every fit sits entirely below the band's lower edge**, so the bound is not merely unfired,
+it is not approached, and the question of whether a band calibrated on one column transfers to ten does
+not arise on this workbook.
 
-**Status: open**, narrowed — the measurement is done and the consequence it was filed against did not
-occur.
+**And Stage 12 found the reason the question is differently shaped there**, which is worth recording
+because it is not a property of the data: the [§14a] reported quantities are averaged probabilities,
+bounded in [0, 1] *by construction*, so a separated fit produces no unprintable estimate the way
+Stage 8's `exp(β)` produces 6.5e15. Stage 12 §9.1 therefore applies the bound at **key granularity** —
+it drops `beta`, which is reported as a model parameter, and keeps the twenty-two standardised keys,
+which are unaffected. The bound protects a different thing there, so its calibration matters less.
+
+**Trigger, rewritten.** A cohort or a design on which any coefficient exceeds **8.7873**, Stage 8
+§6.3's largest measured non-degenerate `|beta|` — at which point a fit is inside the band and the
+band's calibration decides whether it is dropped. G7 firing at all is the older and looser form of the
+same trigger.
+
+**Status: open**, narrowed twice — both halves measured, both consequences absent.
 
 ## Make the pipeline resamplable: `propensity.fit` raises on 26.0% of stratified replicates
 
@@ -639,7 +655,19 @@ every replicate; changing it changes every estimate. That is a [§8] decision, n
 **Trigger.** A replicate that fails to converge, or a Stage 12 design where `Σw` is materially larger —
 [§14a] uses unit weights over a bigger population, so its objective is on a different scale again.
 
-**Status: open**, and it is a PI/[§8] decision rather than a code change.
+**THE SECOND HALF OF THE TRIGGER FIRED 2026-08-27, AND THE CONSEQUENCE DID NOT OCCUR.** [§14a]'s
+objective is over `Σw = n = 104` unit weights against roughly 23 for the [§7] overlap-weighted cohort —
+a factor of about 4.5, which is the change of scale this item names. Measured over 2000 replicates
+(Stage 12 §13.4): **every fit converged, in 4 to 6 iterations, all on the likelihood criterion**, with
+`first_step_norm` between 1.009 and 22.76 and zero non-convergence. An absolute tolerance on a
+log-likelihood four and a half times larger did not become either loose or tight enough to matter here.
+
+That is evidence and not proof — the concern is structural, and a scale change large enough to bite
+would be one where the *ratio* of `POLR_TOL` to the per-observation contribution moved by orders of
+magnitude rather than by 4.5. **Trigger, narrowed:** a population an order of magnitude larger than the
+cohort, or the first replicate anywhere in the pipeline that exits on `POLR_MAX_ITER`.
+
+**Status: open**, narrowed, and it is still a PI/[§8] decision rather than a code change.
 
 ## Give `model.FitError` a `code` field instead of classifying by message prefix (Stage 10 §7.2)
 
@@ -750,7 +778,19 @@ pipeline. The trigger is now **Stage 12's bootstrap alone**, which resamples a l
 right design there is still a seed *sequence* — `SeedSequence.spawn(N_BOOT)` — reproducible under any
 scheduling and a different decision from the one §4.3 declined.
 
-**Status: open**, deferred with a rewritten trigger.
+**THE TRIGGER FIRED 2026-08-27 AND THIS IS NOW THE LARGEST SINGLE COST IN THE PIPELINE.** Measured
+(Stage 12 §2, §12.8): Stage 12's bootstrap is **~18.4 minutes** — one `replicates` call whose body runs
+three arms per draw — of which the **hierarchical arm is 95%**, at 17.5 minutes for 2000 fits of
+`model.polr_ri`. Against a 130–145 s Stages 1–10 pipeline plus Stage 11's 137.6 s, that is roughly an
+eightfold increase in total wall clock, and it is concentrated in one loop over one estimator.
+
+**Two things make it the good case for the seed sequence rather than a reason to panic.** The
+hierarchical body is pure — one `model.design`, one `model.polr` for start values, one `polr_ri` — so
+it parallelises without sharing state; and Stage 12 §12.4 already measured that the 21.7-hour version
+of the same arm was an optimiser choice, so the remaining 17.5 minutes is not slack to be tuned away.
+`SeedSequence.spawn(N_BOOT)` remains the right design, for §4.3's reason.
+
+**Status: open**, and it is now actionable rather than deferred.
 
 ## Label the denominator on each row of the bootstrap audit grid (Stage 10 §16 item 9)
 
@@ -855,7 +895,19 @@ arm emits no p and §15.8 asserts the subgroups emit exactly two.
 `C.ci_min_draws` or `C.PERCENTILE_METHOD`. At that point the loop moves into `bootstrap.py` as a ninth
 public name taking the p rule as a parameter, and both callers read it.
 
-**Status: open**, deferred with a named trigger.
+**CLOSES WITH STAGE 12 — the third caller is real and the trigger's own prescription is what Stage 12
+§13.3 specifies.** `standardise.inference` passes `lambda key: False` over seventy keys, so the loop
+would be in three modules rather than two. `bootstrap.intervals(draws, tested)` becomes the ninth
+public name, `run` and Stage 11's two callers move onto it, and the p rule stays a parameter for the
+reason this item already gives: it is the only thing the three callers disagree about.
+
+**The guard this item asked for is specified too.** *"Refactoring `run` onto the shared helper would
+edit the function whose twenty-six intervals Stage 10's Definition of done asserts"* — Stage 12 §20.11
+asserts those twenty-six are **byte-identical** before and after, and Stage 12 §25 orders the
+extraction as implementation step 3, *before* Stage 12 has any keys of its own, so a discrepancy is
+unambiguously the refactor's rather than the new stage's.
+
+**Status: closed** with the Stage 12 implementation commit.
 
 ## `Replicate` cannot describe a body with more than one `polr` fit (Stage 11 §3.1, §16 item 8)
 
@@ -874,4 +926,131 @@ such. Stage 11 reports what it needs off `Draws`, which carries the surviving co
 **Trigger.** The first stage that wants diagnostics from a multi-fit replicate body. [§14a]'s
 standardisation is the candidate, since it fits per arm.
 
-**Status: open**, deferred with a named trigger.
+**THE TRIGGER FIRED 2026-08-27 — AND THE REASON WRITTEN ABOVE IS WRONG, WHICH IS CORRECTED HERE
+RATHER THAN QUIETLY REPLACED.** *"[§14a]'s standardisation … fits per arm"* describes a mechanism that
+does not occur. Standardisation fits **once** and predicts **twice**, by overwriting the treatment
+column of the already-fitted design — Stage 12 §7.1, where re-fitting per arm is shown to be not merely
+wasteful but silently wrong, because `model.design` drops the treatment column as constant on a frame
+where every patient is treated. So the pooled and support-restricted arms share one `polr` fit and one
+`n_alpha`, and this item's stated route to a multi-fit body never opens.
+
+**What does open it is the hierarchical arm**, which adds a **second estimator** — `model.polr_ri` —
+to the same body (Stage 12 §12). Two fits, two convergence stories, one scalar pair on `Replicate`.
+
+**And the fix is still declined.** Widening `n_alpha` and `polr_iterations` to dicts touches
+`Replicate`, `Diagnostics`, `_diagnostics`, `_diagnostics_table` and every Stage 10 assertion over
+them, to gain what Stage 12 §3.3 already provides better: `hier.sigma` is a **first-class estimand
+key**, so the random-intercept fit's own parameter has draws, a surviving count and an interval,
+recoverable from `Draws` rather than from a diagnostic. `at_floor`'s rate is reported the same way.
+
+**Trigger, rewritten.** A stage wanting the **cutpoint distribution** of a second fit — which
+`hier.sigma` does not carry and no key can, since it is a property of the fit's shape rather than a
+number the fit produces.
+
+**Status: open**, trigger fired, fix declined with the reason restated.
+
+## A percentile interval on a parameter sitting at its boundary (Stage 12 §12.5, §21 item 7)
+
+**What.** `model.polr_ri`'s between-centre SD reaches `POLR_RI_SIGMA_FLOOR` in **22.0%** of replicates
+— measured over 200 — because [§14a] names `σ²_C = 0` as a legitimate answer and four clusters
+frequently give it. The `hier.sigma` key therefore has a percentile interval whose lower limit **is the
+floor**, and a floor is not a value: it means "the variance collapsed", which is a qualitatively
+different statement from "the variance is small".
+
+**Why it is not fixed now.** There is no cheap correct answer. The literature's options — a
+likelihood-ratio interval against the boundary mixture `0.5·χ²₀ + 0.5·χ²₁`, a parametric bootstrap, or
+a Bayesian fit with a prior on σ — are respectively a second inference procedure, a second bootstrap
+inside the first, and the prior-driven route [§14a] explicitly declines (*"a Bayesian fit would be
+steadier but prior-driven"*). Stage 12's answer is this pipeline's standing one: **count it, print it,
+and put it to the PI.** Stage 12 §17.2 requires the boundary rate printed beside the interval.
+
+**Trigger.** Any reading of `hier.sigma`'s interval as a range for the between-centre SD, or a
+manuscript reviewer asking for a test of `σ²_C = 0`.
+
+**Status: open**, put to the PI, and it is a reporting decision before it is a code one.
+
+## `RD_5` and `RD_4` coincide in 4.15% of the [§14a] draws (Stage 12 §6.3, §21 item 8)
+
+**What.** mRS 5 carries three patients of 104, so a stratified resample loses the level entirely in
+**4.15%** of replicates — measured, 83 of 2000, and it is always that level. In those replicates the
+fit has five cutpoints, the standardised distribution carries a structural zero at mRS 5, and
+`RD_5 == RD_4` **exactly**. The sampling distribution of `RD_5` is therefore narrowed by an amount
+nobody has quantified, in a direction that makes it look more precise than it is.
+
+**Why it is not fixed now.** The structural zero is the correct value — a level no record occupies is
+a level for which the fit provides no cutpoint, and interpolating one invents a parameter (Stage 12
+§6.3). The alternative of dropping collapsed replicates would select the bootstrap on the outcome
+distribution, which is worse. Stage 12 counts and prints the rate.
+
+**Trigger.** A manuscript reporting `RD_4` and `RD_5` as separate findings, or any comparison of their
+interval widths.
+
+**Status: open**, and it is a reporting caveat rather than a defect.
+
+## `polr_ri` ships without an independent implementation having agreed with it (Stage 12 §12.7, §26)
+
+**What.** `model.polr_ri` is a new maximiser and Stage 12 §12.7 specifies its `ordinal::clmm` oracle in
+full — the three-way sign asymmetry, `nAGQ = POLR_RI_NODES`, the separate tolerance on σ. **The oracle
+has not been run.** R segfaults at startup on this machine for the `uname`/PATH reason
+`test_reference_r.py`'s banner documents at length, so the spec's verification of `polr_ri` rests on
+its own analytic gradient, its node-count stability, and its collapse to `model.polr` at σ = 0 — all
+internal.
+
+**Why it matters more here than for the other four oracles.** `logistf`, `PSweight`, `clm` and
+`OrderedModel` check estimators whose specifications were already fixed by [§7] and [§8]; this one
+checks an estimator **this repository designed**, including its quadrature rule and its boundary
+handling. It is the only estimator in the pipeline in that position.
+
+**Trigger.** Stage 12's implementation step 7. Opening the gate is the deliverable, not a nice-to-have,
+and `_r_environment` is the fix the environment needs.
+
+**Status: open**, and it blocks calling the hierarchical arm verified.
+
+## The [§14a] transported population is 12 and not 14 (Stage 12 §4.1, §21 item 9)
+
+**What.** USZ contributes 14 eligible patients and **two of them have no 90-day mRS**, so the [§11]
+estimation population carries 12. Both outcome-missing records in the whole [§14a] population are at
+USZ — measured. The centre whose inclusion is [§14a]'s entire reason for existing loses one seventh of
+its contribution to outcome ascertainment, and the transport rests on the 12 that remain, of whom
+three are outside the treated support (Stage 12 §10.2).
+
+**Why it is not fixed now.** [§11] is complete-case by prescription and no imputation is permitted
+anywhere in this plan. The number is reported per centre in Stage 12's population audit entry, which
+is what [§11] requires.
+
+**Trigger.** A workbook in which the never-IVT centre's outcome completeness is materially worse, at
+which point the transported population is small enough that the arm's interpretation changes.
+
+**Status: open**, informational, and it is a denominator rather than a defect.
+
+## Whether [§14a]'s hierarchical standardisation should be marginal rather than conditional (Stage 12 §12.6)
+
+**What.** A random-intercept model offers two standardisations: integrate the prediction over
+`b ~ N(0, σ²)`, or predict each patient at their own centre's conditional mode `b̂_c`. Stage 12
+implements the second, because [§14a]'s *"patients at a never-IVT centre inform that centre's intercept
+through their direct-EVT outcomes"* is only true under it. The first answers a different question —
+the distribution for a patient at a *randomly drawn* centre — and a reviewer may well want it.
+
+**Why it is not decided here.** It is a different estimand and [§14a] named one. Adding it is a [§14]
+amendment, and it would need its own keys, its own interval and its own place in [§16]'s
+different-populations statement.
+
+**Trigger.** A reviewer asking what the arm says for a patient at an unobserved centre.
+
+**Status: open**, and it is the PI's rather than a code change.
+
+## Stage 12's spec is written against an unlanded Stage 11 (Stage 12 header, §21 item 11)
+
+**What.** Stage 12's specification depends on Stage 11 in exactly three places, all named in its
+header: `bootstrap.bucket` and `bootstrap.collect` being public (Stage 11 §5.4); the interval loop
+being extractable as Stage 11 §16 describes; and `outcome.estimation_population` existing and
+deliberately **not** being used (Stage 12 §4.1). Stage 11's spec is written and its code is not built.
+
+**Why it is filed rather than resolved.** Stage 12's spec could not wait on Stage 11's implementation
+without the roadmap's order becoming a serialisation of writing as well as of building, and the three
+dependencies are small and named. But they are assumptions about code that does not exist.
+
+**Trigger.** Stage 11 landing with `bucket`/`collect` private, or with the interval loop left
+duplicated. Either makes Stage 12 §13.3 and §13.2 wrong rather than merely early.
+
+**Status: open**, and it closes when Stage 11 lands.
