@@ -1176,8 +1176,8 @@ def run(df: pd.DataFrame, ps: propensity.Propensity, est: outcome.Primary,
     )
 
     draws = collect(collected, keys)                            # §7.1, §7.3, per group
-    diagnostics = _diagnostics(collected)                        # §7.4, §7.5, §9.2, §10.2
-    _record_replicates(draws, diagnostics, audit)                # §10.1
+    diag = diagnostics(collected)                               # §7.4, §7.5, §9.2, §10.2
+    _record_replicates(draws, diag, audit)                # §10.1
 
     # THE INTERVAL LOOP IS `intervals`' AND NOT THIS FUNCTION'S, on the same argument that makes the
     # replicate loop `replicates`'. `_tested` is the [§10] p-rule and is PASSED rather than read
@@ -1186,4 +1186,4 @@ def run(df: pd.DataFrame, ps: propensity.Propensity, est: outcome.Primary,
     # a thinned draw set in one caller and refused in the other.
     return Bootstrap(C.SEED, C.N_BOOT, draws,
                      intervals(draws, _tested),                  # §9.1, §9.3 -- 8 of 26
-                     diagnostics)
+                     diag)
