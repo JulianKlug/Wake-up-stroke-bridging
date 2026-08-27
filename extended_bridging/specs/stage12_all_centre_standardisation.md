@@ -37,6 +37,18 @@ document's claims about landed code, it did not check the statistical premises, 
 and **no independent cross-model review was run**. §21 item 14 is the residual and is the largest
 open risk here.
 
+**IT WAS THEN IMPLEMENTED ON 2026-08-27, AND §28 IS THE RECORD.** Every figure in §26 reproduced on an
+independent implementation; §25's step 0 ran and replaced the hierarchical arm's projections with
+`N_BOOT` measurements; **§26's largest verification gap closed** — R works on the implementing machine,
+so the `ordinal::clmm` oracle ran and agrees with `polr_ri` to about 1e-5 on the coefficients, the
+thresholds and σ alike (§28.5); and **three things this document did not anticipate were found by
+running the code rather than by reading it**: two numerical defects in `polr_ri`'s quadrature, a 0.1%
+drop rate where §13.4 says nothing fails, and a name collision created by §13.2's own rename. **Where §28 and an
+earlier section disagree about a number, §28 is the measurement and the earlier section is the
+projection it replaces.** The projections are left in place rather than overwritten, so that what was
+projected and what was measured stay distinguishable — which is §26's discipline applied to this
+document's own history.
+
 - **§7.3 — two of the four quantities [§14a] lists as outputs are not new numbers.** The standardised
   mRS 0–2 risk difference *is* `RD_2` and the standardised mortality difference *is* `−RD_5`, to
   8.3e-17. This document's first draft specified four computations; there are two, and the other two
@@ -1257,12 +1269,15 @@ and it collapses to the pooled model."* It is not a hypothetical. Measured over 
    iterations   min 23   median 27   max 47      (POLR_RI_MAX_ITER 200)
 ```
 
-**These are the hierarchical arm's only measurements and they are at n = 200**, while the pooled and
+**These were the hierarchical arm's only measurements and they are at n = 200**, while the pooled and
 support arms were run at the full `N_BOOT = 2000` (probe B1). The asymmetry is a fact about how this
 document was produced and not about the estimator, so it is labelled everywhere the rates are
-repeated — §17.2, §19 and §21 item 7 — rather than stated once here and forgotten. **§25's step 0
-re-runs the three-arm body at `N_BOOT` and replaces every one of them with a measured figure**, at a
-cost of about eighteen minutes; until it lands, 22.0% and 24.0% mean 44 and 48 out of 200.
+repeated — §17.2, §19 and §21 item 7 — rather than stated once here and forgotten.
+
+**§25's STEP 0 HAS SINCE RUN AND §28 CARRIES THE `N_BOOT` FIGURES: 18.4% at the floor and 23.0% above
+σ = 1**, against the 22.0% and 24.0% above. Both are within sampling error of the 200-replicate
+estimates — 18.4% against 22.0% is 1.2 standard errors at n = 200 — so these figures were imprecise in
+the way this section said they were rather than wrong. **The rates a manuscript prints are §28's.**
 
 **Under a `log sigma` parametrisation the boundary is at −∞**, and the conditional-mode Newton
 (§12.2) evaluates `1/sigma^2`, which **overflows** as the search approaches it — observed directly in
@@ -1517,9 +1532,24 @@ draws, so the floor is nowhere near and no key is dropped for thinness.
      survived                                               200       100.00%
      nonconvergence, polr_ri                                  0       §12.5
      T2, T3, T4                                               0
+
+   THE HIERARCHICAL ARM  --  MEASURED at N_BOOT = 2000                [§28, step 0]
+     replicates attempted                                  2000
+     survived                                              1998        99.90%
+     nonconvergence, polr_ri (T2, step-halving exhausted)     2         0.10%
+     cost:  hier.* ONLY -- 24 of the 69 keys, per replicate
 ```
 
-**Nothing fails.** That is worth stating plainly against the run of this pipeline's history: Stage 10
+**Nothing fails in the pooled and support arms, and the hierarchical arm drops 0.1%.** The second half
+is §28's measurement and it amends this section: at n = 200 the arm lost nothing, and at `N_BOOT` two
+replicates exhaust the halvings — at iteration 22 and at iteration 7 — in a genuine BFGS line-search
+stall rather than in the `nan` artefacts §28 fixed. Each costs `hier.*` and nothing else, so the
+pooled and support arms keep 2000 draws while the hierarchical arm has 1998, every `Draws` reconciles,
+and the failures land in `nonconvergence`. **The taxonomy handles it as designed; what is open is
+whether a 0.1% drop selected by the OPTIMISER rather than by the data is exchangeable**, which §28
+files as a `TODOS` item rather than answering.
+
+**The pooled arm's own claim is unchanged and was re-measured:** That is worth stating plainly against the run of this pipeline's history: Stage 10
 measured a zero drop rate on the [§8] estimator, Stage 11 measured **12.5%** on the `unknown_onset`
 subgroup and called it the largest the pipeline had produced. [§14a]'s design is wider (ten columns
 against one) but its population is larger (104 against 92) and — the reason that matters — **it is
@@ -1746,9 +1776,9 @@ prespecified rule says so:
 - **The cutpoint-collapse rate is printed beside the `RD_5` interval.** 4.15% of draws lost mRS 5, in
   which `RD_5` equals `RD_4` exactly (§6.3). A reader comparing the two intervals is entitled to know
   that 83 draws of 2000 made them identical by construction.
-- **The hierarchical arm prints its `at_floor` rate and USZ's posterior SD.** 22.0% of replicates
-  collapse to the pooled model — 44 of 200, and the rate Stage 14 prints must be the one §25's step 0
-  measures at `N_BOOT`, not this projection — and the interval on `hier.sigma` has a limit that means
+- **The hierarchical arm prints its `at_floor` rate and USZ's posterior SD.** **18.4% of replicates
+  collapse to the pooled model — 368 of 1998, MEASURED at `N_BOOT` (§28)**; the 22.0% from n = 200 that
+  this line first carried is the projection §25's step 0 replaced — and the interval on `hier.sigma` has a limit that means
   "the boundary" in those draws (§12.5); USZ's intercept is the least precise of the four and the arm
   rests on it (§12.6).
 - **There is one conditional log-odds per FIT, never one per arm.** The support arm has no
@@ -1864,11 +1894,14 @@ and 8 because that is where the call falls:
     126 -> 107 -> 104   the ledger, and the 2 outcome-missing are BOTH at USZ     [§4.1]
     12 / 3              never-IVT patients, and how many are outside the box      [§10.2]
     4.15%               replicates losing mRS 5, in which RD_5 == RD_4 exactly    [§6.3]
-    0 / 2000            failures. Nothing in this stage drops a replicate         [§13.4]
-    44/200, 48/200      polr_ri replicates at the sigma floor / above sigma = 1   [§12.5]
-                        n = 200, NOT N_BOOT.  §25 step 0 re-measures              [§26]
-    ~18.4 min           the bootstrap, of which the hierarchical arm is 95%       [§2]
-                        the hierarchical share is PROJECTED, not measured         [§12.8]
+    0 / 2000            failures in the POOLED and SUPPORT arms                   [§13.4]
+    368/1998, 460/1998  polr_ri replicates at the sigma floor / above sigma = 1   [§28]
+    18.4%, 23.0%        MEASURED at N_BOOT.  The 44/200 and 48/200 this line
+                        first carried were probe F4's, at n = 200                 [§12.5]
+    2 / 2000            polr_ri non-convergences, costing hier.* only             [§28]
+    ~4.2 min            the bootstrap, of which the hierarchical arm is ~95%      [§28]
+                        MEASURED; the 18.4 min this line first carried was a
+                        x10 projection from n = 200                               [§12.8]
     10                  audit entries, taking a Stages 1-12 ledger to 56          [§15]
 ```
 
@@ -2141,8 +2174,9 @@ was written for.
 6. **NEW — the marginal-versus-conditional standardisation under the random-intercept model.** §12.6
    implements [§14a]'s reading; the marginal one is a different estimand and would need a [§14]
    amendment. **Trigger:** a reviewer asking what the arm says for a patient at an unobserved centre.
-7. **NEW — a percentile interval on a parameter at a boundary.** 22.0% of `hier.sigma`'s draws are at
-   the floor — 44 of 200, and §25's step 0 re-measures it at `N_BOOT`. Those draws are at
+7. **NEW — a percentile interval on a parameter at a boundary.** **18.4% of `hier.sigma`'s draws are at
+   the floor — 368 of 1998, MEASURED at `N_BOOT` (§28); the 22.0% this item first carried was 44 of
+   200.** Those draws are at
    `POLR_RI_SIGMA_FLOOR`, so its lower limit is the floor and means "the boundary". §17.2 requires the
    rate printed beside it; a bounded parameter's interval is a known-hard problem and this pipeline
    does not solve it. **Trigger:** any reading of that interval as a range for the between-centre SD.
@@ -2170,9 +2204,12 @@ was written for.
     Stage 12 is already landing a new estimator, a fourth public module surface and the interval-loop
     refactor, and a nineteen-site error-taxonomy amendment on top is two structural changes at once.
     §14 states the first-token rule explicitly so the next author does not rediscover it.
-13. **NEW — the hierarchical arm's rates are 200-replicate measurements** (§12.5, §26). Every one is
-    labelled, and §25's step 0 replaces them with `N_BOOT` measurements before implementation begins.
-    **Status: open until step 0 lands**, at which point this item closes with measured numbers rather
+13. **CLOSED with measured numbers, 2026-08-27 (§28).** The hierarchical arm's rates were
+    200-replicate measurements; §25's step 0 ran and replaced them. At `N_BOOT = 2000`: **18.4% at the
+    floor** (368 of 1998) against 22.0%, **23.0% above σ = 1** (460 of 1998) against 24.0%, **2 of 2000
+    non-convergences** against 0 of 200, and **4.2 minutes measured** against 17.5 projected. The two
+    rates were imprecise as stated; the wall clock was a factor of four out, and a timing is machine
+    state. **Status: closed**, which is what this item asked for — closed with measured numbers rather
     than negatively.
 14. **NEW — this document has not been swept for the error class §27.1's first row is an instance
     of: a structural decision argued from engineering grounds where [§10], [§14] or [§16] gives a
@@ -2363,14 +2400,20 @@ and the run is recorded as the guard against an accidental edit rather than as e
 **What was NOT measured, and is therefore not claimed. There are two things, and the second was found
 by the engineering review rather than by the probe suite.**
 
-**First — the hierarchical arm was never run at `N_BOOT`.** Probe B1's 2000 replicates covered the
-pooled and support arms; the hierarchical arm is probe F4's, at **200**. So `22.0%` at the floor,
-`24.0%` above σ = 1 and `0/200` non-convergence are 200-replicate measurements, and `17.5 min` is a
-×10 projection from a measured 105.0 s. Every section quoting them says so (§12.5, §12.8, §13.4,
-§17.2, §19, §21 item 7). Nothing about the arm's behaviour is expected to change at 2000 — the
-projection is linear in the replicate count and the body is identical — but "not expected to change"
-is not a measurement, and this document does not report those as the same thing. **§25's step 0 runs
-it**, at a cost of about eighteen minutes, before any code is written.
+**First — the hierarchical arm was never run at `N_BOOT` when this document was written.** Probe B1's
+2000 replicates covered the pooled and support arms; the hierarchical arm is probe F4's, at **200**. So
+`22.0%` at the floor, `24.0%` above σ = 1 and `0/200` non-convergence were 200-replicate measurements,
+and `17.5 min` was a ×10 projection from a measured 105.0 s. Every section quoting them says so
+(§12.5, §12.8, §13.4, §17.2, §19, §21 item 7). Nothing about the arm's behaviour was *expected* to
+change at 2000 — the projection is linear in the replicate count and the body is identical — but "not
+expected to change" is not a measurement, and this document did not report those as the same thing.
+
+**§25's STEP 0 HAS SINCE RUN (§28) AND ONE OF THE FOUR FIGURES DID CHANGE MATERIALLY.** The two rates
+moved within sampling error (18.4% and 23.0%), the wall clock was out by a factor of four (4.2 min
+measured), and **the non-convergence count moved from 0 to 2 — which is not a precision question but a
+behaviour the 200-replicate run did not exhibit at all.** That is the argument for this paragraph
+existing, made against this document by its own implementation: "not expected to change" was right
+about three figures and wrong about the fourth.
 
 **Second — the `ordinal::clmm` oracle has not been run:**
 R segfaults on this machine at startup for the `uname`/PATH reason `test_reference_r.py`'s banner
@@ -2491,3 +2534,192 @@ replicate to a *resampled* frame, and is safe to index by label only because `bo
 resets the index first — `bootstrap.py:315-320`, which gives Stages 12 and 13 as its reason in as many
 words. §20.14 names it, so the property is visible from the caller that needs it and not only from the
 function that provides it.
+
+---
+
+## 28. The implementation record, 2026-08-27
+
+This document was implemented on the date it was written, against the landed Stages 1–10 and the v7
+workbook (`DATA_SHA256` unchanged), Python 3.12.12 / numpy 1.26.4 / pandas 2.3.3 / statsmodels 0.14.6
+— §2's environment exactly, and **no dependency was added**.
+
+**Read this section as §26's continuation rather than as its replacement.** §26 records what the
+*probes* measured before any code existed; this records what the *shipped code* measures. Where the two
+disagree about a number, this one is the measurement — and the earlier figure is left in place, labelled
+as the projection it was, so that what was projected and what was measured stay distinguishable.
+
+### 28.1 What reproduced, and it is nearly everything
+
+**Every figure in §26 that the implementation could reach reproduced, on code written from this
+document rather than from the probes.** That is the strongest available evidence that the document is
+implementable as written, and it is listed rather than summarised because a claim of agreement nobody
+can check is worth nothing:
+
+| §26 probe | figure | reproduced |
+|---|---|---|
+| A1 | 126 → 107 → 104; 1 covariate-incomplete on `core_ml`+`tmax6_ml`; 2 outcome-missing, both USZ | exact |
+| A1b | `treating_centres`' complement is `('USZ',)` | exact |
+| A2 | all 7 mRS levels occupied at the point estimate | exact |
+| A3 | 10 design columns, 0 dropped, 6 cutpoints | exact |
+| A4 | 5 iterations on `"likelihood"`, 0 rescales, 0 halvings, max abs coefficient 0.73 | exact (0.7311) |
+| A5 | the box per covariate; 93 inside / 11 outside, all comparator; 3 of 12 outside | exact |
+| A5b | the two "continuous" readings give the same outside-set | exact |
+| A6 | 39 / 12 / 53; `center = USZ` is `nan`; largest non-grouping SMD above 0.8 | exact (1.0197 on `hypertension`, 0.843 on `prestroke_mrs`) |
+| A7 | 12 audit entries before this stage; step names disjoint from `cohort.build`'s | exact |
+| B0b | `|mrs_0_2 − RD_2|` 0.0; `|mortality + RD_5|` 8.3e-17 | exact (0.0 and 8.327e-17) |
+| B2 | the cutpoint collapse, 83 / 2000 = 4.15%, always mRS 5 | exact |
+| B3 | `polr` iterations 4–6 across 2000 replicates | exact (4: 25, 5: 1958, 6: 17) |
+| B4 | `|beta|` min 0.0000 median 0.3219 max 2.0016; 0 reaching 14.0 | exact |
+| B5 | design columns dropped: 0 in 100.00% of replicates | exact |
+| B7 | the reflection check, 9.8e-5 / 1.7e-3 against `"linear"`'s 1.1e-16 / 5.6e-16 | exact (9.834e-05 / 1.705e-03) |
+| B9 | every distribution sums to 1 and is monotone in every arm of every replicate | exact |
+| D1–D4 | the analytic gradient against central differences | 4.3e-8 to 6.9e-8, against the probe's 1e-8 — same order, both far below `POLR_SCORE_TOL` |
+| E1–E4 | adaptive stable from 9 nodes; non-adaptive NON-MONOTONE in the node count | reproduced on an independent frame: adaptive spread 3.5e-11 over 9/11/15/31; non-adaptive 0.632 / 0.737 / 0.530 / 0.567 / 0.599 at 5 / 7 / 9 / 11 / 15 |
+| §12.3 | σ̂ = 0.542426850 at 11 adaptive nodes | exact to the digits quoted (0.542427) |
+| §12.4 | 25 iterations, 85 halvings, 2 rescales at the point estimate | exact |
+| §12.6 | the four posterior SDs: 0.2517 / 0.3156 / 0.2823 / 0.3810 | exact to four decimals, and USZ is still the least precise |
+| §20.11 | `bootstrap.run`'s twenty-six intervals byte-identical across the `intervals` extraction | **exact — all 26, every limit, level, method, draw count and `p`** |
+
+**§6.3's predicted consequence was also confirmed rather than assumed**: `RD_4 == RD_5` holds
+*exactly* in 83 of 2000 draws, which is the same 83 replicates that lost mRS 5.
+
+### 28.2 §25's step 0 — the hierarchical arm at `N_BOOT`
+
+Run before the acceptance suite was written, as §25 requires, and it changed four figures:
+
+| quantity | §26, n = 200 | measured, `N_BOOT` = 2000 |
+|---|---|---|
+| σ̂ at the `POLR_RI_SIGMA_FLOOR` boundary | 44 / 200 = **22.0%** | 368 / 1998 = **18.4%** |
+| σ̂ above 1.0 | 48 / 200 = **24.0%** | 460 / 1998 = **23.0%** |
+| `polr_ri` non-convergence | **0 / 200** | **2 / 2000** |
+| the whole three-arm bootstrap, wall clock | **17.5 min**, projected ×10 | **4.2 min**, measured |
+| σ̂ range | min 0.000021, median 0.65923, max 1.78734 | min at the floor, median 0.69084, max 2.42713 |
+
+**Three of the four moves are unremarkable and the fourth is not.** The two rates are within sampling
+error of the 200-replicate estimates — 18.4% against 22.0% is 1.2 standard errors at n = 200 — so §26
+was right to call them imprecise rather than wrong. The wall clock is a factor of four out, and a
+timing is machine state, which §26 already says of every timing it quotes; the arm is still ~95% of the
+stage's compute and the stage is still the most expensive thing in the pipeline, so §21 item 5's
+parallelisation trigger stays fired.
+
+**The non-convergence count is the one that matters, because it is a behaviour and not a precision.**
+§13.4's *"Nothing fails"* is true of the pooled and support arms at 2000 replicates and false of the
+hierarchical arm: two replicates exhaust `POLR_MAX_HALVINGS` in a genuine BFGS line-search stall, at
+iteration 22 and at iteration 7. That is 0.1%, each costing `hier.*` and nothing else — 24 of the 69
+keys — so the pooled and support arms keep 2000 draws while the hierarchical arm has 1998, and every
+`Draws` reconciles. **The taxonomy handles it exactly as §13.2 designed it to.** What is *not* settled
+is whether a 0.1% drop selected by the optimiser rather than by the data is exchangeable with the
+survivors, which is Stage 6 §5.3's concern in a new place; `TODOS` carries it with a 1% trigger.
+
+**A recovery path was considered and declined.** Resetting the BFGS inverse-Hessian to the identity on
+a line-search failure and retrying as a gradient step is a standard safeguard and would probably
+recover both replicates. It is declined because §12.4 fixes the loop's shape and Stage 6 §5.3's
+argument applies with full force: [§10] drops failed replicates, so a change to *which* replicates
+fail is a change to the sampling distribution, and adding a recovery path is as much a modelling
+decision as removing one. That is a [§14] amendment, not a repair.
+
+### 28.3 Three things this document did not anticipate, all found by running the code
+
+**None was reachable by reading. Two are numerical and were invisible at the point estimate, at
+n = 200, and in every structural test; the third is a name collision this document's own rename
+created.**
+
+1. **`p = gu − gl` underflows to EXACTLY ZERO at far quadrature nodes.** Both are `expit`s; at a node
+   the conditional posterior has moved away from, both are 1.0 in float64 and the difference cancels.
+   Then `log p` is `−inf` and `du/p`, `(du/p)²` and `du·dl/p²` are all `nan` — the gradient is `nan`,
+   the trial step is rejected by the `isfinite` test in the halving loop, and **the fit converges to
+   the right answer through a line search doing the wrong job.** `model._RI_P_FLOOR = 1e-150` floors
+   it. The exponent is chosen against `p²` and not against `p`: `Hul = du·dl/p²`, so a floor below
+   ≈1.5e-154 makes `p²` underflow and reintroduces the 0/0 it fixes.
+
+   `polr`'s convention is the opposite — return `−inf` and let step-halving reject the step — and it
+   is right *there*, where a non-positive probability means crossed cutpoints at the iterate. Here it
+   means a far node, which is not a property of the iterate at all and is what a quadrature rule
+   exists to weight at zero.
+
+2. **The per-group log-posterior curvature comes out POSITIVE from cancellation.** It is negative
+   exactly in the mathematics — a sum of concave ordinal terms plus a Gaussian log-prior, so it cannot
+   exceed `−1/σ²` — but `Huu = ddu/p − (du/p)²` is a difference of two large quantities in the tails.
+   When the sum crossed zero, `sqrt(−1/curvature)` returned `nan`, the nodes were `nan`, and the line
+   search absorbed it again — and in **2 of 2000 replicates it exhausted the halvings and raised T2 for
+   a floating-point artefact.** `model._curvature` clamps the ordinal contribution to its own
+   guaranteed sign, `min(g2, 0)`. It enforces a property rather than choosing a magnitude, and the
+   bound is tight: attained whenever the data contribute no curvature, which is the far-tail case
+   producing the noise.
+
+   **This is §12.5's own argument turned on this document.** §12.5 says of the σ → 0 boundary that
+   *"the fit still returned … but 'still returned' is not a specification"* — and then the specified
+   fitter had two further instances of exactly that failure mode. `test_model.py` now asserts `polr_ri`
+   runs clean under `warnings.simplefilter("error", RuntimeWarning)` on both a non-zero-σ frame and a
+   floored one, which is the check that would have caught them.
+
+3. **§13.2's own rename created an `UnboundLocalError` that no structural check could see.** Making
+   `bootstrap._bucket` public as `bucket` collided with a local variable named `bucket` inside
+   `_replicate`, which holds the classified value. The module-level function was shadowed and the
+   first replicate that classified a failure raised `UnboundLocalError`. Imports were clean, every
+   structural test passed, and **the full 2000-replicate pipeline is what found it.** The three locals
+   are now named `label`.
+
+### 28.4 Where the implementation departs from this document, and why
+
+**Five departures. Four are forced by Stage 11's absence and one is a measured tolerance.** Nothing
+else in §§1–27 was contradicted.
+
+| # | This document | The implementation | Why |
+|---|---|---|---|
+| 1 | `bootstrap.bucket` and `bootstrap.collect` are public (header, §13.2) | they are made public **here**, as a pure rename | Stage 11 has not landed at all, so they were still private. §21 item 11's trigger in its stronger form; the rename is the same shape §18 already authorises for `balance._levels` |
+| 2 | *"Stage 11's two callers move onto it"* (§13.3) | only `run` moves, because Stage 11's callers do not exist | same cause. `bootstrap.intervals` takes the p-rule as a parameter exactly as specified, so Stage 11's callers will read it when they land |
+| 3 | public surfaces go 8 → 9, 6 → 8 and 3 → 4 (§3.2, §18) | 5 → 8, 5 → 7 and 2 → 3 | **every DELTA is right and every ABSOLUTE is one high** — the signature of counting against an unlanded baseline. The tests assert by NAME rather than by count |
+| 4 | §20.12: at the floor, `polr_ri`'s `alpha` and `beta` agree with `model.polr`'s **to 1e-6** | asserted at **1e-5** | measured 4.9e-6 on the cutpoints and 1.3e-6 on the coefficients. At the floor σ is 1e-4 and not 0, so the marginal model is not exactly the pooled one, and both fits stop on `POLR_TOL` rather than at an exact stationary point. 1e-6 is a bound this construction does not reach |
+| 5 | §10.3 leaves the baseline table's `role` column unspecified beyond `"grouping"` | `standardise._role` is a Stage-12 vocabulary and does **not** call `balance._role` | `balance._role` returns `"propensity model"` for every `PS_COVARIATES` name, and **[§14] fits no propensity model anywhere** — that label would name a model this analysis does not contain. Its docstring defines a role as *"what this covariate is TO the specification being diagnosed"*, and the specification here is a different one |
+
+**And one thing this document specified that the implementation could not fully honour**: §10.1's box
+readings, §20.10's counts and §20.1's ledger are all workbook-gated, so on a checkout without `data/`
+they skip — §25's step 0 makes the same point from the other side, and it is why every one of them was
+run against the workbook here rather than against a fixture.
+
+**The suite, measured with the workbook present: 1551 passed, 6 skipped, 0 failed.** The six skips are
+§20.11's `STAGE12_SLOW` byte-identity guard (run separately, and it passed), two Stage 10
+`STAGE10_SLOW` coverage designs, and three `firthlogist` oracles whose optional dependency is not
+installed. **No R oracle skips on this machine**, which is the difference from §26's own run.
+
+### 28.5 What this implementation did NOT close
+
+**§21 item 14 is untouched and remains the largest open risk in this document.** It asks for a sweep
+for structural decisions argued from engineering grounds where [§10], [§14] or [§16] gives a direct
+answer. **The implementation cannot perform that sweep and did not attempt it**: it implements what
+this document says, so a place where this document reasons around the plan rather than from it becomes
+code that matches the spec and disagrees with the prespecified analysis — which is precisely the
+failure mode item 14 describes, and precisely the one an implementer is worst placed to notice.
+
+**§26's LARGEST VERIFICATION GAP IS CLOSED, AND THAT IS THE ONE THING HERE THAT REVERSES A CLAIM THIS
+DOCUMENT MAKES.** §26 states that *"this is the one estimator in this pipeline whose specification
+ships without an independent implementation having agreed with it"*, because R segfaulted at startup on
+the machine the spec was written on. **R works on the machine it was implemented on, so the
+`ordinal::clmm` oracle RAN.** Measured against `ordinal` 2026.7.26 at `nAGQ = POLR_RI_NODES = 11`, on
+an eight-group frame:
+
+| parameter block | `polr_ri` against `clmm` | and the asymmetry |
+|---|---|---|
+| coefficients | `|ours + clmm|` = **1.033e-05** | NEGATED, and `|ours − clmm|` = 1.574, so there is something to negate |
+| thresholds | `|ours − clmm|` = **3.636e-06** | NOT negated |
+| σ | `|ours − clmm|` = **4.446e-06** | NOT negated either, because it is a scale |
+
+**All three parts of §12.7's three-way asymmetry hold, and they agree to about 1e-5 on every block.**
+That is an independent maximiser of the same likelihood reaching the same answer, which is the one
+comparison §12.7 says can fail for the reason the estimator would be wrong. `polr_ri` is therefore
+verified against `clmm`, against its own analytic gradient, against node-count stability, against its
+collapse to `model.polr` at the floor, against a known-σ recovery, and against the posterior-SD
+ordering.
+
+**One defect in the oracle itself is worth recording, because `clm` and `clmm` differ where they look
+alike.** The first version of `polr_ri_clmm.R` read the random-effect SD from `fitted$stDev`, which is
+what the name suggests and which is **NULL on a `clmm` object**: the SD is in `fitted$ST`, an
+`lme4`-style list whose single 1×1 matrix entry is the standard deviation for a lone random intercept.
+`as.numeric(NULL)` is `numeric(0)`, so `data.frame()` failed on a length mismatch and **the oracle
+failed for a reason that had nothing to do with the estimator** — which is exactly the failure mode a
+gated oracle is worst at surfacing, because a red test and a skipped test both mean "not verified".
+
+**No cross-model review of the implementation was run**, for the same reason §26.1 records for the
+spec. This code has been written once and reviewed by nobody — and §21 item 14, which asks for a sweep
+this implementation cannot perform, is untouched.

@@ -557,7 +557,7 @@ def test_the_balance_set_is_the_confounders_plus_the_balance_only_names():
 @pytest.mark.parametrize("name", [
     "PS_COVARIATES", "BALANCE_ONLY", "CENTER_ORDER", "ELIGIBILITY_ORDER", "MRS_THRESHOLDS",
     "PS_COVARIATES_FULL", "STANDARDISATION_COVARIATES", "BINARY_COLUMNS", "DERIVED_NAMES",
-    "CATEGORICAL", "EXPECTED_NEVER_IVT", "NA_VALUES",
+    "CATEGORICAL", "EXPECTED_NEVER_IVT", "NA_VALUES", "SUPPORT_COVARIATES",
     # Stage 3's four. This list is explicit rather than discovered, so a new declared sequence is
     # outside it until it is added by hand — which is the point, but it means adding it is part of
     # declaring one.
@@ -975,3 +975,120 @@ if __name__ == "__main__":
         print(f"wrote {_write_fixture()}")
     else:
         print(__doc__)
+
+
+# --- Stage 12 §20.2  the [§14a] additions ---------------------------------------------------------
+#
+# Six assertions, and the load-bearing one — `STANDARDISATION_COVARIATES == PS_COVARIATES` minus
+# `center` — is already made by §9.7 above, because that constant predates this stage. It is what
+# makes [§15]'s "permitted inside §14 only" a STATIC CHECK rather than a sentence: a covariate added
+# to the [§14a] model without being a [§6] confounder fails at import.
+
+
+def test_POLR_RI_NODES_is_ODD_and_at_least_NINE():
+    """Stage 12 §12.3, §20.2. The node count CHANGES AN ANSWER, so it is not a tolerance.
+
+    Measured, refitting at each count: NON-adaptive quadrature returns sigma_hat 0.720 / 0.803 /
+    0.832 at 5 / 7 / 9 nodes against 0.542426850 at 31 — 33% to 53% too large — while ADAPTIVE
+    quadrature is stable to eight significant figures from NINE. That gap is why Stage 12 §12.2
+    specifies adaptive and why this constant lives beside PERCENTILE_METHOD's argument rather than
+    beside POLR_TOL's: a node count is a modelling decision at low counts and an arithmetic detail
+    only above them.
+
+    **ODD**, because a symmetric quadrature rule with an odd node count places a node AT the
+    conditional mode, which is where the mass is. **At least nine**, because that is the measured
+    plateau; 11 is one step above it, and the cost of the two extra nodes is 0.5 s per
+    2000-replicate arm.
+    """
+    assert config.POLR_RI_NODES % 2 == 1
+    assert config.POLR_RI_NODES >= 9
+    assert config.POLR_RI_NODES == 11
+    assert isinstance(config.POLR_RI_NODES, int)
+
+
+def test_POLR_RI_SIGMA_FLOOR_is_positive_and_far_below_any_reportable_between_centre_SD():
+    """Stage 12 §12.5, §20.2. A floor on the SD, so 1e-8 on the variance.
+
+    Under a `log sigma` parametrisation the sigma -> 0 boundary is at -inf, where the
+    conditional-mode Newton's `1/sigma^2` overflows — and the boundary IS REACHED, measured in 368 of
+    1998 replicates that fit. This separates "collapsed to the pooled model" from "small" without
+    being reachable by a genuinely small non-zero variance.
+
+    A fit at the floor is NOT a failure: [§14a] names sigma^2_C = 0 as a legitimate answer, and
+    `RIFit.at_floor` records it.
+    """
+    assert 0.0 < config.POLR_RI_SIGMA_FLOOR < 1e-2
+    assert config.POLR_RI_SIGMA_FLOOR == 1e-4
+    assert config.POLR_RI_SIGMA_FLOOR ** 2 == pytest.approx(1e-8, rel=1e-12)
+
+
+def test_POLR_RI_MAX_ITER_is_its_OWN_cap_and_not_POLR_MAX_ITERs():
+    """Stage 12 §12.4. The two estimators are not on the same scale.
+
+    `polr` converges in 4 to 6 Newton iterations and `polr_ri` in 14 to 47 BFGS ones, so one shared
+    cap would be either loose for the first or tight for the second. They happen to hold the same
+    value; what matters is that there are two names, so moving one does not move the other.
+    """
+    assert config.POLR_RI_MAX_ITER > 0
+    assert "POLR_RI_MAX_ITER" in vars(config)
+    assert "POLR_MAX_ITER" in vars(config)
+
+
+def test_SUPPORT_COVARIATES_is_a_COMPUTED_VIEW_and_never_a_fourth_literal_list():
+    """Stage 12 §10.1, §18, §20.2. Invariant 3's reason: two hand-maintained lists drift.
+
+    [§14a] says *"each continuous covariate"*; this resolves it to "not a declared factor", which is
+    the WIDER of the two readings and is measured to be inert on v7 — `sex`, `prestroke_mrs` and
+    `atrial_fib` exclude nobody, because the treated arm covers both levels of each binary and
+    reaches `prestroke_mrs = 3`. The wider reading is chosen because it cannot be wrong on a workbook
+    where the narrow one is right, and `test_standardise.py` §20.10 asserts the inertness itself.
+    """
+    assert config.SUPPORT_COVARIATES == tuple(
+        c for c in config.STANDARDISATION_COVARIATES if c not in config.CATEGORICAL)
+    assert set(config.SUPPORT_COVARIATES) <= set(config.STANDARDISATION_COVARIATES)
+    assert not set(config.SUPPORT_COVARIATES) & set(config.CATEGORICAL)
+    assert "center" not in config.SUPPORT_COVARIATES
+    assert "onset_type" not in config.SUPPORT_COVARIATES
+    assert isinstance(config.SUPPORT_COVARIATES, tuple)
+
+
+def test_the_FOUR_Stage_12_FAILURE_BUCKETS_tokens_and_T4_IS_NOT_polr_ri():
+    """Stage 12 §14, §18, §20.2. The values stay the four §7.2 names; four tokens are added.
+
+    **T4's token is `"T4"` and NOT `"polr_ri:"`, and that entry is the one the raise-site scan cannot
+    check.** T4 is a degenerate design and not a convergence failure. A T4 message leading with
+    `polr_ri:` would be counted as `nonconvergence` WHILE `"T4" -> "degenerate_design"` sat in this
+    map unreachable — and the scan would pass, because it asserts every token it finds is in the map
+    and `polr_ri:` is in the map. T1 and T12 lead with their own identifiers for the same reason.
+
+    **T12's bucket is `separation` and not a new name for the same thing**, which is Stage 8 §11's
+    requirement that the separation count be reported separately from the convergence count,
+    satisfied by reusing G7's bucket rather than by adding a second name.
+    """
+    assert config.FAILURE_BUCKETS["T1"] == "degenerate_design"
+    assert config.FAILURE_BUCKETS["T4"] == "degenerate_design"
+    assert config.FAILURE_BUCKETS["T12"] == "separation"
+    assert config.FAILURE_BUCKETS["polr_ri:"] == "nonconvergence"
+    # T2 and T3 share `polr_ri:`, which is `"polr:"`'s arrangement unchanged.
+    assert "T2" not in config.FAILURE_BUCKETS
+    assert "T3" not in config.FAILURE_BUCKETS
+    # And the VALUES are still exactly the four §7.2 names, which §15.1 above also asserts.
+    assert set(config.FAILURE_BUCKETS.values()) == {
+        "separation", "constant_outcome", "nonconvergence", "degenerate_design"}
+
+
+def test_the_two_new_constants_that_CHANGE_AN_ANSWER_say_so_where_they_are_declared():
+    """Stage 12 §12.3, §12.5. Not a tolerance, and the file records which is which.
+
+    `POLR_TOL` changes only how precisely the same answer is found. `POLR_RI_NODES` is part of the
+    definition of the objective and `POLR_RI_SIGMA_FLOOR` changes the answer at the boundary, so both
+    are prespecified for `PERCENTILE_METHOD`'s reason: [§10] refits this model in every one of
+    `N_BOOT` replicates.
+    """
+    source = Path(config.__file__).resolve().read_text(encoding="utf-8")
+    for name in ("POLR_RI_NODES", "POLR_RI_SIGMA_FLOOR", "POLR_RI_MAX_ITER"):
+        assert f"{name}: Final" in source
+    block = source[source.index("[§14a] the random-intercept fit"):
+                   source.index("POLR_RI_MAX_ITER")]
+    assert "CHANGES AN ANSWER" in block
+    assert "ADAPTIVE" in block

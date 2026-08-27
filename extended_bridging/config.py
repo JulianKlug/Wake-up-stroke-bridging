@@ -345,6 +345,21 @@ FAILURE_BUCKETS: Final[dict[str, str]] = {
     "O4": "degenerate_design", "O5": "degenerate_design", "O6": "degenerate_design",
     "F3": "degenerate_design", "F4": "degenerate_design", "F6": "degenerate_design",
     "F5": "degenerate_design", "ESS:": "degenerate_design",
+    # Stage 12's four [§14a, Stage 12 §14, §18]. "T2" and "T3" both lead with `polr_ri:` and share a
+    # bucket, which is "polr:"'s arrangement unchanged. T12's bucket is `separation` and NOT a new
+    # name for the same thing: Stage 8 §11 requires the separation count reported separately from the
+    # convergence count, and reusing G7's bucket is what satisfies that.
+    #
+    # **T4's TOKEN IS "T4" AND NOT "polr_ri:", AND THAT IS THE ONE ENTRY THE RAISE-SITE SCAN CANNOT
+    # CHECK.** T4 is a degenerate design and not a convergence failure. A T4 message leading with
+    # `polr_ri:` would be counted as `nonconvergence` WHILE THIS ENTRY SAT HERE UNREACHABLE -- and
+    # the scan would pass, because it asserts every token it finds is in this map and `polr_ri:` is
+    # in this map. T1 and T12 lead with their own identifiers for the same reason. Stage 12 §14
+    # records this as the second documented instance of a wrong-but-mapped bucket.
+    "T1": "degenerate_design",
+    "polr_ri:": "nonconvergence",
+    "T4": "degenerate_design",
+    "T12": "separation",
 }
 
 
@@ -492,6 +507,36 @@ POLR_ETA_CLIP: Final[float] = 500.0      # keeps exp() in range; measured never 
 POLR_MAX_ABS_BETA: Final[float] = 14.0   # the separation guard [Stage 8 §6.3]
 
 
+# --- [§14a] the random-intercept fit's definition ------------------------------------------------
+#
+# POLR_RI_NODES is NOT a tolerance and it CHANGES AN ANSWER, so it sits under PERCENTILE_METHOD's
+# argument and not under POLR_TOL's: it is part of the definition of the objective, and [§10] refits
+# this model in every one of N_BOOT replicates. Measured (Stage 12 §12.3), refitting at each count:
+# NON-adaptive quadrature returns sigma_hat 0.720 / 0.803 / 0.832 at 5 / 7 / 9 nodes against
+# 0.542426850 at 31 -- 33% to 53% too large -- while ADAPTIVE quadrature is stable to eight
+# significant figures from NINE. That gap is why Stage 12 §12.2 specifies adaptive and why the
+# constant lives here: a node count is a modelling decision at low counts and an arithmetic detail
+# only above them.
+#
+# 11 is one step above the measured plateau. Odd, because a symmetric rule with an odd node count
+# places a node at the conditional mode, which is where the mass is; test_config.py asserts both.
+# The measured cost of the two nodes above the plateau is 0.5 s per 2000-replicate arm.
+POLR_RI_NODES: Final[int] = 11
+
+# The sigma -> 0 boundary is REACHED -- 44 of 200 replicates, 22.0%, measured (Stage 12 §12.5) -- and
+# under a log-sigma parametrisation it is at -inf, where the conditional-mode Newton's 1/sigma^2
+# overflows. This is a floor on the SD, so 1e-8 on the variance: five orders of magnitude below the
+# smallest non-boundary sigma_hat in 200 replicates, so it separates "collapsed to the pooled model"
+# from "small" without being reachable by a genuinely small non-zero variance. A fit at the floor is
+# NOT a failure -- [§14a] names sigma^2_C = 0 as a legitimate answer -- and RIFit.at_floor records it.
+POLR_RI_SIGMA_FLOOR: Final[float] = 1e-4
+
+# Its own cap and not POLR_MAX_ITER's, because the two estimators are not on the same scale: `polr`
+# converges in 4 to 6 Newton iterations and `polr_ri` in 23 to 47 BFGS ones (measured, Stage 12
+# §12.5), so one shared cap would be either loose for the first or tight for the second.
+POLR_RI_MAX_ITER: Final[int] = 200
+
+
 # --- treatment and centres -----------------------------------------------------------------
 
 TREATMENT: Final[str] = "ivt"                       # 1 = IVT before EVT (bridging), 0 = EVT alone
@@ -563,6 +608,17 @@ STANDARDISATION_COVARIATES: Final[tuple[str, ...]] = tuple(
     c for c in PS_COVARIATES if c != "center")                                  # [§14a]
 PS_COVARIATES_FULL: Final[tuple[str, ...]] = PS_COVARIATES + (
     "hypertension", "hyperlipidemia", "diabetes", "smoking")                    # [§13]
+
+# --- [§14a] the support check's covariates -------------------------------------------------------
+#
+# A computed view, never a fourth literal list, for OUTCOME_COVARIATES' reason and invariant 3's.
+# [§14a] says "each continuous covariate"; this resolves it to "not a declared factor", which on v7
+# is the WIDER of the two readings and is MEASURED to be inert -- `sex`, `prestroke_mrs` and
+# `atrial_fib` exclude nobody, because the treated arm covers both levels of each binary and reaches
+# prestroke_mrs = 3 (Stage 12 §10.1). The wider reading is chosen because it cannot be wrong on a
+# workbook where the narrow one is right.
+SUPPORT_COVARIATES: Final[tuple[str, ...]] = tuple(
+    c for c in STANDARDISATION_COVARIATES if c not in CATEGORICAL)          # [§14a]
 
 # [§6] names four vascular risk factors as balance negative controls and adds them back in the
 # [§13] full-covariate sensitivity propensity model. Those are the same four, so the set is

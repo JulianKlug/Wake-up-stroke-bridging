@@ -547,7 +547,7 @@ def test_len_draws_plus_failures_equals_n_attempted_for_EVERY_key():
     the three numbers stop reconciling."""
     keys = ("beta", "rd_0", "sich.rd")
     collected = synthetic_replicates(keys, 50, {3: ("beta",), 7: ("beta", "rd_0"), 11: keys})
-    draws = bootstrap._collect(collected, keys)
+    draws = bootstrap.collect(collected, keys)
     for key, d in draws.items():
         assert len(d.draws) + sum(d.failures.values()) == d.n_attempted
     assert len(draws["beta"].draws) == 47 and draws["beta"].failures == {"separation": 3}
@@ -681,9 +681,9 @@ def test_G7_FIRES_on_it_and_the_CONVERGENCE_bucket_stays_ZERO():
                                                  n_in_model=40))
         except model.FitError as failure:
             collected.append(bootstrap.Replicate(
-                values={}, failures={"beta": bootstrap._bucket(str(failure))},
+                values={}, failures={"beta": bootstrap.bucket(str(failure))},
                 n_alpha=None, polr_iterations=None, sum_w=None, n_in_model=None))
-    draws = bootstrap._collect(tuple(collected), keys)
+    draws = bootstrap.collect(tuple(collected), keys)
     assert draws["beta"].failures.get("separation", 0) > 0
     assert draws["beta"].failures.get("nonconvergence", 0) == 0
 
@@ -697,8 +697,8 @@ def test_the_SINGLE_COUNTER_MUTATION_reads_zero_on_the_same_frame():
         outcome._assert_reportable(model.polr(X, y, w))
     single_counter = 1                                          # what a merged counter would report
     assert single_counter > 0                                   # ...and this says nothing
-    assert bootstrap._bucket(message_of(e)) == "separation"
-    assert bootstrap._bucket(message_of(e)) != "nonconvergence"
+    assert bootstrap.bucket(message_of(e)) == "separation"
+    assert bootstrap.bucket(message_of(e)) != "nonconvergence"
 
 
 @DATA_GATED
@@ -713,7 +713,13 @@ def test_the_workbooks_counters_read_zero_and_zero(run_once):
 
 # --- 15.6  the bucket map is scanned, not trusted --------------------------------------------------------
 
-FITERROR_MODULES: Final[tuple[str, ...]] = ("model.py", "outcome.py", "propensity.py")
+# **THE SCOPE GREW TO `standardise.py` AT STAGE 12** (§18), so T1's and T12's tokens are covered by
+# the same mechanism as every other raise site and a reworded message there is a test failure rather
+# than a counter that silently reads zero. The scan remains a MITIGATION AND NOT A FIX — it catches a
+# reworded token and not a wrong-but-mapped one, which is `TODOS`' `code`-field item and which
+# Stage 12 §14 fired for the second time with T4.
+FITERROR_MODULES: Final[tuple[str, ...]] = (
+    "model.py", "outcome.py", "propensity.py", "standardise.py")
 
 
 def raise_sites() -> list[tuple[str, int, str]]:
@@ -766,13 +772,21 @@ def test_the_scan_finds_NINETEEN_sites_and_the_SPECS_SIXTEEN_is_its_own_scope():
     """
     sites = raise_sites()
     per_module = {name: sum(1 for m, _, _ in sites if m == name) for name in FITERROR_MODULES}
-    assert per_module == {"model.py": 14, "outcome.py": 3, "propensity.py": 3}
-    assert len(sites) == 20
+    # Stage 12 adds three to `model.py` — T2, T3 and T4 in `polr_ri` — and two of its own, T1 and
+    # T12 in `standardise.py` (§14, §18).
+    assert per_module == {"model.py": 17, "outcome.py": 3, "propensity.py": 3,
+                          "standardise.py": 2}
+    assert len(sites) == 25
     # `outcome.py` is THREE and not the specification's two, and the third is S8 — which §5.4 moved
     # from `SchemaError` to `FitError` in this very stage, so the specification's own count of the
     # sites it was creating is one behind itself.
     assert sorted(t for m, _, t in sites if m == "outcome.py") == ["G6", "G7", "S8"]
     assert sorted(set(t for m, _, t in sites if m == "propensity.py")) == ["ESS:", "F5"]
+    # And Stage 12's own two, which are T1 and T12 and lead with their OWN identifiers rather than
+    # with a shared prefix, for the reason §14 gives and T4 demonstrates.
+    assert sorted(t for m, _, t in sites if m == "standardise.py") == ["T1", "T12"]
+    assert sorted(set(t for m, _, t in sites if m == "model.py")
+                  & {"T2", "T3", "T4", "polr_ri:"}) == ["T4", "polr_ri:"]
 
 
 def test_every_declared_bucket_token_is_ACTUALLY_RAISED_somewhere():
@@ -782,19 +796,25 @@ def test_every_declared_bucket_token_is_ACTUALLY_RAISED_somewhere():
     assert set(config.FAILURE_BUCKETS) == tokens
 
 
-def test__bucket_RAISES_on_an_unrecognised_token_and_does_not_default():
+def test_bucket_RAISES_on_an_unrecognised_token_and_does_not_default():
     """A default would make the scan cosmetic: it would pass, the map would be incomplete, and the
     counter Stage 8 §11 asked to be separate would be silently merged (§15.6)."""
     with pytest.raises(config.SchemaError) as e:
-        bootstrap._bucket("Z9  a token from a raise site nobody declared")
+        bootstrap.bucket("Z9  a token from a raise site nobody declared")
     assert "Z9" in message_of(e)
 
 
-@pytest.mark.parametrize("token,bucket", [("G7", "separation"), ("S8", "constant_outcome"),
-                                          ("polr:", "nonconvergence"), ("Firth:", "nonconvergence"),
-                                          ("G6", "degenerate_design"), ("F5", "degenerate_design")])
-def test__bucket_maps_each_token_to_the_bucket_7_2_names(token, bucket):
-    assert bootstrap._bucket(f"{token}  a message") == bucket
+@pytest.mark.parametrize("token,bucket", [
+    ("G7", "separation"), ("S8", "constant_outcome"),
+    ("polr:", "nonconvergence"), ("Firth:", "nonconvergence"),
+    ("G6", "degenerate_design"), ("F5", "degenerate_design"),
+    # Stage 12's four (§18). T2 and T3 share `polr_ri:` as T2 and T3 of `polr:` do; T4 leads with
+    # its own identifier BECAUSE `polr_ri:` is also a valid key, which is the one misclassification
+    # the raise-site scan above cannot catch.
+    ("T1", "degenerate_design"), ("T4", "degenerate_design"),
+    ("T12", "separation"), ("polr_ri:", "nonconvergence")])
+def test_bucket_maps_each_token_to_the_bucket_7_2_names(token, bucket):
+    assert bootstrap.bucket(f"{token}  a message") == bucket
 
 
 # --- 15.8  the interval, the p-value, and the definition `[roadmap, amended]` ----------------------------
@@ -1221,20 +1241,28 @@ def test_THE_FOUR_GENERAL_FUNCTIONS_name_NO_covariate_NO_outcome_and_NO_centre(f
     assert not forbidden & names, f"{function} names {sorted(forbidden & names)}"
 
 
-def test_the_public_surface_is_FIVE_NAMES_and_the_privates_are_the_declared_ONES():
+def test_the_public_surface_is_EIGHT_NAMES_and_the_privates_are_the_declared_ONES():
     """§3.2's count, re-derived rather than repeated. Stage 9 §22.3 item 5 records three drafts of
-    its own carrying three different private counts, which is what this assertion prevents."""
+    its own carrying three different private counts, which is what this assertion prevents.
+
+    **FIVE became EIGHT at Stage 12, and all three additions are that stage's** (§18): `intervals` is
+    §13.3's extraction of the loop `TODOS` set a third-caller trigger for, and `bucket` and `collect`
+    are §13.2's — public so that `standardise.py` classifies its four failure groups and reconciles
+    its sixty-nine keys through the ONE taxonomy rather than owning a second copy. Stage 9 §14 names
+    re-implementing the taxonomy as how a taxonomy gets violated by accident.
+    """
     tree = ast.parse(SOURCE)
     functions = [n.name for n in tree.body if isinstance(n, ast.FunctionDef)]
     public = [n for n in functions if not n.startswith("_")]
     private = [n for n in functions if n.startswith("_")]
-    assert public == ["resample", "replicates", "percentile_ci", "bootstrap_p", "run"]
+    assert public == ["resample", "replicates", "percentile_ci", "bootstrap_p", "intervals",
+                      "bucket", "collect", "run"]
     # §3.2 counts twelve. This module has thirteen, and the thirteenth is `_padded` — §10.1's own
     # requirement that the grid be concatenated and the short rows padded, which the specification
     # describes and does not list, and which is a COPY of `propensity._padded` rather than an import
     # of it precisely because §0.2's claim is that `propensity.py` is untouched.
     assert sorted(private) == sorted([
-        "_assert_run_inputs", "_replicate", "_bucket", "_collect", "_diagnostics", "_tested",
+        "_assert_run_inputs", "_replicate", "_diagnostics", "_tested",
         "_estimand_keys", "_shared_design", "_counters_table", "_diagnostics_table",
         "_replicates_detail", "_record_replicates", "_padded", "_spread"])
 

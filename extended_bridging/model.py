@@ -978,3 +978,532 @@ def polr(X: pd.DataFrame, y: np.ndarray, w: np.ndarray | None = None) -> PolrFit
         f"{float(np.max(np.abs(g))):.3g} against {C.POLR_SCORE_TOL:g}. {rescales} step(s) were "
         f"shortened by the trust region and {halvings} halving(s) taken. [§8] prescribes one "
         "estimator, and [§10] drops and counts the replicate rather than substituting another.")
+
+
+def ordinal_probabilities(fit: PolrFit, X: pd.DataFrame) -> np.ndarray:
+    """P(Y = c | x) for every c in `fit.categories`: (len(X), len(fit.categories)). [Stage 12 §6]
+
+    The counterpart of `predict` for the ordinal fitter, and it inherits three of its four rules:
+    the column check is BY NAME against `fit.columns` and a reorder raises `C.SchemaError`; the
+    linear predictor is clipped at POLR_ETA_CLIP; and the function names neither treatment nor
+    covariate, so a caller supplies the counterfactual meaning by overwriting a column
+    [Stage 12 §7.1].
+
+    The fourth rule is where it differs and the difference is load-bearing. `predict` prepends its
+    own intercept because `firth` fits one; this must not, because THE CUTPOINTS ARE THE INTERCEPTS
+    and O6 has already established that `X` carries none::
+
+        P(Y <= k | x) = expit(alpha_k + x'beta),   with P(Y <= -1) = 0 and P(Y <= K) = 1 EXACTLY
+        P(Y = c_j | x) = P(Y <= j) - P(Y <= j-1)
+
+    The two structural bounds are written as literal 0.0 and 1.0 columns and never as an expit of a
+    large number: `expit(POLR_ETA_CLIP)` is 1.0 in float64 but that is an accident of the clip, and
+    a row's probabilities must sum to exactly 1.0 by CONSTRUCTION for Stage 12 §20.5's assertion to
+    be about the arithmetic rather than about the clip.
+
+    **Nothing else in this pipeline computes this, and the gap is exact** [Stage 12 §6.1]. `predict`
+    evaluates a Firth binary `Fit` and returns one probability per row. `_ord_pieces` computes the
+    two cumulative probabilities bracketing ONE category per row -- the row's own observed one -- and
+    is private and used only inside the log-likelihood, the score and the Hessian. Neither is
+    `P(Y = j | x)` for every `j`, which is what g-computation averages.
+
+    **THE RETURNED LEVEL SET IS THE FITTED ONE AND NOT THE DECLARED ONE.** `polr` collapses the
+    response to the categories carrying positive weight before it fits anything, so on a frame
+    missing an mRS level this returns six columns where `C.MRS_LEVELS` declares seven -- measured at
+    4.15% of Stage 12's replicates, always mRS 5 [Stage 12 §6.2]. Re-expressing the result on a
+    declared level set, with an unoccupied level as a structural zero, is the CALLER's
+    (Stage 12 §6.3): this function returns what the fit is about, and a level for which the fit
+    provides no cutpoint has no probability this function could invent.
+    """
+    if tuple(X.columns) != fit.columns:
+        raise C.SchemaError(
+            f"T5  ordinal_probabilities was given columns {tuple(X.columns)} for a fit on "
+            f"{fit.columns}. The coefficient vector is positional, so a mismatched or reordered "
+            "design returns a number instead of an error [Stage 9 §7.3, Stage 12 §6.1]. The "
+            f"difference is: {tuple(c for c in X.columns if c not in fit.columns) or 'order only'}.")
+    eta = np.clip(X.to_numpy(dtype=float) @ fit.beta, -C.POLR_ETA_CLIP, C.POLR_ETA_CLIP)
+    # The cumulative sequence, bracketed by EXACT 0.0 and EXACT 1.0. `alpha` is ascending and the
+    # clip is monotone, so the differences below are non-negative by construction.
+    z = np.clip(fit.alpha[None, :] + eta[:, None], -C.POLR_ETA_CLIP, C.POLR_ETA_CLIP)
+    cumulative = np.column_stack([
+        np.zeros(len(X)),                        # P(Y <= -1) = 0, EXACTLY -- never an expit
+        1.0 / (1.0 + np.exp(-z)),
+        np.ones(len(X)),                         # P(Y <= K)  = 1, EXACTLY -- never an expit
+    ])
+    return np.diff(cumulative, axis=1)
+
+
+# --- Stage 12 — the random-centre-intercept proportional-odds fit [§14a] ----------------------------
+#
+#   polr_ri(X, y, groups)  is a THIRD fitter beside `firth` and `polr`, and it is the only estimator
+#   Stage 12 adds. [§14a]'s sensitivity 2 prescribes
+#
+#       logit P(Y <= k | x, b_c)  =  alpha_k + x'beta + b_c ,      b_c ~ N(0, sigma^2)
+#
+#   with ONE common treatment effect -- no A x centre interaction and no random slope, both forbidden
+#   by [§14a] and [§15] at four centres.
+#
+#   NOTHING IN THE ENVIRONMENT CAN FIT IT [Stage 12 §12]. `statsmodels` has `MixedLM` for the linear
+#   case and Bayesian mixed GLMs for binomial and Poisson, and NO ordinal mixed model at any API;
+#   `scipy` is test-only by policy [Stage 6 §2]. So it is written here, and the two things that make
+#   it affordable and correct are both MEASUREMENTS rather than conventions:
+#
+#     * THE QUADRATURE IS ADAPTIVE.  Non-adaptive Gauss-Hermite is off by 0.48 log-likelihood units
+#       at 31 nodes at sigma = 3 and is NON-MONOTONE in the node count; adaptive quadrature is off by
+#       8.9e-4 at THREE nodes [Stage 12 §12.2]. 24% of replicates fit sigma_hat above 1, squarely in
+#       the region where the non-adaptive rule is not converged, so this is not a refinement -- it is
+#       what makes the arm computable at all.
+#     * THE GRADIENT IS ANALYTIC.  The same fit costs 39.0 s under Newton with a central-difference
+#       Hessian and 0.76 s under BFGS with an analytic gradient -- 21.7 hours against 17.5 minutes at
+#       N_BOOT [Stage 12 §12.4, §12.8]. The gradient is part of the specification, not an
+#       optimisation, and test_model.py asserts it against central differences.
+#
+#   THE ORDINAL DERIVATIVES ARE `_ord_pieces`' AND ARE NOT WRITTEN A SECOND TIME. `b` enters the
+#   linear predictor exactly as an intercept shift does, so d/db of an observation's log-probability
+#   IS the `A + B` that `_ord_score_hess` already assembles for d/dbeta, and d2/db2 IS its
+#   `Huu + 2*Hul + Hll`. A second derivation here would be a second definition of the same
+#   arithmetic, verified against nothing.
+
+
+@dataclass(frozen=True)
+class RIFit:
+    """A random-intercept proportional-odds fit. No standard error, for `PolrFit`'s reason.
+
+    **`nodes` is a field and `PolrFit` has no counterpart, because the node count CHANGES THE ANSWER**
+    [Stage 12 §12.3] while `POLR_TOL` changes only how precisely the same answer is found. Measured:
+    non-adaptive quadrature returns sigma_hat 0.720 / 0.803 / 0.832 at 5 / 7 / 9 nodes against
+    0.542426850 at 31. A record that omitted it would let two fits with different numerical content
+    compare equal on every field.
+
+    `b` and `b_sd` are the conditional modes and the curvature at them -- the empirical-Bayes
+    intercepts [§14a]'s standardisation is conditioned on (Stage 12 §12.6). They are FREE: the
+    adaptive quadrature computes them at every objective evaluation, so carrying them costs nothing
+    and recomputing them in the caller would be a second mode search.
+
+    `at_floor` records that `sigma` reached `POLR_RI_SIGMA_FLOOR`, and **such a fit is NOT a failure**:
+    [§14a] names sigma^2_C = 0 as a legitimate answer -- *"if outcomes truly do not differ by centre
+    given X then sigma^2_C = 0 and it collapses to the pooled model"* -- and dropping those replicates
+    would select the bootstrap on the value of the very parameter the arm exists to examine
+    [Stage 12 §12.5].
+    """
+
+    beta: np.ndarray             # (m,), one per design column — NO intercept
+    alpha: np.ndarray            # (K,), ascending
+    sigma: float                 # the between-group SD, > 0
+    groups: tuple[str, ...]      # the group labels, in the order `b` is keyed
+    b: np.ndarray                # (G,), the conditional modes — Stage 12 §12.6
+    b_sd: np.ndarray             # (G,), the curvature at each mode
+    categories: tuple[int, ...]
+    columns: tuple[str, ...]
+    nodes: int                   # the quadrature node count this fit used — Stage 12 §12.3
+    iterations: int
+    converged_on: str            # "likelihood" | "score"
+    first_step_norm: float
+    rescales: int
+    halvings: int
+    at_floor: bool               # sigma reached POLR_RI_SIGMA_FLOOR — Stage 12 §12.5
+
+
+def _ord_b_derivatives(Xb: np.ndarray, alpha: np.ndarray, y_idx: np.ndarray,
+                       K: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Per-observation P(Y = y_i), and the pieces of its first two derivatives in an INTERCEPT SHIFT.
+
+    `Xb` is the linear predictor already carrying whatever shift is being differentiated at, and may
+    be any shape broadcastable against `y_idx[..., None]`-style indexing — the adaptive quadrature
+    evaluates an (n, Q) grid of one shift per observation per node in one call.
+
+    THE FOUR RETURNS ARE `_ord_score_hess`' OWN QUANTITIES AND ARE NOT A SECOND DERIVATION. `b`
+    enters `eta` exactly as a coefficient on a column of ones does, so::
+
+        d log p / d b    =  A + B                 which is d/dbeta's multiplier
+        d2 log p / d b2  =  Huu + 2*Hul + Hll     which is the beta block's multiplier
+
+    `A` and `B` are returned SEPARATELY and not pre-summed, because the cutpoint gradient needs them
+    apart: `A` accumulates at the observation's UPPER cutpoint index and `B` at its lower, which is
+    that function's two `np.add.at` calls. Everything else needs only the sum. Both are lifted from
+    its derivation verbatim, and its docstring is where the algebra is written out once.
+    """
+    upper, lower = y_idx, y_idx - 1
+    has_u, has_l = y_idx <= K - 1, y_idx >= 1
+    gu, gl, du, dl, ddu, ddl = _ord_pieces(Xb, alpha, upper, lower, has_u, has_l)
+    p = np.maximum(gu - gl, _RI_P_FLOOR)          # see _RI_P_FLOOR -- a far node, not a bad step
+    A, B = du / p, -dl / p
+    Huu = ddu / p - (du / p) ** 2
+    Hll = -ddl / p - (dl / p) ** 2
+    Hul = du * dl / p ** 2
+    return p, A, B, Huu + 2.0 * Hul + Hll
+
+
+# The conditional-mode search's own two numbers. They are NOT config constants and the distinction is
+# the one Stage 12 §12.3 draws: `POLR_RI_NODES` changes the ANSWER, so it is prespecified; these
+# govern an inner solve whose only job is to place the quadrature nodes, and their accuracy is
+# verified END TO END by §20.12's gradient test against central differences on the true objective —
+# measured 1e-8 relative at every sigma the bootstrap reaches. A looser inner solve shows up there as
+# a worse gradient, which is a test failure rather than a silently different estimate.
+_RI_MODE_TOL: Final[float] = 1e-12
+_RI_MODE_ITER: Final[int] = 100
+_SQRT2: Final[float] = float(np.sqrt(2.0))
+
+# A FLOOR ON THE PER-OBSERVATION CATEGORY PROBABILITY, and it is a correctness fix rather than a
+# guard. At a quadrature node the posterior has moved far away from, `gu` and `gl` are both 1.0 in
+# float64 and `p = gu - gl` is EXACTLY ZERO by cancellation -- so `log p` is -inf and `du/p`,
+# `(du/p)**2` and `du*dl/p**2` are all `nan`. Measured: those nans reach the gradient, the trial step
+# is rejected by the `isfinite` test in the halving loop, and the fit converges to the right answer
+# through a line search that is doing the wrong job. A node where the integrand underflows is
+# NEGLIGIBLE, not invalid, and a quadrature rule's whole business is to weight it at zero.
+#
+# `polr`'s convention is the opposite -- `_ord_loglik` returns -inf and lets step-halving reject the
+# step -- and it is right THERE, where a non-positive probability means a crossed pair of cutpoints
+# at the iterate. Here it means a far node, which is not a property of the iterate at all.
+#
+# THE EXPONENT IS CHOSEN AGAINST `p**2` AND NOT AGAINST `p`. `Hul = du*dl/p**2`, so a floor below
+# about 1.5e-154 makes `p**2` itself underflow to zero and reintroduces the 0/0 this fixes. 1e-150
+# leaves `p**2` at 1e-300, comfortably normal, while `log(1e-150)` is -345 -- so a floored node sits
+# 345 log-units below the peak and the log-sum-exp weights it at exp(-345), which is zero to every
+# decimal anyone will read.
+_RI_P_FLOOR: Final[float] = 1e-150
+
+
+def _ri_modes(Xb: np.ndarray, alpha: np.ndarray, y_idx: np.ndarray, K: int,
+              gidx: np.ndarray, n_groups: int, sigma: float) -> tuple[np.ndarray, np.ndarray]:
+    """Each group's conditional mode `b_hat_c` and posterior SD `tau_c`. Newton, from b = 0.
+
+    This is what makes the quadrature ADAPTIVE (Stage 12 §12.2): the nodes go at
+    `b_hat_c + sqrt(2)*tau_c*t_q` rather than at `sigma*sqrt(2)*t_q`, which is where the mass
+    actually is once the data pull a centre's posterior away from the prior.
+
+    The objective per group is concave — `d2/db2` of the ordinal log-likelihood is negative and the
+    prior contributes a further `-1/sigma^2` — so Newton ascends from any start and `b = 0` is the
+    prior mode. **`1/sigma^2` is why `POLR_RI_SIGMA_FLOOR` exists**: under a `log sigma`
+    parametrisation the boundary is at -inf, where this expression overflows, and Stage 12 §12.5
+    observed exactly that as an overflow in the curvature and a `-inf` in a quadrature weight.
+    """
+    b = np.zeros(n_groups)
+    prior_curvature = 1.0 / sigma ** 2
+    for _ in range(_RI_MODE_ITER):
+        _, A, B, d2 = _ord_b_derivatives(Xb + b[gidx], alpha, y_idx, K)
+        g1 = np.zeros(n_groups)
+        np.add.at(g1, gidx, A + B)
+        g2 = np.zeros(n_groups)
+        np.add.at(g2, gidx, d2)
+        step = -(g1 - b * prior_curvature) / (_curvature(g2, prior_curvature))
+        b = b + step
+        if float(np.max(np.abs(step))) < _RI_MODE_TOL:
+            break
+    _, _, _, d2 = _ord_b_derivatives(Xb + b[gidx], alpha, y_idx, K)
+    g2 = np.zeros(n_groups)
+    np.add.at(g2, gidx, d2)
+    return b, np.sqrt(-1.0 / _curvature(g2, prior_curvature))
+
+
+def _curvature(g2: np.ndarray, prior_curvature: float) -> np.ndarray:
+    """The per-group log-posterior curvature, held to the sign the mathematics guarantees.
+
+    **THIS CLAMP ENFORCES A PROPERTY RATHER THAN HIDING A VIOLATION OF ONE, and the distinction is
+    the whole reason it is written this way.** The per-group log-posterior is the sum of concave
+    ordinal log-likelihood terms and a Gaussian log-prior, so `d2/db2` is negative EXACTLY, and the
+    prior alone contributes `-1/sigma^2`. The total therefore cannot exceed `-1/sigma^2`.
+
+    In float64 it sometimes does. `Huu = ddu/p - (du/p)**2` is a difference of two large quantities in
+    the tails, and cancellation can return a small POSITIVE value for a term that is mathematically
+    negative. When the sum crosses zero, `-1/(g2 - 1/sigma^2)` is negative, `sqrt` returns `nan`, the
+    quadrature nodes are `nan`, the objective is `nan`, and the line search rejects the step — so the
+    fit *still returns the right answer*, through a halving loop doing the wrong job.
+    **Measured: 2 of 2000 replicates exhausted the halvings that way and raised T2**, which is a
+    replicate dropped for a floating-point artefact rather than for anything about the data.
+
+    So the ordinal contribution is clamped at its own guaranteed sign — `min(g2, 0)` — and the prior's
+    is exact. The result is at most `-1/sigma^2 < 0` and the bound is TIGHT: it is attained whenever
+    the data contribute no curvature, which is precisely the far-tail case that produces the noise.
+    No tolerance is invented and no magnitude is chosen.
+    """
+    return np.minimum(g2, 0.0) - prior_curvature
+
+
+def _ri_objective(par: np.ndarray, Xn: np.ndarray, y_idx: np.ndarray, K: int, m: int,
+                  gidx: np.ndarray, n_groups: int, t: np.ndarray, logw: np.ndarray,
+                  adaptive: bool) -> tuple[float, np.ndarray, np.ndarray, np.ndarray]:
+    """The marginal log-likelihood at `par`, its analytic gradient, and the modes it placed nodes at.
+
+    Returns `(log_likelihood, gradient, b_hat, tau)`. `par` is `(alpha, beta, log sigma)` and
+    **`log sigma` and not `sigma`, so the positivity constraint is structural** (Stage 12 §12.1).
+
+    THE INTEGRAL, and both quadrature rules, because the difference between them is 5 orders of
+    magnitude and the specification is the second one::
+
+        L_c  =  INTEGRAL  phi(b; 0, sigma^2) * PROD_i P(Y_i = y_i | x_i, b)  db
+
+        NON-ADAPTIVE   b_q = sigma*sqrt(2)*t_q
+                       log L_c = -log(pi)/2 + LSE_q[ log w_q + s_cq ]
+        ADAPTIVE       b_q = b_hat_c + sqrt(2)*tau_c*t_q
+                       log L_c = log(sqrt(2)*tau_c)
+                                 + LSE_q[ log w_q + t_q^2 + log phi(b_q) + s_cq ]
+
+    with `s_cq = SUM_{i in c} log P(Y_i | x_i, b_q)` and `t_q, w_q` the Gauss-Hermite nodes and
+    weights for the weight `exp(-t^2)` — `numpy.polynomial.hermite.hermgauss`, which is why no
+    `scipy` dependency is added (Stage 12 §2).
+
+    **LSE is log-sum-exp and it is not a micro-optimisation.** `s_cq` is a sum of up to 41 log
+    probabilities and the exponentials underflow to exactly zero at nodes the posterior has moved
+    away from; a naive `log(sum(exp(...)))` returns `-inf` for a group whose every node underflows,
+    and the fit then reports a finite objective for a model it never evaluated.
+
+    **THE GRADIENT IS EXACT FOR THE FROZEN-NODE QUADRATURE SUM AND NEGLECTS THE DERIVATIVE OF THE
+    NODE POSITIONS** (Stage 12 §12.4, departure 2). `b_hat_c` and `tau_c` are recomputed at the
+    current parameters and then held fixed for that evaluation's gradient. Measured against central
+    differences on the TRUE objective: relative error 5.0e-8 / 9.3e-9 / 9.5e-9 / 6.0e-8 at
+    sigma = 0.20 / 0.54 / 1.50 / 3.00 — six to eight orders below `POLR_SCORE_TOL`, at every sigma
+    the bootstrap reaches. The approximation is named rather than hidden, and §20.12 pins the
+    measurement so a change to the mode search that made it worse fails a test.
+
+    Differentiating `log L_c = c_c + LSE_q[term_cq]` gives `SUM_q pi_cq * d term_cq / d theta` with
+    `pi_cq` the softmax over the nodes, so every derivative below is a posterior-weighted average of
+    a per-node one. `alpha` and `beta` come through `s_cq` and are `_ord_score_hess`' own; the
+    `log sigma` derivative is where the two rules differ, because non-adaptive nodes MOVE with sigma
+    and adaptive ones are frozen.
+    """
+    alpha, beta = par[:K], par[K:K + m]
+    sigma = float(np.exp(par[-1]))
+    Xb = Xn @ beta
+    n_nodes = len(t)
+
+    if adaptive:
+        b_hat, tau = _ri_modes(Xb, alpha, y_idx, K, gidx, n_groups, sigma)
+        bq = b_hat[:, None] + _SQRT2 * tau[:, None] * t[None, :]          # (G, Q)
+        const = np.log(_SQRT2 * tau)
+        prior = -0.5 * np.log(2.0 * np.pi * sigma ** 2) - bq ** 2 / (2.0 * sigma ** 2)
+        extra = logw[None, :] + t[None, :] ** 2 + prior
+    else:
+        b_hat, tau = np.zeros(n_groups), np.full(n_groups, sigma)
+        bq = np.broadcast_to(sigma * _SQRT2 * t[None, :], (n_groups, n_nodes)).copy()
+        const = np.full(n_groups, -0.5 * np.log(np.pi))
+        extra = np.broadcast_to(logw[None, :], (n_groups, n_nodes)).copy()
+
+    # One (n, Q) evaluation for the whole sample: every observation at every one of ITS group's
+    # nodes. `y_idx[:, None]` is what makes `_ord_b_derivatives` broadcast over the node axis.
+    p, A, B, _ = _ord_b_derivatives(Xb[:, None] + bq[gidx], alpha, y_idx[:, None], K)
+    s = np.zeros((n_groups, n_nodes))
+    np.add.at(s, gidx, np.log(p))
+
+    term = extra + s
+    peak = term.max(axis=1, keepdims=True)
+    lse = peak[:, 0] + np.log(np.exp(term - peak).sum(axis=1))
+    weights = np.exp(term - lse[:, None])                                 # (G, Q), rows sum to 1
+
+    # The posterior weight of each observation's own node, so every per-observation derivative below
+    # is already averaged over the nodes before it reaches the cutpoint accumulation.
+    w_iq = weights[gidx]
+    ra = (w_iq * A).sum(axis=1)
+    rb = (w_iq * B).sum(axis=1)
+
+    grad = np.zeros(K + m + 1)
+    has_u, has_l = y_idx <= K - 1, y_idx >= 1
+    np.add.at(grad, y_idx[has_u], ra[has_u])                              # the UPPER cutpoint
+    np.add.at(grad, (y_idx - 1)[has_l], rb[has_l])                        # the lower one
+    grad[K:K + m] = Xn.T @ (ra + rb)
+    if adaptive:
+        # d/d log_sigma of  -log sigma - b_q^2/(2 sigma^2), the nodes being frozen.
+        grad[-1] = float(np.sum(weights * (-1.0 + bq ** 2 / sigma ** 2)))
+    else:
+        # The nodes MOVE: d b_q / d log_sigma = b_q, so the chain rule runs through `s`.
+        d1 = np.zeros((n_groups, n_nodes))
+        np.add.at(d1, gidx, A + B)
+        grad[-1] = float(np.sum(weights * d1 * bq))
+
+    return float(np.sum(const + lse)), grad, b_hat, tau
+
+
+def _polr_ri(X: pd.DataFrame, y: np.ndarray, groups: pd.Series | np.ndarray,
+             nodes: int, adaptive: bool) -> RIFit:
+    """`polr_ri`'s body, with the two things the SPECIFICATION fixes exposed as parameters.
+
+    `polr_ri` below passes `C.POLR_RI_NODES` and `adaptive=True` and is the only caller any shipped
+    module has. This private form exists for ONE reason: Stage 12 §20.12 requires the measurement
+    §12.2 rests on asserted as a test — that sigma_hat at 9, 11, 15 and 31 ADAPTIVE nodes agrees to
+    1e-7 while sigma_hat at 5, 7 and 9 NON-ADAPTIVE nodes does not — and that assertion cannot be
+    made against a function with no way to ask for the rule the specification rejected.
+
+    It is private, and `adaptive=False` appears nowhere outside `test_model.py`, so the rejected rule
+    is reachable by a test and not by a caller.
+    """
+    Xn = np.asarray(X.to_numpy(dtype=float))
+    y = np.asarray(y, dtype=float)
+    w = np.ones(len(y))
+    _assert_polr_fittable(Xn, y, w, tuple(X.columns))                      # O1-O6, unweighted
+
+    labels = np.asarray([str(g) for g in np.asarray(groups)])
+    if len(labels) != len(y):
+        raise C.SchemaError(
+            f"T4  the grouping vector holds {len(labels)} label(s) for {len(y)} response value(s). "
+            "The two are aligned by POSITION, so a mismatch groups the wrong patients together and "
+            "returns a between-group variance for a grouping nobody specified.")
+
+    categories = _weighted_categories(y, w)                                # one definition
+    keep = np.isin(y, np.asarray(categories, dtype=float))
+    Xn, y, labels = Xn[keep], y[keep], labels[keep]
+    K, m = len(categories) - 1, Xn.shape[1]
+    y_idx = np.searchsorted(np.asarray(categories, dtype=float), y)
+
+    # THE GROUP SET IS THE ONE THAT SURVIVES THE COLLAPSE, and it is sorted for `resample`'s reason
+    # (Stage 10 §4.1): the order is the label's own and never the frame's, so `b` is keyed
+    # deterministically regardless of how the rows arrived.
+    unique = tuple(sorted(set(labels.tolist())))
+    if len(unique) < 2:
+        raise FitError(
+            f"T4  the grouping variable has {len(unique)} group(s) with records: {unique}. A "
+            "between-group variance needs at least two: with one, `b_c` is exactly collinear with "
+            "the cutpoints and sigma is not identified — the likelihood is flat in it, so the fit "
+            "returns whatever the start value was, finite and plausible.")
+    gidx = np.searchsorted(np.asarray(unique), labels)
+    n_groups = len(unique)
+
+    # THE START VALUES ARE THE POOLED FIT'S, and Stage 12 §12.8 is why that is load-bearing rather
+    # than convenient: `(alpha, beta)` from `polr` is a nested model's EXACT maximiser in every
+    # coordinate but one, which is why 25 BFGS iterations suffice and why the arm costs 17.5 minutes
+    # rather than hours. It is also why a pooled `FitError` costs the hierarchical arm too
+    # (Stage 12 §13.2) — there is no hierarchical arm without a pooled fit, and this call is where
+    # that dependency is structural rather than merely stated.
+    start = polr(pd.DataFrame(Xn, columns=list(X.columns)), y)
+    log_floor = float(np.log(C.POLR_RI_SIGMA_FLOOR))
+    par = np.concatenate([start.alpha, start.beta, [np.log(0.5)]])
+
+    t, quad_w = np.polynomial.hermite.hermgauss(nodes)
+    logw = np.log(quad_w)
+
+    def objective(theta: np.ndarray) -> tuple[float, np.ndarray, np.ndarray, np.ndarray]:
+        return _ri_objective(theta, Xn, y_idx, K, m, gidx, n_groups, t, logw, adaptive)
+
+    def project(theta: np.ndarray) -> np.ndarray:
+        """`log sigma` is held at or above the floor rather than clipped inside the objective.
+
+        A clip inside would make the objective FLAT below the floor, where the true derivative is
+        zero and a gradient reported from the clipped point traps the iterate there permanently. A
+        projection keeps every evaluation at a feasible point, so the gradient is always the real one
+        and a fit sitting at the floor is sitting there because the data put it there
+        [Stage 12 §12.5].
+        """
+        out = theta.copy()
+        out[-1] = max(out[-1], log_floor)
+        return out
+
+    par = project(par)
+    ll_old, grad, b_hat, tau = objective(par)
+    inverse_hessian = np.eye(K + m + 1)
+    first_step_norm, rescales, halvings = 0.0, 0, 0
+    moved = np.inf
+
+    for iteration in range(1, C.POLR_RI_MAX_ITER + 1):
+        step = inverse_hessian @ grad                    # ASCENT: B approximates (-H)^-1
+        norm = float(np.linalg.norm(step))
+        if iteration == 1:
+            first_step_norm = norm
+        size = norm / max(1.0, float(np.linalg.norm(par)))
+        if size > C.POLR_MAX_STEP:
+            step = step * (C.POLR_MAX_STEP / size)
+            rescales += 1
+
+        # Step-halving PER ITERATION, `polr`'s discipline transplanted. Stage 12 §12.4 declares the
+        # one departure: the TOTAL across the fit is much larger — measured 85 over 25 iterations —
+        # because BFGS proposes long steps early and the line search shortens them. That is the
+        # algorithm working, and the total is recorded so a change that makes it grow is visible.
+        for _ in range(C.POLR_MAX_HALVINGS):
+            trial = project(par + step)
+            ll_new, grad_new, b_new, tau_new = objective(trial)
+            if np.isfinite(ll_new) and ll_new >= ll_old:
+                break
+            step = step / 2.0
+            halvings += 1
+        else:
+            raise FitError(
+                f"polr_ri: step-halving exhausted {C.POLR_MAX_HALVINGS} halvings at iteration "
+                f"{iteration} without increasing the marginal log-likelihood. [§14a] prescribes one "
+                "estimator; there is no second one to try [invariant 5].")
+
+        # The BFGS update is on the MINIMISATION problem, so `y_curv` is the change in the gradient
+        # of the NEGATIVE log-likelihood. The curvature condition is checked rather than assumed: a
+        # non-positive `y_curv . s` makes the update indefinite, and the safeguard is to keep the
+        # previous approximation rather than to take a step along an ascent direction that is not one.
+        s_vec = trial - par
+        y_curv = -(grad_new - grad)
+        curvature = float(y_curv @ s_vec)
+        if curvature > 0.0:
+            rho = 1.0 / curvature
+            left = np.eye(K + m + 1) - rho * np.outer(s_vec, y_curv)
+            inverse_hessian = left @ inverse_hessian @ left.T + rho * np.outer(s_vec, s_vec)
+
+        par, grad, b_hat, tau = trial, grad_new, b_new, tau_new
+        moved = abs(ll_new - ll_old)
+        ll_old = ll_new
+
+        # TWO CONVERGENCE ROUTES, either one sufficient, in `polr`'s order and for its reason: [§10]
+        # refits in every replicate, so reordering them changes the sampling distribution. Measured
+        # (Stage 12 §12.5): 200 of 200 replicates converge, every one on "likelihood" — which is what
+        # a projected iterate at the floor looks like, the step in `log sigma` being zero there.
+        if moved < C.POLR_TOL:
+            return _ri_fit(par, K, m, categories, tuple(X.columns), unique, b_hat, tau, nodes,
+                           iteration, "likelihood", first_step_norm, rescales, halvings, log_floor)
+        if float(np.max(np.abs(grad))) < C.POLR_SCORE_TOL:
+            return _ri_fit(par, K, m, categories, tuple(X.columns), unique, b_hat, tau, nodes,
+                           iteration, "score", first_step_norm, rescales, halvings, log_floor)
+
+    raise FitError(
+        f"polr_ri: no convergence in {C.POLR_RI_MAX_ITER} iterations. The marginal log-likelihood "
+        f"moved {moved:.3g} against a tolerance of {C.POLR_TOL:g}, and the largest gradient "
+        f"component was {float(np.max(np.abs(grad))):.3g} against {C.POLR_SCORE_TOL:g}. "
+        f"{rescales} step(s) were shortened by the trust region and {halvings} halving(s) taken. "
+        "[§14a] prescribes one estimator, and [§10] drops and counts the replicate rather than "
+        "substituting another.")
+
+
+def _ri_fit(par: np.ndarray, K: int, m: int, categories: tuple[int, ...],
+            columns: tuple[str, ...], groups: tuple[str, ...], b_hat: np.ndarray,
+            tau: np.ndarray, nodes: int, iterations: int, converged_on: str,
+            first_step_norm: float, rescales: int, halvings: int, log_floor: float) -> RIFit:
+    """`RIFit` from the optimiser's state. One constructor, two call sites, no repeated field list."""
+    # AT THE FLOOR, `sigma` IS THE FLOOR EXACTLY, and the snap is not cosmetic:
+    # `exp(log(1e-4))` is 0.00010000000000000009, so a fit that reported it would make
+    # `sigma == C.POLR_RI_SIGMA_FLOOR` False on a fit whose `at_floor` is True -- two fields
+    # disagreeing about one fact, which is the shape of defect Stage 12 §3.1 declines a discriminator
+    # field to avoid. §20.12 asserts the equality, so this is what makes it assertable.
+    at_floor = bool(par[-1] <= log_floor + 1e-12)
+    sigma = C.POLR_RI_SIGMA_FLOOR if at_floor else float(np.exp(par[-1]))
+    return RIFit(
+        beta=par[K:K + m].copy(), alpha=par[:K].copy(), sigma=sigma, groups=groups,
+        b=b_hat.copy(), b_sd=tau.copy(), categories=categories, columns=columns, nodes=nodes,
+        iterations=iterations, converged_on=converged_on, first_step_norm=first_step_norm,
+        rescales=rescales, halvings=halvings, at_floor=at_floor)
+
+
+def polr_ri(X: pd.DataFrame, y: np.ndarray, groups: pd.Series | np.ndarray) -> RIFit:
+    """Random-intercept proportional-odds regression [§14a, Stage 12 §12]. Raises FitError.
+
+        logit P(Y <= k | x, b_c)  =  alpha_k + x'beta + b_c ,      b_c ~ N(0, sigma^2)
+
+    ONE common `beta` across groups — no `A x group` term and no random slope, both forbidden by
+    [§14a] and [§15] at four centres, neither being identifiable in any useful sense there.
+
+    `X` is the same design `polr` fits and carries the exposure column; **the grouping variable is
+    NOT in it and could not be** — a fixed group effect and a random one are the same parameter
+    twice. `groups` is aligned by POSITION with `y`, as `smd`'s arguments are, because the caller has
+    already masked both to the same records.
+
+    THE PARAMETRISATION IS `polr`'s AND THEREFORE [§14a]'s, `alpha_k + x'beta`, and `ordinal::clmm`
+    writes `zeta_k - x'beta` instead. Measured against it the asymmetry is THREE-WAY: the
+    coefficients come back negated, the thresholds do NOT, and **`sigma` does not either** because it
+    is a scale. `tests/reference/polr_ri_clmm.R` asserts all three rather than that "the fits agree",
+    which would pass on the thresholds alone (Stage 12 §12.7).
+
+    Reads `C.POLR_RI_NODES` and takes no node argument, for the reason `polr` takes no tolerance:
+    the node count is part of the definition of the objective and [§10] refits this model in every
+    one of `N_BOOT` replicates, so it is prespecified rather than a runtime knob (Stage 12 §12.3).
+
+    **A FIT AT `POLR_RI_SIGMA_FLOOR` IS NOT A FAILURE AND DOES NOT RAISE.** [§14a] names
+    sigma^2_C = 0 as a legitimate answer, `RIFit.at_floor` records it, and Stage 12 §12.5 measured it
+    in 44 of 200 replicates. Dropping those would select the bootstrap on the value of the parameter
+    the arm exists to examine.
+
+    **There is no standard error, for `PolrFit`'s reason** [Stage 8 §5.6], and one more specific to
+    this fit: at four clusters a variance parameter's asymptotic standard error is the least
+    trustworthy number in the output. [§10]'s percentile bootstrap is the prespecified interval.
+    """
+    return _polr_ri(X, y, groups, C.POLR_RI_NODES, adaptive=True)

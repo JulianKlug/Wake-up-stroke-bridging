@@ -935,7 +935,18 @@ asserts those twenty-six are **byte-identical** before and after, and Stage 12 �
 extraction as implementation step 3, *before* Stage 12 has any keys of its own, so a discrepancy is
 unambiguously the refactor's rather than the new stage's.
 
-**Status: closed** with the Stage 12 implementation commit.
+**Status: CLOSED, 2026-08-27, and the guard passed.** `bootstrap.intervals(draws, tested)` is public,
+`run` calls it, and the twenty-six intervals were captured before the extraction and compared after:
+**byte-identical on all twenty-six — every limit, level, method, draw count and `p`.** The extraction
+landed as Stage 12 §25's step 3, before `standardise.py` had any keys, so the comparison was against
+Stage 10's landed output and nothing else.
+
+**One thing the extraction cost that this item did not predict, and it was caught by a run rather than
+by review.** Making `_bucket` public as `bucket` (§13.2, below) created a NAME COLLISION inside
+`_replicate`, which bound a local variable `bucket` for the classified value — so the module-level
+function was shadowed and `bucket(...)` raised `UnboundLocalError` on the first replicate that
+classified a failure. It is invisible to every import-time and structural check, and the full 2000-
+replicate pipeline is what found it. The three locals are now named `label`.
 
 ## `Replicate` cannot describe a body with more than one `polr` fit (Stage 11 §3.1, §16 item 8)
 
@@ -1017,6 +1028,23 @@ interval widths.
 
 ## `polr_ri` ships without an independent implementation having agreed with it (Stage 12 §12.7, §26)
 
+**CLOSED, 2026-08-27, AND IT CLOSES POSITIVELY.** The Stage 12 spec records this as the one estimator
+in the pipeline with no external agreement, because R segfaulted at startup on the machine the spec was
+written on. **R works on the machine it was implemented on, so `tests/reference/polr_ri_clmm.R` ran.**
+Measured against `ordinal` 2026.7.26 at `nAGQ = POLR_RI_NODES = 11`, on an eight-group frame:
+coefficients agree **NEGATED** to `|ours + clmm|` = 1.033e-05 (with `|ours − clmm|` = 1.574, so there
+is something to negate); thresholds agree **un-negated** to 3.636e-06; and **σ agrees un-negated** to
+4.446e-06, because it is a scale. All three parts of §12.7's three-way asymmetry hold.
+
+**One defect in the oracle is recorded because `clm` and `clmm` differ where they look alike.** The
+first version read the random-effect SD from `fitted$stDev`, which is **NULL on a `clmm` object** — the
+SD is in `fitted$ST`, an `lme4`-style list whose single 1×1 entry is the SD for a lone random
+intercept. `as.numeric(NULL)` is `numeric(0)`, so `data.frame()` failed on a length mismatch and the
+oracle **failed for a reason unrelated to the estimator**. That is the failure mode a gated oracle is
+worst at surfacing, because a red test and a skipped test both read as "not verified".
+
+**Status: closed.** The gate stays in place for checkouts whose R is broken.
+
 **What.** `model.polr_ri` is a new maximiser and Stage 12 §12.7 specifies its `ordinal::clmm` oracle in
 full — the three-way sign asymmetry, `nAGQ = POLR_RI_NODES`, the separate tolerance on σ. **The oracle
 has not been run.** R segfaults at startup on this machine for the `uname`/PATH reason
@@ -1069,6 +1097,37 @@ different-populations statement.
 
 ## Stage 12's spec is written against an unlanded Stage 11 (Stage 12 header, §21 item 11)
 
+**FIRED AT IMPLEMENTATION, 2026-08-27, and this is what it cost.** The trigger this item names is
+*"Stage 11 landing with `bucket`/`collect` private, or `intervals` not extracted"*. Stage 11 has not
+landed **at all**, which is the stronger form: at the Stage 12 implementation commit
+`bootstrap._bucket` and `bootstrap._collect` were still private and `outcome.estimation_population`
+did not exist.
+
+**Two of the three dependencies were therefore satisfied by Stage 12 itself, and the third was not
+needed.**
+
+- `bucket` and `collect` are made public **here**, as a pure rename with no behaviour change — the
+  same shape of change Stage 12 §18 already authorises for `balance._levels`, and for the same
+  reason: `standardise.py` must classify its four failure groups and reconcile its sixty-nine keys
+  through the one taxonomy rather than owning a second copy (Stage 9 §14).
+- `intervals` is extracted here, which this file's own item above already prescribed.
+- `outcome.estimation_population` is **not used** and its absence cost nothing, exactly as
+  Stage 12 §4.1 predicted: its first conjunct is a `Propensity`'s covariate-completeness over
+  `PS_COVARIATES`, and [§14a] has no `Propensity` and a different covariate list.
+
+**Consequence for Stage 11 when it lands: three of its own changes are already made.** It must not
+re-make them, and its two interval-loop callers must be written against `bootstrap.intervals` rather
+than carrying their own copies.
+
+**And the spec's public-surface COUNTS are off by one in three places, because they were written
+against the Stage 11 surface rather than the landed one.** Measured at the Stage 12 commit:
+`bootstrap.py` goes 5 → 8 public functions (the spec says 8 → 9), `model.py` 5 → 7 (the spec says
+6 → 8), and `balance.py` 2 → 3 (the spec says 3 → 4). **Every DELTA is right and every ABSOLUTE is
+one high**, which is the signature of counting against an unlanded baseline. The test assertions are
+written against the landed numbers and are by NAME rather than by count, so they cannot drift again.
+
+**Status: open** until Stage 11 lands, at which point this item closes by being overtaken.
+
 **What.** Stage 12's specification depends on Stage 11 in exactly three places, all named in its
 header: `bootstrap.bucket` and `bootstrap.collect` being public (Stage 11 §5.4); the interval loop
 being extractable as Stage 11 §16 describes; and `outcome.estimation_population` existing and
@@ -1082,3 +1141,153 @@ dependencies are small and named. But they are assumptions about code that does 
 duplicated. Either makes Stage 12 §13.3 and §13.2 wrong rather than merely early.
 
 **Status: open**, and it closes when Stage 11 lands.
+
+
+## Stage 12's implementation found two numerical defects in `polr_ri` that the spec could not have (Stage 12 §12.2, §12.4)
+
+**What.** Both were found by running the estimator at `N_BOOT = 2000` rather than by reading it, both
+made the fit return the RIGHT ANSWER through a line search doing the wrong job, and both are now
+fixed with a clamp that enforces a property rather than choosing a magnitude.
+
+1. **The per-observation category probability underflows to EXACTLY ZERO at far quadrature nodes.**
+   `p = gu - gl` where both are `expit`s; at a node the posterior has moved away from, both are 1.0 in
+   float64 and the difference cancels to zero. Then `log p` is `-inf` and `du/p`, `(du/p)**2` and
+   `du*dl/p**2` are all `nan` — so the gradient is `nan`, the trial step is rejected by the `isfinite`
+   test in the halving loop, and the fit converges anyway. `model._RI_P_FLOOR = 1e-150` floors it. **The
+   exponent is chosen against `p**2` and not against `p`**: `Hul = du*dl/p**2`, so a floor below about
+   1.5e-154 makes `p**2` underflow and reintroduces the 0/0 it fixes.
+
+   `polr`'s convention is the opposite — return `-inf` and let step-halving reject the step — and it is
+   right THERE, where a non-positive probability means crossed cutpoints at the iterate. Here it means
+   a far node, which is not a property of the iterate at all and is what a quadrature rule exists to
+   weight at zero.
+
+2. **The per-group log-posterior curvature comes out POSITIVE from cancellation.** It is negative
+   exactly in the mathematics — a sum of concave ordinal terms plus a Gaussian log-prior, so it cannot
+   exceed `-1/sigma^2` — but `Huu = ddu/p - (du/p)**2` is a difference of two large quantities in the
+   tails. When the sum crossed zero, `sqrt(-1/curvature)` returned `nan`, the quadrature nodes were
+   `nan`, and the line search absorbed it. `model._curvature` clamps the ordinal contribution to its
+   own guaranteed sign, `min(g2, 0)`, and the bound is TIGHT — attained whenever the data contribute no
+   curvature, which is precisely the far-tail case that produces the noise.
+
+**Why this matters beyond the two fixes.** Stage 12 §12.5 makes exactly this argument about the
+`sigma -> 0` boundary — *"The fit still returned, because the affected nodes are dominated in the
+log-sum-exp, but 'still returned' is not a specification"* — and then the specified fitter had two more
+instances of the same failure mode that the spec did not anticipate. Neither was visible at the point
+estimate, at n = 200, or in any structural test; both were visible as `RuntimeWarning`s in a 2000-
+replicate run. `test_model.py` now asserts `polr_ri` runs clean under
+`warnings.simplefilter("error", RuntimeWarning)` on both a non-zero-sigma frame and a floored one,
+which is the check that would have caught them.
+
+**Trigger.** Any change to the quadrature, the mode search, or `_ord_b_derivatives`. **Status: closed**
+with the Stage 12 implementation commit; the warnings-as-errors test is what keeps it closed.
+
+## `polr_ri` drops 2 of 2000 [§14a] replicates on a BFGS line-search stall, and Stage 12 §13.4 says nothing fails (Stage 12 §13.4, §12.4)
+
+**What.** Stage 12 §13.4 reports *"Nothing fails"* and measures `polr_ri` non-convergence at **0 of
+200**. Measured at the full `N_BOOT = 2000` after the two numerical fixes above: **2 replicates raise
+T2** — step-halving exhausted, at iteration 22 and at iteration 7 — for a drop rate of **0.1%**. Both
+are genuine BFGS line-search stalls and neither emits a warning; the nan artefacts that caused
+earlier stalls are gone.
+
+**The taxonomy handles them exactly as designed and this is not a defect in the machinery.** Each costs
+`hier.*` and nothing else — 24 of the 69 keys — so the pooled and support arms keep 2000 draws each
+while the hierarchical arm has 1998. `Draws` reconciles for every one of the 69 keys, the failures land
+in the `nonconvergence` bucket, and the audit grid labels the denominator. `test_standardise.py`
+asserts that grouping directly.
+
+**Why it is not "fixed".** The obvious repair is to reset the BFGS inverse-Hessian approximation to the
+identity when the line search fails and retry once as a gradient step, which is a standard safeguard
+and would probably recover both. **It is declined here because it would change the estimator without a
+prespecification.** Stage 12 §12.4 fixes the loop's shape — *"step-halving to `POLR_MAX_HALVINGS` per
+iteration, raising `FitError` on exhaustion"* — and Stage 6 §5.3's argument applies with full force:
+[§10] drops failed replicates, so a change to WHICH replicates fail is a change to the sampling
+distribution, and adding a recovery path is exactly as much a modelling decision as removing one.
+
+**And the selection question is real and is not answered.** 0.1% is small, but the two dropped
+replicates are dropped for a property of the OPTIMISER rather than of the data, and nothing here
+establishes that they are exchangeable with the 1998 that survive — which is the concern Stage 6 §5.3
+raises about a step-norm criterion (*"the ones dropped would be exactly the sparse ones"*). At 0.1% it
+cannot move a percentile interval materially; at a higher rate it could.
+
+**Trigger.** A workbook, a Stage 13 population, or a `POLR_RI_NODES` change on which the rate exceeds
+1%; or a [§14] amendment prescribing a recovery path. **Status: open**, and it amends Stage 12 §13.4's
+"nothing fails" to "nothing fails in the pooled and support arms; the hierarchical arm drops 0.1%".
+
+## Stage 12 §25's step 0 is done, and three of the hierarchical arm's rates moved (Stage 12 §12.5, §12.8, §21 item 13)
+
+**What.** Stage 12 §21 item 13 records that every hierarchical rate in the specification is a
+200-replicate measurement and that §25's step 0 must replace them with `N_BOOT` figures before the
+item can close. **Step 0 ran at the implementation commit.** Measured over 2000 replicates, against
+the specification's n = 200 figures:
+
+| quantity | spec, n = 200 | measured, n = 2000 |
+|---|---|---|
+| `sigma_hat` at the `POLR_RI_SIGMA_FLOOR` boundary | 44 / 200 = **22.0%** | 368 / 1998 = **18.4%** |
+| `sigma_hat` above 1.0 | 48 / 200 = **24.0%** | 460 / 1998 = **23.0%** |
+| `polr_ri` non-convergence | 0 / 200 | **2 / 2000** (item above) |
+| wall clock, the whole three-arm bootstrap | **17.5 min**, projected ×10 | **4.2 min**, measured |
+
+**The two rates are within sampling error of the 200-replicate estimates** — 18.4% against 22.0% is
+1.2 standard errors at n = 200 — so the specification's figures were not wrong, they were imprecise in
+the way it said they were. **The wall clock is not**: 4.2 minutes against a projected 17.5 is a factor
+of four, and the projection was linear in the replicate count from a measured 105.0 s at n = 200 on a
+different machine. A timing is machine state, which Stage 12 §26 already says of every timing it
+quotes; what is worth carrying forward is that the hierarchical arm is still ~95% of the stage's
+compute and the stage is still the most expensive thing in the pipeline.
+
+**Everything else in §26's verification record reproduced exactly**, on an independent implementation:
+the population ledger 126 → 107 → 104 with both outcome-missing records at the never-IVT centre; the
+per-centre × arm table; 10 design columns and 5 iterations on `"likelihood"`; the cutpoint collapse at
+**83 / 2000 = 4.15%**, always mRS 5, with `RD_4 == RD_5` in exactly those 83; `|beta|` min 0.0000
+median 0.3219 max 2.0016; the reflection asymmetry at **9.8e-5 / 1.7e-3** under `inverted_cdf` against
+1.1e-16 / 5.6e-16 under `"linear"`; `sigma_hat` 0.542427 at 11 adaptive nodes; 25 iterations and 85
+halvings at the point estimate; and all four per-centre posterior SDs to four decimals.
+
+**Trigger.** Fired and discharged. **Status: closed** with the Stage 12 implementation commit, which is
+what §21 item 13 asked for — closed with measured numbers rather than negatively.
+
+## Stage 12's `_role` is a fourth role vocabulary and `balance._role` is now one of two (Stage 12 §10.3)
+
+**What.** `balance._role` answers *"what this covariate is TO the specification being diagnosed"* and
+returns `"propensity model"` for every `PS_COVARIATES` name. `standardise._role` cannot reuse it,
+because **[§14] fits no propensity model anywhere** — a row labelled "propensity model" in a [§14a]
+support-check table would name a model that does not exist in this analysis — so it returns
+`"standardisation model [§14a]"`, `"negative control"`, `"excluded [§6]"` and `"grouping"`.
+
+**Why this is a different rule and not a second copy.** The two functions answer the same question
+about different specifications, which is what `balance._role`'s own docstring says a role IS. Copying
+its ANSWERS would have been the duplication; copying its QUESTION is not. Stage 12 §10.3 makes the
+same argument for reusing `balance.smd` and `balance.levels` unchanged, and those are reused —
+`_baseline` calls both and implements neither, asserted by an AST scan over its own body.
+
+**What is unresolved.** There are now two role vocabularies with three overlapping values
+(`"negative control"`, `"excluded [§6]"`, and a model-membership label that differs), and Stage 11's
+`Specification` registry will add a third reading of the first one when it lands: under the [§13]
+full-covariate model the four vascular risk factors move from `negative control` to `propensity
+model`. Three functions computing a `role` column for three specifications is the point at which the
+column should become a property of a `Specification` rather than of a module.
+
+**Trigger.** Stage 11 landing its `Specification` registry, or Stage 13 needing a fourth. **Status:
+open.**
+
+## `standardise._baseline` reaches for `balance._pooled_sd`, which is one private cross-module call (Stage 12 §10.3, §3.1)
+
+**What.** `Support.baseline` is declared as `tuple[balance.CovariateBalance, ...]` (Stage 12 §3.1), and
+that record carries an `sd` field — the unweighted pooled SD the SMD was divided by. Stage 12 §10.3
+prescribes `balance.smd` for the ratio and §18 says `balance.py` changes by **one rename and nothing
+else**, so nothing public exposes the denominator on its own.
+
+**So `_baseline` calls `balance._pooled_sd` for that column, and the alternative is worse.** Computing
+the pooled SD in `standardise.py` would be a second definition of the yardstick, which is exactly what
+Stage 7 §5.5 made `smd` public to prevent and what §10.3 restates. Reading it from the module that owns
+it keeps there being one definition; it costs one private cross-module call, which
+`test_standardise.py` pins as the ONLY one — the assertion is `private == {"balance._pooled_sd"}`, so a
+second such call is a test failure.
+
+**The clean fix is a one-line rename** — `_pooled_sd` becomes `pooled_sd` — which Stage 12 §18 does not
+authorise and which is not worth widening this stage's footprint in `balance.py` from one rename to
+two on the strength of an aesthetic.
+
+**Trigger.** A second caller needing the denominator, or the next stage that touches `balance.py` for
+any other reason. **Status: open.**

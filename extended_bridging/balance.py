@@ -12,7 +12,7 @@ then drops constant columns [Stage 6 §4.2, §4.3], so a table built from its co
 factors expand to on this cohort. ``center = HUG`` carries this cohort's **worst residual
 imbalance**, so the shortcut produces a shorter, complete-looking table whose reported worst is
 wrong, with nothing raising. What a balance table needs instead — indicators over ``FACTOR_LEVELS``
-— is four lines, and ``_levels`` is them [Stage 7 §4.2].
+— is four lines, and ``levels`` is them [Stage 7 §4.2].
 
 This stage **adds no column to the cohort frame, edits no value, refits nothing, re-weights nothing
 and computes no second effective sample size** [Stage 6 §11, Stage 7 §0.2]. The temptation here is
@@ -279,8 +279,18 @@ def smd(x: pd.Series | np.ndarray, a: pd.Series | np.ndarray,
 # specifications are read against the same fourteen names.
 
 
-def _levels(df: pd.DataFrame, name: str) -> list[tuple[str, pd.Series]]:
+def levels(df: pd.DataFrame, name: str) -> list[tuple[str, pd.Series]]:
     """One (label, indicator) pair per DECLARED level of a factor; one pair for a linear covariate.
+
+    **Public, and not for symmetry: [§14a]'s support-check baseline table needs it and may not own a
+    second copy** [Stage 12 §10.3]. Stage 7 §5.5 made `smd` public on the same argument -- a second
+    implementation of `smd` would be a second definition of the yardstick, and a second
+    implementation of this would be a second definition of WHAT A ROW IS.
+
+    **And the failure of a second copy would be invisible.** Stage 12 §10.1 measured that all three
+    of `onset_type`'s declared levels are present in [§14a]'s treated arm, so a copy that ranged over
+    OBSERVED levels would produce a byte-identical table on v7 and silently drop a row on the next
+    workbook. The rename to a public name is the whole of Stage 12's change to this module.
 
     Ranges over FACTOR_LEVELS, never over the frame and never over a design matrix. A level nobody
     in the cohort has is a row reading 0, which is a fact about the population; a level that
@@ -342,7 +352,7 @@ def _table(sub: pd.DataFrame, a: np.ndarray, w: np.ndarray, names: Sequence[str]
     """
     rows: list[CovariateBalance] = []
     for name in names:
-        for label, indicator in _levels(sub, name):
+        for label, indicator in levels(sub, name):
             values = indicator.to_numpy(dtype=float)
             present = np.isfinite(values)
             x, arm, weight = values[present], a[present], w[present]

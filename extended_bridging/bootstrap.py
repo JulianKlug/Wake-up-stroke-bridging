@@ -38,7 +38,7 @@ body as a callable.
     │    ├─ keys  = _estimand_keys(est, sec) twenty-six of them           (§3.3)        │
     │    ├─ replicates(...)                  ONE Generator, in order      (§4.3)        │
     │    │     resample(...) -> _replicate(...) -> Replicate                            │
-    │    ├─ _collect / _diagnostics          per estimand GROUP           (§7.1, §7.3)  │
+    │    ├─ collect / _diagnostics          per estimand GROUP           (§7.1, §7.3)  │
     │    ├─ _record_replicates(...)          one `model` entry            (§10.1)       │
     │    └─ percentile_ci / bootstrap_p      per estimand                 (§8, §9)      │
     └──────────────────────────────────────────────────────────────────────────────────┘
@@ -125,12 +125,12 @@ class Replicate:
 
     **`values` and `failures` PARTITION the attempted keys** — a key is in exactly one of them,
     never both and never neither. That partition is the whole of §15.4's reconciliation property:
-    `_collect` sums over replicates key by key, and if a replicate can lose a key silently the
+    `collect` sums over replicates key by key, and if a replicate can lose a key silently the
     three numbers in `Draws` stop adding up. A dict-of-value plus a dict-of-bucket makes the
     partition a property of the type rather than of the loop that fills it — which is what
     `__post_init__` below turns from a sentence into a raise.
 
-    It is declared here and not left to the implementation because `_collect` and `_diagnostics`
+    It is declared here and not left to the implementation because `collect` and `_diagnostics`
     both destructure it, and every other structure this stage carries is a documented frozen
     dataclass. This one carries every number the stage reports.
 
@@ -426,6 +426,36 @@ def bootstrap_p(draws: np.ndarray) -> float:
     return max(2.0 * min(p_le, p_ge), 1.0 / (len(draws) + 1))
 
 
+def intervals(draws: dict[str, Draws], tested: Callable[[str], bool]) -> dict[str, Interval]:
+    """The [§10] percentile interval for every key with enough surviving draws, and a `p` for those
+    `tested` returns True for. [Stage 12 §13.3]
+
+    **The p RULE is the parameter, because it is the only thing the callers disagree about.** `run`
+    passes `_tested` -- eight of its twenty-six keys (§9.1, §9.3); [§13]'s sensitivity arm passes
+    `lambda key: False`; its subgroups pass their own; and [§14a]'s standardisation passes
+    `lambda key: False`, because [§14] prescribes *"percentile intervals"* and states no null
+    (Stage 12 §3.3). Everything else about the loop -- the `ci_min_draws` floor, the percentile
+    definition, which fields an `Interval` carries -- is the same in every caller, and was the same
+    five lines written out in each of them.
+
+    `TODOS.md` set the trigger for this extraction at a THIRD caller, naming Stage 12's
+    standardisation bootstrap as the candidate; Stage 12 §13.3 is where the trigger fired.
+
+    **AN ESTIMAND BELOW §8.3's FLOOR KEEPS ITS `Draws` AND GETS NO `Interval`**, so the returned dict
+    may hold fewer keys than `draws` does. That asymmetry is `run`'s own contract (§3.3) and it is
+    preserved here rather than smoothed: an implementation emitting a pair of extremes under a
+    percentile's name passes any test that only checks the `Draws` side (§15.8).
+    """
+    out: dict[str, Interval] = {}
+    for key, d in draws.items():
+        if len(d.draws) < C.ci_min_draws():                  # §8.3 -- no Interval, Draws kept
+            continue
+        lo, hi = percentile_ci(d.draws, C.CI_LEVEL)
+        p = bootstrap_p(d.draws) if tested(key) else None
+        out[key] = Interval(lo, hi, C.CI_LEVEL, C.PERCENTILE_METHOD, len(d.draws), p)
+    return out
+
+
 # --- the estimand keys [§3.3] -------------------------------------------------------------------------
 
 def _estimand_keys(est: outcome.Primary, sec: outcome.Secondary) -> tuple[str, ...]:
@@ -467,8 +497,13 @@ def _tested(key: str) -> bool:
     return key == "beta" or key.endswith(".rd")
 
 
-def _bucket(message: str) -> str:
+def bucket(message: str) -> str:
     """The `C.FAILURE_BUCKETS` entry for a raised `FitError`, by the FIRST TOKEN of its message.
+
+    **Public, and not for symmetry: Stage 12's replicate body classifies its own four failure groups
+    and may not own a second copy of this** [Stage 12 §13.2]. Stage 9 §14 names re-implementing the
+    taxonomy as how a taxonomy gets violated by accident, and a second textual classifier is exactly
+    that -- it would agree with this one on v7 and be free to drift on the raise site added after it.
 
     `model.FitError` carries no code -- it is `class FitError(RuntimeError)` with no attributes
     (model.py:89) -- and Stage 8 §11 requires the separation count reported SEPARATELY from the
@@ -624,8 +659,8 @@ def _replicate(draw: pd.DataFrame, keys: tuple[str, ...], paths: dict[str, str],
     try:
         ps = propensity.fit(draw, audit)                       # [Stage 6] — refit, never reused
     except model.FitError as failure:
-        bucket = _bucket(str(failure))
-        return Replicate(values={}, failures={key: bucket for key in keys},
+        label = bucket(str(failure))
+        return Replicate(values={}, failures={key: label for key in keys},
                          n_alpha=None, polr_iterations=None, sum_w=None, n_in_model=None)
 
     values: dict[str, float] = {}
@@ -643,8 +678,8 @@ def _replicate(draw: pd.DataFrame, keys: tuple[str, ...], paths: dict[str, str],
         n_alpha = len(est.fit.alpha)
         polr_iterations = est.fit.iterations
     except model.FitError as failure:
-        bucket = _bucket(str(failure))
-        failures.update({key: bucket for key in primary_keys})
+        label = bucket(str(failure))
+        failures.update({key: label for key in primary_keys})
 
     _shared_design(draw, ps)                                   # invariant 6, per replicate (§6.4)
 
@@ -658,7 +693,7 @@ def _replicate(draw: pd.DataFrame, keys: tuple[str, ...], paths: dict[str, str],
     for key in C.BINARY_OUTCOMES:
         group = tuple(k for k in keys if k.startswith(f"{key}."))
         if key in sec.failures:
-            failures.update({k: _bucket(sec.failures[key]) for k in group})
+            failures.update({k: bucket(sec.failures[key]) for k in group})
             continue
         estimate = sec.estimates[key]
         values[f"{key}.rd"] = float(estimate.rd)
@@ -676,8 +711,13 @@ def _replicate(draw: pd.DataFrame, keys: tuple[str, ...], paths: dict[str, str],
 
 # --- collecting the replicates [§7] ---------------------------------------------------------------------
 
-def _collect(collected: tuple[object, ...], keys: tuple[str, ...]) -> dict[str, Draws]:
+def collect(collected: tuple[object, ...], keys: tuple[str, ...]) -> dict[str, Draws]:
     """One `Draws` per estimand key, over the replicates that ATTEMPTED it (§7.1, §7.3).
+
+    **Public for `bucket`'s reason** [Stage 12 §13.2]: Stage 12 reconciles sixty-nine keys over four
+    failure groups and `Draws.__post_init__`'s three-number reconciliation is the one property no
+    wrong implementation satisfies by accident. A second collector would be a second definition of
+    what `n_attempted` counts.
 
     `n_attempted` is counted and not assumed: it is the number of replicates in which the key
     appeared in `values` or in `failures`, which on [§10]'s body is `C.N_BOOT` for all twenty-six —
@@ -707,8 +747,8 @@ def _collect(collected: tuple[object, ...], keys: tuple[str, ...]) -> dict[str, 
                 drawn.append(value)
                 attempted += 1
             elif key in replicate.failures:
-                bucket = replicate.failures[key]
-                counts[bucket] = counts.get(bucket, 0) + 1
+                label = replicate.failures[key]
+                counts[label] = counts.get(label, 0) + 1
                 attempted += 1
         out[key] = Draws(quantity=key, draws=np.asarray(drawn, dtype=float),
                          n_attempted=attempted, failures=counts)
@@ -812,7 +852,7 @@ def _counters_table(draws: dict[str, Draws]) -> tuple[tuple[str, ...], ...]:
     header = ("estimand", "attempted", "draws", "tested", *buckets)
     rows = tuple(
         (key, str(d.n_attempted), str(len(d.draws)), "yes" if _tested(key) else "no",
-         *(str(d.failures.get(bucket, 0)) for bucket in buckets))
+         *(str(d.failures.get(name, 0)) for name in buckets))
         for key, d in draws.items())
     return (header, *rows)
 
@@ -1099,16 +1139,15 @@ def run(df: pd.DataFrame, ps: propensity.Propensity, est: outcome.Primary,
         C.N_BOOT, C.SEED, C.BOOT_STRATUM,
     )
 
-    draws = _collect(collected, keys)                            # §7.1, §7.3, per group
+    draws = collect(collected, keys)                            # §7.1, §7.3, per group
     diagnostics = _diagnostics(collected)                        # §7.4, §7.5, §9.2, §10.2
     _record_replicates(draws, diagnostics, audit)                # §10.1
 
-    intervals: dict[str, Interval] = {}
-    for key, d in draws.items():
-        if len(d.draws) < C.ci_min_draws():                      # §8.3 -- no Interval, Draws kept
-            continue
-        lo, hi = percentile_ci(d.draws, C.CI_LEVEL)
-        p = bootstrap_p(d.draws) if _tested(key) else None       # §9.1, §9.3 -- 8 of 26
-        intervals[key] = Interval(lo, hi, C.CI_LEVEL, C.PERCENTILE_METHOD, len(d.draws), p)
-
-    return Bootstrap(C.SEED, C.N_BOOT, draws, intervals, diagnostics)
+    # THE INTERVAL LOOP IS `intervals`' AND NOT THIS FUNCTION'S, on the same argument that makes the
+    # replicate loop `replicates`'. `_tested` is the [§10] p-rule and is PASSED rather than read
+    # inside, because [§14a]'s standardisation passes `lambda key: False` over the same loop
+    # [Stage 12 §13.3]. Two copies of the `ci_min_draws` floor is one edit from an interval built on
+    # a thinned draw set in one caller and refused in the other.
+    return Bootstrap(C.SEED, C.N_BOOT, draws,
+                     intervals(draws, _tested),                  # §9.1, §9.3 -- 8 of 26
+                     diagnostics)
