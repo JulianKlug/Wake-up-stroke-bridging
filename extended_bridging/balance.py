@@ -161,11 +161,17 @@ class Balance:
     them. The split costs nothing, because the RENDERED table is still one table: §8 passes
     `centres + (pooled,)` to `_overlap_table`, so [§9]'s "within each centre as well as pooled" is
     one grid computed by one function, and only the return value distinguishes the two kinds of row.
+
+    **`spec` is carried for `Interval.method`'s stated reason** [Stage 11 §4.4]: which specification
+    produced these numbers is part of what they are. From Stage 11 onward two `Balance` objects sit
+    side by side over the same 19 rows, and the `role` column is the only thing distinguishing them
+    — so a caller handed one table alone could not say which propensity model it diagnoses.
     """
 
     covariates: tuple[CovariateBalance, ...]
     centres: tuple[CentreOverlap, ...]   # exactly CENTER_ORDER, in CENTER_ORDER's order
     pooled: CentreOverlap                # the `all (pooled)` row — its own field, never a centre
+    spec: C.Specification                # which propensity specification these roles are TO
 
     def worst(self) -> tuple[CovariateBalance | None, tuple[str, ...]]:
         """§3's pair, over this table's rows. The public name; `_worst` is the definition."""
@@ -311,26 +317,49 @@ def levels(df: pd.DataFrame, name: str) -> list[tuple[str, pd.Series]]:
             for level in C.FACTOR_LEVELS[name]]
 
 
-def _role(name: str) -> str:
+# The three role strings, as module-level constants for `_REPORTED`/`_STRUCTURAL`/`_NO_CONTRAST`'s
+# own reason [Stage 11 §4.4]: Stage 14 now holds TWO `Balance` objects whose only structural
+# difference is this column, so it matches on `row.role` BY VALUE before it prints anything, and a
+# literal spelled at two comparison sites is one typo from a table nobody flags.
+_IN_MODEL: Final[str] = "propensity model"
+_CONTROL: Final[str] = "negative control"
+_EXCLUDED: Final[str] = "excluded [§6]"
+
+
+def _role(name: str, spec: C.Specification) -> str:
     """What this covariate is TO the specification being diagnosed. §4.3.
 
-    Reads PS_COVARIATES for the same reason `propensity.fit` does [Stage 6 §6.4]: the estimand is
-    indexed by the propensity model, so "in the model" is a property of the one prespecified
-    specification and not an argument a caller may vary.
+    **Reads `spec.covariates` off the `Propensity`, and Stage 7 §11 promised it in these words**:
+    *"When those specifications arrive they call `assess` once each, with the `Propensity` from
+    their own named specification, and the `role` column moves without the table changing shape."*
+    That is what happens here — `assess`'s signature does not move, `BALANCE_SET` does not move, and
+    under [§13]'s full-covariate specification the four vascular risk factors read
+    `propensity model` instead of `negative control` while not one row enters or leaves the table
+    [Stage 11 §4.4].
+
+    It is not a caller-supplied covariate list, for `propensity.fit`'s reason [Stage 6 §6.4]: the
+    estimand is indexed by the propensity model, so "in the model" is a property of a NAMED
+    prespecified specification and not an argument.
+
+    **The branch order is what produces the arm's table and it is not incidental.** A covariate in
+    `spec.covariates` reads `propensity model` FIRST, so under [§13] the four negative controls stop
+    being controls — which is the whole content of "the arm spends them". `penumbra_ml` reaches the
+    third branch under both specifications.
 
     `BALANCE_ONLY` is NOT the negative-control set: it holds five names and [§6] names four vascular
     risk factors as negative controls. The fifth is `penumbra_ml`, excluded because it is a
     deterministic function of `core_ml` and `tmax6_ml`, and a table equating the two sets asserts
     that a collinear covariate is a covariate weighting was never expected to fix.
     """
-    if name in C.PS_COVARIATES:
-        return "propensity model"
+    if name in spec.covariates:
+        return _IN_MODEL
     if name in C.NEGATIVE_CONTROLS:
-        return "negative control"
-    return "excluded [§6]"
+        return _CONTROL
+    return _EXCLUDED
 
 
 def _table(sub: pd.DataFrame, a: np.ndarray, w: np.ndarray, names: Sequence[str],
+           spec: C.Specification,
            sds: dict[str, float] | None = None) -> tuple[CovariateBalance, ...]:
     """One CovariateBalance per declared level, over the records `sub` already restricts to.
 
@@ -358,7 +387,7 @@ def _table(sub: pd.DataFrame, a: np.ndarray, w: np.ndarray, names: Sequence[str]
             x, arm, weight = values[present], a[present], w[present]
             sd = _pooled_sd(x, arm) if sds is None else sds.get(label, np.nan)
             rows.append(CovariateBalance(
-                covariate=label, role=_role(name), n=int(present.sum()), sd=sd,
+                covariate=label, role=_role(name, spec), n=int(present.sum()), sd=sd,
                 unweighted=_ratio(x, arm, np.ones_like(weight), sd),
                 weighted=_ratio(x, arm, weight, sd)))
     return tuple(rows)
@@ -373,6 +402,19 @@ def _table(sub: pd.DataFrame, a: np.ndarray, w: np.ndarray, names: Sequence[str]
 # about what a column means. In the return value it is a field of its own (§3), because the log's
 # reader wants one table with a labelled row and a Python caller wants `centres` to mean the declared
 # centres and nothing else.
+
+# The two audit step BASES. Constants rather than literals at the two `audit.record` call sites, for
+# `outcome.py`'s reason: the acceptance suite asserts each entry appears under this name, and a test
+# comparing against a string literal it also writes is a test of nothing.
+#
+# **Both reach `audit.record` through `ps.spec.step`** [Stage 11 §4.4, §10]. `assess` is called TWICE
+# over one cohort from Stage 11 onward — once per declared propensity specification — and
+# `Audit.entry` is first-match (data.py:273-275), so two unsuffixed `balance_smd` entries would make
+# every programmatic read return the [§7] table's while the rendered log looked complete. The primary
+# specification's suffix is the empty string, so both names are byte-identical on a run without the
+# arm and no landed assertion moves.
+_STEP_SMD: Final[str] = "balance_smd"
+_STEP_OVERLAP: Final[str] = "overlap_by_centre"
 
 _REPORTED: Final[str] = "overlap reported"
 _STRUCTURAL: Final[str] = "structural non-positivity [§3]"
@@ -428,6 +470,7 @@ def _centre(df: pd.DataFrame, ps: propensity.Propensity, centre: str | None,
             # construction, so those rows can only ever read 0.0 and a row that cannot vary is
             # not evidence. Measured: dropping them changes no centre's worst (§18).
             [c for c in C.BALANCE_SET if c != "center"] if centre is not None else C.BALANCE_SET,
+            ps.spec,                                # the role column's source — Stage 11 §4.4
             sds)                                    # §5.5 — the pooled yardstick, not the centre's
         if np.isfinite(row.weighted)]
     if defined:
@@ -553,13 +596,20 @@ def _smd_detail(df: pd.DataFrame, ps: propensity.Propensity,
     return (
         f"[§9] standardised mean differences over {len(rows)} declared level(s) of "
         f"{len(C.BALANCE_SET)} [§6] covariate(s), before and after the [§7] overlap weights, on "
-        f"{int(ps.in_model.sum())} of {len(df)} cohort record(s) — the weighted set, in BOTH "
+        f"{int(ps.in_model.sum())} of {len(df)} cohort record(s) under the {ps.spec.label} "
+        f"propensity specification {ps.spec.sap} — the weighted set, in BOTH "
         "columns, so the pooled standard deviation is one yardstick over one population "
         "[Stage 7 §4.4]. The denominator is the UNWEIGHTED pooled SD in both, which is what makes "
         "the two columns comparable [§9]. Balance is judged against the FULL [§6] confounder set "
-        f"regardless of what this specification fitted, and the {len(C.NEGATIVE_CONTROLS)} vascular "
-        "risk factors are "
-        "negative controls: residual imbalance on them shows what weighting does not fix [§6]. "
+        "regardless of what this specification fitted, so the rows and their order are the same "
+        "under every specification and only the `role` column moves [Stage 7 §4.1]. "
+        # COMPUTED from the roles this table carries, never from len(NEGATIVE_CONTROLS): the [§13]
+        # full-covariate specification ADJUSTS FOR every one of them, so a sentence claiming a
+        # fixed number of negative controls is false in the arm and this one reads zero there
+        # [Stage 11 §4.3, §5.3].
+        f"{sum(1 for row in rows if row.role == _CONTROL)} row(s) are negative controls under this "
+        "specification — residual imbalance on them shows what weighting does not fix [§6] — and "
+        f"{sum(1 for row in rows if row.role == _EXCLUDED)} are in no propensity model at all. "
         f"{len(over)} row(s) reach |SMD| = {_fmt(C.SMD_THRESHOLD)} after weighting"
         + (": " + ", ".join(over) if over else "")
         + (f"; worst {_fmt(abs(worst.weighted))} on {worst.covariate}" if worst else "")
@@ -570,8 +620,11 @@ def _smd_detail(df: pd.DataFrame, ps: propensity.Propensity,
         + (f". {len(undefined)} row(s) are undefined and are reported as such rather than as zero: "
            + ", ".join(undefined) + "." if undefined else ". No row is undefined.")
         + " A row's `n` is its own denominator [§11]; the record(s) outside the fit are named in "
-        "`covariate_completeness` above. This entry reports balance and does not judge the "
-        "estimator: [§7] prescribes one propensity model and there is no second one to try.")
+        f"`{ps.spec.step('covariate_completeness')}` above. This entry reports balance and does not "
+        "judge the estimator: it says what THIS specification left, not whether another leaves "
+        "less. [§13] and DECISION 4 prescribe exactly one further propensity specification; it is "
+        "reported as its own arm beside this one rather than chosen between, and a lower worst "
+        "|SMD| there is not a verdict on this table [Stage 11 §5.3].")
 
 
 def _overlap_detail(centres: Sequence[CentreOverlap]) -> str:
@@ -719,6 +772,12 @@ def assess(df: pd.DataFrame, ps: propensity.Propensity, audit: Audit) -> Balance
     SMD_THRESHOLD, both prespecified [§9]. Adds no column to `df`, edits nothing, refits nothing
     and computes no second effective sample size [Stage 6 §11].
 
+    **The signature does not move at Stage 11 and that is the design** [Stage 7 §11, Stage 11 §4.4].
+    The propensity specification arrives ON the `Propensity` — `ps.spec` — so [§13]'s full-covariate
+    arm calls this function exactly as [§7] does, the `role` column moves, and the table keeps its
+    19 rows in their order. A `spec=` keyword here would have been a second place the specification
+    could be named, one edit away from a table whose roles describe a different fit than its SMDs.
+
     Raises SchemaError on B1-B5 and on nothing else. Imbalance is a finding, not a failure [§5.4]:
     residual imbalance is a question for the PI under [§13] and there is nothing for a caller to
     catch. This is the one place a reader might expect Stage 6's posture and not get it.
@@ -729,8 +788,8 @@ def assess(df: pd.DataFrame, ps: propensity.Propensity, audit: Audit) -> Balance
     a = sub[C.TREATMENT].to_numpy(dtype=float)
     w = ps.w.loc[ps.in_model].to_numpy(dtype=float)
 
-    covariates = _table(sub, a, w, C.BALANCE_SET)
-    audit.record("model", "balance_smd", int(ps.in_model.sum()),
+    covariates = _table(sub, a, w, C.BALANCE_SET, ps.spec)
+    audit.record("model", ps.spec.step(_STEP_SMD), int(ps.in_model.sum()),
                  _smd_detail(df, ps, covariates), table=_smd_table(covariates))
 
     # §5.5 — the ONE yardstick, harvested from the table computed over in_model and handed to every
@@ -738,8 +797,8 @@ def assess(df: pd.DataFrame, ps: propensity.Propensity, audit: Audit) -> Balance
     sds = {row.covariate: row.sd for row in covariates}
     centres = tuple(_centre(df, ps, centre, sds) for centre in C.CENTER_ORDER)
     pooled = _centre(df, ps, None, sds)                        # the `all (pooled)` row — §6.1
-    audit.record("model", "overlap_by_centre",
+    audit.record("model", ps.spec.step(_STEP_OVERLAP),
                  sum(1 for c in centres if c.status == _REPORTED),
                  _overlap_detail(centres), table=_overlap_table(centres + (pooled,)))
 
-    return Balance(covariates=covariates, centres=centres, pooled=pooled)
+    return Balance(covariates=covariates, centres=centres, pooled=pooled, spec=ps.spec)

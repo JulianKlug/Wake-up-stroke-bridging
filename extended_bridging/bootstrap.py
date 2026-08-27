@@ -50,10 +50,29 @@ body as a callable.
 gitignored audit log is the only place any interval on this workbook exists [Stage 10 §4.5].
 
 **What this module does not touch** [Stage 10 §0.2]. ``balance`` is not imported and no interval is
-put on an SMD. ``propensity.py`` is not amended — §5's central claim — and none of its privates is
-reached into. The estimators are called and not edited. And the point estimate is READ and never
-recomputed: a percentile limit is an order statistic of the replicate distribution and is not a
-function of the point value.
+put on an SMD. None of ``propensity.py``'s privates is reached into. The estimators are called and
+not edited. And the point estimate is READ and never recomputed: a percentile limit is an order
+statistic of the replicate distribution and is not a function of the point value.
+
+*Stage 10 §5's central claim was that ``propensity.py`` had a zero-line diff, and its Definition of
+done item 2 checked it. That claim is about STAGE 10'S COMMIT and stays historically true; it is not
+a live check.* Stage 11 amends ``propensity.py`` to give it two named entry points over one private
+``_fit``, and it does so precisely because Stage 6 §6.4's guard kept its meaning — the seam is a
+named ``C.Specification`` and not the ``covariates=`` keyword that guard forbids [Stage 11 §4.3].
+This module gained R9 in the same edit, because ``_replicate`` calls ``propensity.fit``
+unconditionally and a ``run`` over the [§13] arm's ``Propensity`` would otherwise return
+twenty-six intervals whose point estimates are the arm's and whose replicates are the primary's.
+
+**The public surface is EIGHT names and the privates are nine as §3.2 counts them — eleven as this
+module actually carries them** [Stage 11 §5.4]. Stage 10 §3.2 said five and twelve, and its list of
+privates has always omitted ``_padded`` and ``_spread``, which §10.1 requires and describes without
+naming; ``test_bootstrap.py`` asserts the LIST rather than the number for exactly that reason. ``bucket``, ``collect`` and ``diagnostics`` became public at Stage 11 rather than
+being written a second time in ``sensitivity.py``: a second classifier would be a second definition
+of the separation-versus-convergence split Stage 8 §11 asked to be kept apart, a second ``Draws``
+loop would be a second implementation of the reconciliation property ``Draws.__post_init__`` exists
+to enforce, and a second diagnostics tally would be a second answer to "how many replicates fitted
+five cutpoints". **No private alias is kept for any of the three**, so a reader cannot find two
+spellings of one function.
 
 This module is **not** exempt from the Stage 1 §7 raw-name scan and must never become exempt.
 
@@ -755,7 +774,7 @@ def collect(collected: tuple[object, ...], keys: tuple[str, ...]) -> dict[str, D
     return out
 
 
-def _diagnostics(collected: tuple[object, ...]) -> Diagnostics:
+def diagnostics(collected: tuple[object, ...]) -> Diagnostics:
     """`Replicate`'s eight fields aggregated into `Diagnostics`' six (§15.15).
 
     **A `None` is DROPPED and never counted as a zero**, which is the one way each of these four
@@ -983,7 +1002,7 @@ def _record_replicates(draws: dict[str, Draws], diagnostics: Diagnostics, audit:
 
 def _assert_run_inputs(df: pd.DataFrame, ps: propensity.Propensity, est: outcome.Primary,
                        sec: outcome.Secondary) -> None:
-    """R1-R8, in two phases, collected. Every one is `C.SchemaError` and this stage adds no FitError.
+    """R1-R9, in two phases, collected. Every one is `C.SchemaError` and this stage adds no FitError.
 
     Stage 9 §4.4a's boundary is the rule rather than a paraphrase: *"the boundary is
     can-this-be-READ vs is-the-DATA-judgeable -- NOT mask-checks vs the-rest."* A column-presence
@@ -998,6 +1017,11 @@ def _assert_run_inputs(df: pd.DataFrame, ps: propensity.Propensity, est: outcome
     A stratum of size 1 satisfies R6 and contributes no variability -- it resamples to itself in
     every replicate. That is not an error and is not guarded: it is what stratifying on a
     near-determining variable means, and [§10] chose it knowing so (§4.4).
+
+    **R9 is Stage 11's and it is in phase 1 with the other object checks** [Stage 11 §4.5]. It is
+    about which propensity specification the `Propensity` carries, which is a property of the CALL
+    like the other eight, and it is the one guard here whose absence is silent in every observable
+    way: with R9 removed the call succeeds and returns twenty-six intervals.
     """
     # PHASE 1 -- can this frame, this Propensity and this Secondary be READ?
     bad: list[str] = []
@@ -1029,6 +1053,18 @@ def _assert_run_inputs(df: pd.DataFrame, ps: propensity.Propensity, est: outcome
             f"{int(ps.in_model.isna().sum())} missing value(s). It is boolean and TOTAL by "
             "construction [Stage 6 §4.4], and pandas reads a non-boolean Series as LABELS -- so a "
             "masked read raises KeyError rather than reporting a mask problem [Stage 9 §4.4a].")
+    if ps.spec is not C.PROPENSITY_PRIMARY:
+        bad.append(
+            f"R9  the Propensity carries the {ps.spec.label} specification {ps.spec.sap} and `run` "
+            f"estimates the [§10] bootstrap of the {C.PROPENSITY_PRIMARY.label} one. `_replicate` "
+            "calls `propensity.fit` UNCONDITIONALLY (bootstrap.py, `_replicate`), so this call "
+            "would return twenty-six intervals whose point estimates are this specification's and "
+            "whose N_BOOT replicates are the primary's — every number finite, `Draws` reconciling, "
+            "R3 and R5 passing, and nothing raising. A [§13] sensitivity arm gets its own "
+            "`replicates` body over `sensitivity._arm_replicate`, which refits ITS specification "
+            "inside the loop [Stage 11 §4.5, §5.4]. Compared by IDENTITY and not by equality: the "
+            "registry holds exactly two instances, and identity is the comparison a copied record "
+            "cannot satisfy.")
     if set(sec.estimates) != set(C.BINARY_OUTCOMES):
         bad.append(
             f"R5  the Secondary carries estimates for {sorted(sec.estimates)} against "

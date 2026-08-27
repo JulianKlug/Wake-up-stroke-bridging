@@ -124,6 +124,14 @@ class Fit:
 #
 #   Factors are CATEGORICAL. Their level sets are FACTOR_LEVELS and their baselines are
 #   REFERENCE_LEVELS. No interaction, no spline, no transform — [§6] says "linear terms only".
+#
+#   **That last sentence is about the [§6] CONFOUNDER SET and is not a global prohibition on
+#   products** [Stage 11 §8.3]. [§13] prescribes a treatment × subgroup interaction test, and [§6]'s
+#   "linear terms only, no interactions" is about which covariates adjust for confounding — the two
+#   look contradictory and are not. `design` itself stays innocent of interactions: Stage 11 builds
+#   the product column on its own local copy of the frame and passes it in as an ORDINARY covariate,
+#   so D1-D4 and the constant-column rule apply to it uniformly and `dropped` reports it. Nothing
+#   here forms a product, and nothing here may.
 
 
 def _assert_design_inputs(df: pd.DataFrame, covariates: Sequence[str]) -> None:

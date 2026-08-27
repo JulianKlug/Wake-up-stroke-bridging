@@ -21,6 +21,7 @@ This file is **not** exempt from the Stage 1 §7 raw-name scan and must not beco
 from __future__ import annotations
 
 import ast
+import dataclasses
 import inspect
 import subprocess
 import sys
@@ -357,7 +358,7 @@ def test_the_exclusion_check_FIRES_on_a_duplicated_case_id_and_records_NOTHING()
     in_model = pd.Series(False, index=frame.index)
     before = len(audit.entries)
     with pytest.raises(config.SchemaError) as e:
-        propensity._record_exclusion(frame, in_model, audit)
+        propensity._record_exclusion(frame, in_model, config.PROPENSITY_PRIMARY, audit)
     assert "can name" in message_of(e)
     assert len(audit.entries) == before        # nothing was recorded
 
@@ -516,12 +517,111 @@ def test_the_log_is_identical_across_interpreters_with_different_hash_seeds(tmp_
 
 # --- 12.12  the module boundary holds ---------------------------------------------------------------------
 
-def test_fit_takes_exactly_df_and_audit():
+@pytest.mark.parametrize("entry", ["fit", "fit_full"])
+def test_fit_takes_exactly_df_and_audit(entry):
     # No covariate parameter, no `scheme`, no centre list (§6.4, §16). Asserted by `inspect`, so adding
     # a defaulted keyword fails the test rather than passing silently.
-    assert list(inspect.signature(propensity.fit).parameters) == ["df", "audit"]
-    assert all(p.default is inspect.Parameter.empty
-               for p in inspect.signature(propensity.fit).parameters.values())
+    #
+    # PARAMETRISED over BOTH entry points rather than rewritten [Stage 11 §4.3]: the seam is built so
+    # as not to take this door off its hinges. `_fit` takes the specification and is private; each
+    # public name is one line and keeps `(df, audit)`, so a `covariates=` keyword still fails here.
+    signature = inspect.signature(getattr(propensity, entry))
+    assert list(signature.parameters) == ["df", "audit"]
+    assert all(p.default is inspect.Parameter.empty for p in signature.parameters.values())
+
+
+def test_the_private_fit_is_the_one_that_takes_the_specification():
+    """The seam is a NAMED record and it reaches the estimator through a private function.
+
+    `_fit` takes `(df, spec, audit)` positionally with no default on `spec`, so it cannot be called
+    without naming a specification, and it is private, so a third one cannot be reached from outside
+    `config.py`'s registry (Stage 11 §4.1).
+    """
+    signature = inspect.signature(propensity._fit)
+    assert list(signature.parameters) == ["df", "spec", "audit"]
+    assert all(p.default is inspect.Parameter.empty for p in signature.parameters.values())
+    assert not hasattr(propensity, "PROPENSITY_FULL")     # the registry lives in config.py
+
+
+def test_the_two_entry_points_carry_the_two_declared_specifications():
+    frame, audit = built()
+    assert propensity.fit(frame, audit).spec is config.PROPENSITY_PRIMARY
+    assert propensity.fit_full(frame, data.Audit(data.WORKBOOK)).spec is config.PROPENSITY_FULL
+
+
+def test_the_propensity_spec_field_has_NO_DEFAULT():
+    """§4.3's whole argument: a default would keep every direct construction site green, and an
+    arm-derived `Propensity` that forgot the field would role-label in `balance._role` as the
+    primary's — silently, on every row of the balance table."""
+    field = dataclasses.fields(propensity.Propensity)[-1]
+    assert field.name == "spec"
+    assert field.default is dataclasses.MISSING
+    assert field.default_factory is dataclasses.MISSING
+
+
+def test_dataclasses_replace_carries_the_specification():
+    """`replace` is the safe way to bend a `Propensity` precisely because it carries the new field
+    without the call site naming it (§4.3, test_bootstrap.py:192-194's pattern)."""
+    frame, audit = built()
+    ps = propensity.fit(frame, audit)
+    assert dataclasses.replace(ps, dropped=()).spec is config.PROPENSITY_PRIMARY
+
+
+def test_a_second_fit_over_one_cohort_records_DISJOINT_step_names():
+    """The probe that turned §4.2's payload from a covariate tuple into a named record.
+
+    `Audit.entry` is FIRST-MATCH (data.py:273-275). Without `spec.step` both fits record
+    `covariate_completeness`, `design_matrix`, `propensity_fit` and `overlap_weights`, so every
+    programmatic read returns the primary's entry while the rendered log looks complete — and every
+    existing test stays green, because on a run without the arm they *are* the same entry.
+    """
+    frame, audit = built()
+    before = len(audit.entries)
+    primary = propensity.fit(frame, audit)
+    between = len(audit.entries)
+    steps_primary = [e.step for e in audit.entries[before:between]]
+    propensity.fit_full(frame, audit)
+    steps_arm = [e.step for e in audit.entries[between:]]
+
+    assert steps_primary == ["covariate_completeness", "design_matrix", "propensity_fit",
+                             "overlap_weights"]
+    assert steps_arm == [f"{base}_full_covariate" for base in steps_primary]
+    assert not set(steps_primary) & set(steps_arm)
+    # And the read that would have been wrong: it returns the PRIMARY's, which is now the only
+    # entry under that name rather than the first of two.
+    assert audit.entry("model", "propensity_fit").n == int(primary.in_model.sum())
+    assert audit.entry("model", "propensity_fit_full_covariate") is not None
+
+
+def test_the_arm_names_its_specification_in_the_three_details_that_were_false():
+    """Three `detail` strings asserted "[§6]" or said "this specification", and the last had no
+    referent at all once two fits share one log (§4.3)."""
+    frame, audit = built()
+    propensity.fit_full(frame, audit)
+    for step in ("covariate_completeness", "design_matrix", "overlap_weights"):
+        detail = audit.entry("model", f"{step}_full_covariate").detail
+        assert config.PROPENSITY_FULL.label in detail
+    assert "conditional on this specification" not in "".join(e.detail for e in audit.entries)
+
+
+def test_the_full_specification_puts_the_four_negative_controls_THROUGH_the_design():
+    """[§13] adds exactly `C.NEGATIVE_CONTROLS` and the primary considers none of them.
+
+    Asserted on `design`'s own output — the surviving columns plus `dropped`, which together are
+    every covariate the specification DECLARED — rather than on the fitted width, because on this
+    five-record fixture all four are constant and are dropped. What the test is about is which
+    covariate list reached `model.design`, and that is the whole of the seam (Stage 11 §4.3, §5.1).
+    """
+    frame, audit = built()
+    primary = propensity.fit(frame, audit)
+    arm = propensity.fit_full(frame, data.Audit(data.WORKBOOK))
+    considered = lambda ps: set(ps.fit.columns) | set(ps.dropped)
+    assert set(config.NEGATIVE_CONTROLS) <= considered(arm)
+    assert not set(config.NEGATIVE_CONTROLS) & considered(primary)
+    # And the [§11] denominator: the four are complete here, so the two populations coincide. It is
+    # MEASURED and never assumed — a workbook missing one of them on any row would diverge, and
+    # `Arm.differs_only_in_specification` is Stage 11's field for exactly that (Stage 11 §5.2).
+    assert primary.in_model.equals(arm.in_model)
 
 
 def test_ess_is_public_and_lives_here_rather_than_in_model():

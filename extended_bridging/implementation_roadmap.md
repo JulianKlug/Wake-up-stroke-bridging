@@ -871,6 +871,40 @@ printed unconditionally.
 
 ---
 
+## The analysis lock — a milestone this roadmap did not define
+
+**Added 2026-08-27, DECISION 9.** [§16]'s amendment of 2026-08-24 asserted that *"§15 requires that no
+number on the primary effect be pinned before the analysis is locked"*, [§15] contained no such rule,
+and this roadmap defined no lock milestone at all — so the one gate standing between the estimate and
+its regression pins existed in three documents' cross-references and in none of their text. [§15]'s
+amendment of 2026-08-27 states the rule; this section is the milestone.
+
+**The lock is not a stage.** It is a state, and it holds when three things do:
+
+1. **Every estimator the plan prescribes is specified and implemented.** Stages 1–11 as of 2026-08-27.
+   Stages 12–14 add [§14a]'s and [§14b]'s standardisation estimands and the reporting layer; neither
+   refits [§8]'s primary specification, which is why the lock does not wait for them.
+2. **The PI has read the estimate.** Discharged 2026-08-24.
+3. **No open decision remains that could change the primary quantity or the null distribution its
+   p-value is read against.** DECISION 9 closed the last of them by declining to penalise the ordinal
+   fit. `../out/stage0_data_inventory.md`'s open-decision list is empty.
+
+**What the lock licenses, and it is one thing.** Regression pins on the primary and the secondary
+binary estimates enter version control. Until the lock, [§15] forbids it — not because a pinned number
+is wrong, but because specifying an estimator while its estimate is in view puts that specification on
+the wrong side of the line every decision in this plan was taken on, and a number in git is the form in
+which the estimate stays in view.
+
+**What it does not license.** It is not a freeze on the plan. A later [§8] amendment is still possible;
+the rule simply applies to it afresh, and the pins would move with it in the same commit. And it says
+nothing about [§13]'s five deferred sensitivity rows, which stay deferred (DECISION 4).
+
+**What is still unpinned after the pin item lands**, and it is filed in `TODOS.md`: every [§10]
+interval limit and p-value, and Stage 11's four records. The lock covers them — they are functions of a
+locked estimator over a recorded seed — and the scope of the pin item does not.
+
+---
+
 ## Invariants worth asserting in the test suite
 
 Independent of any single stage, these should fail loudly if a future edit breaks them:

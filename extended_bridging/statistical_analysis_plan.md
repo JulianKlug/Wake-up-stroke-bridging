@@ -328,6 +328,65 @@ onset is unwitnessed or on waking in 93 of the 126 records against 33 witnessed,
 split is balanced by construction. `penumbra_ml` keeps its §6 exclusion and its balance-table role,
 both of which stand independently of this subgroup.
 
+**Amendment, 2026-08-27 — the subgroup model is declared, and its one departure from §8 with it.**
+The clause above asks for subgroup estimates with an interaction test and names no model, no scale, no
+estimator and no reported quantity. All four are fixed here, and fixed **before any subgroup estimate
+or interaction p-value was read**, which is the posture DECISION 1a, DECISION 4 and the subgroup
+withdrawal above were taken in. `../out/stage0_data_inventory.md` carries DECISION 8.
+
+**The model.** For each declared subgroup indicator `S`, one weighted proportional-odds fit over the
+whole overlap-weighted estimation population, at the prespecified §7 weights:
+
+    logit P(mRS ≤ k | A, S)  =  α_k  +  β·A  +  δ·S  +  γ·(A × S)
+
+reporting `exp(β)` as the common odds ratio at `S = 0`, `exp(β + γ)` at `S = 1`, `exp(γ)` as the
+interaction on the odds-ratio scale, and testing `γ = 0` by §10's bootstrap. One fit per subgroup, so
+the two level-specific odds ratios and the test cannot disagree about the model.
+
+**The departure from §8, declared.** §8 opens *"no covariate adjustment of the reported effect"*. `S`
+enters the linear predictor here and it must: without the main effect, `γ` is not an interaction. The
+departure is minimal and bounded — one column, the subgroup variable itself, and **no §6 covariate** —
+and `S` is the effect modifier rather than a confounder, so what §8's rule governs, an outcome
+regression entering only as a correction term, is not what is relaxed. What *is* assumed beyond §8 is
+that `δ` is itself a single proportional-odds shift; where it is not, `exp(β)` is not the within-level
+effect. **That assumption is stated wherever the subgroup estimates are reported**, and the two levels'
+weighted cumulative distributions are reported beside them as the diagnostic for it. The cumulative
+risk differences are *not* reported per level: §8's argument against threshold-wise reporting — that it
+invites selection of the most favourable cut — applies with more force within a level, not less.
+
+**The propensity model is not refit within a level.** §7 states that the estimand is indexed by the
+propensity model, so a within-level score defines a different target population and the difference of
+two such effects is not an interaction. The one prespecified specification is refit over the whole
+population in every replicate, as §10 requires.
+
+**Non-collapsibility.** A weighted proportional-odds model is not collapsible, so the primary `exp(β)`
+is not a weighted average of the two level-specific odds ratios and **they need not bracket it**. They
+must not be presented as though they do.
+
+**The interaction p-value is not corrected.** The multiplicity clause above is scoped to the secondary
+and safety *outcome* families; these estimates are on the primary outcome, whose first prescription is
+"uncorrected". The **number of interaction tests performed** is reported instead, together with the
+statement that those tests are themselves an uncorrected multiplicity this plan does not address.
+
+**Amendment, 2026-08-27 — the safety family's adjusted p-values carry §10's label, and `m` is the
+number of tests performed.** Two things the multiplicity clause above leaves open.
+
+The first is a disagreement inside this plan rather than a silence. This section prescribes
+Benjamini–Hochberg within the secondary **and safety** families; §10 closes that estimation and not
+testing is the reportable output, and that safety outcomes resting on few events are descriptive only.
+Neither section mentions the other. **Both are honoured rather than one chosen**: the correction is
+computed for the safety family because this section prescribes it, and every safety row carries §10's
+descriptive-only label wherever its adjusted p-value appears — so the number exists and cannot be
+printed without the sentence saying what it is for.
+
+The second is the procedure's scaling factor. **`m` is the number of p-values that entered the
+procedure, not the declared family size.** Benjamini–Hochberg controls the false discovery rate over
+tests *performed*, and a hypothesis with no p-value was not tested. Holding `m` at the declared size is
+also valid and is conservative; it is declined because it inflates every adjusted p-value in the family
+to pay for a test nobody ran. Where a family member has no p-value it is disclosed **as a row** of the
+reported table, with the reason, rather than omitted — so the declared size and the size used are both
+visible and the adjusted p-values are checkable by hand.
+
 **Sensitivity analyses** on the primary outcome, each reporting ESS and worst residual |SMD|:
 full-covariate propensity model (adding the four vascular risk factors); propensity model without
 centre; unadjusted; largest centre alone; pre-stroke mRS ≤ 2; model-assisted augmented cumulative mRS
@@ -451,6 +510,34 @@ slopes, which four centres cannot identify in any useful sense (§14a).
 Omitting centre and modelling across centres are permitted **inside §14 only**, where extrapolating to
 centres that never used IVT is the declared purpose and is labelled as such.
 
+**Amendment, 2026-08-27 — no number on the primary effect is pinned in version control before the
+analysis is locked, and locking is defined.** §16's amendment of 2026-08-24 already relies on this rule
+and cites this section for it, and this section did not state it. That citation was dangling; it is not
+now.
+
+**The rule.** Until the analysis is locked, no estimate of the primary effect — `β`, `exp(β)`, any
+`RD_k`, and no interval limit or p-value derived from them — appears in a version-controlled file.
+Amendments to this plan are written as rules rather than as findings, and the measurements that prompt
+them live in `../out/stage0_data_inventory.md` beside the audit log, neither of which is tracked.
+
+**Why.** Every decision in this plan is recorded as taken before any outcome was examined by arm.
+Specifying an estimator while its estimate is in view puts that specification on the wrong side of that
+line, and a number pinned in git is the form in which the estimate stays in view. The objection is to
+computing the estimate *while specifying the estimator*, not to pinning it afterwards.
+
+**Locking is defined, so that "afterwards" is checkable rather than felt.** The analysis is locked when
+all three of the following hold: every estimator this plan prescribes has been specified and
+implemented; the PI has read the estimate; and no open decision remains that could change the primary
+quantity or the null distribution its p-value is read against. **All three hold as of 2026-08-27** —
+DECISION 9 closed the last such decision by declining to penalise the ordinal fit, which was the only
+outstanding change to §8's primary quantity. Regression pins on the primary and on the secondary
+binary estimates therefore become correct, and this rule **expires for them** rather than being waived.
+
+**What locking does not foreclose.** §14's standardisation analyses are still to be built. They target
+different populations, are labelled as model-based transported results, and **do not refit §8's primary
+specification**, so no result of theirs can move a pinned primary number; if one ever could, that is a
+§8 amendment and this rule applies to it afresh.
+
 ## 16. Reporting
 
 STROBE with the RECORD extension. State explicitly: the target trial protocol (§2); cohort flow with
@@ -485,7 +572,42 @@ the wrong sign. STROBE and RECORD both call for a table of crude counts; this go
 labelled, not whether it appears.
 
 Both are written as rules rather than as findings, deliberately: this file is version-controlled and
-§15 requires that no number on the primary effect be pinned before the analysis is locked. The
-measurements that prompted them are in `../out/stage0_data_inventory.md`, which carries DECISION 5.
-Established before the §10 interval existed, so that the choice to caveat is not a function of
-whether the result reached significance.
+§15 requires that no number on the primary effect be pinned before the analysis is locked (§15
+amendment, 2026-08-27, which is where that rule now lives). The measurements that prompted them are in
+`../out/stage0_data_inventory.md`, which carries DECISION 5. Established before the §10 interval
+existed, so that the choice to caveat is not a function of whether the result reached significance.
+
+**Amendment, 2026-08-27 — two further statements are required, and both are wording.** No estimator,
+population or estimand changes. `../out/stage0_data_inventory.md` carries DECISIONs 8 and 9.
+
+**(c) Where a bootstrap replicate set has been thinned by a bound on the estimated coefficients, state
+the surviving count and state that the thinning is selection on the estimate.** §10 already requires
+failed replicates dropped and counted, and a count alone is not enough here: a bound that fires on the
+magnitude of the coefficient being estimated is a condition on the *quantity*, not on the frame, so the
+survivors are a sample selected on the estimate and the percentile limits are quantiles of a truncated
+sampling distribution. Truncation removes mass from both tails and none from the middle, so **the
+interval is systematically narrower than the untruncated one and not merely noisier** — the direction
+is knowable even where the magnitude is not. A reader told only that replicates were lost reads a
+precision problem, which this is not. Where the bound was reached by fits that *converged*, say so:
+a separated proportional-odds fit converges and returns a finite odds ratio, and the bound is what
+makes such a fit countable as a failure at all.
+
+**(d) The E-value is reported with the conversion that produced it, and beside the residual imbalance
+it does not address.** §6 requires an E-value for the primary estimate. The primary effect measure is a
+common odds ratio from a proportional-odds model, and **no bounding factor has been published for that
+estimand** — the reference implementation of the method, by the method's own authors, provides none. So
+what is reported is the E-value of a risk ratio approximated as `sqrt(OR)` (VanderWeele 2017,
+*Epidemiology* 28(6):e58): a binary-outcome conversion whose documented licence is an outcome
+prevalence above 15%, applied here to a cumulative-odds shift that §8 assumes constant across all six
+thresholds, each of which has its own baseline risk. Three things follow and all three are stated with
+the number. The conversion is named. The thresholds whose control-arm baseline risk falls outside its
+documented range are named. And the quantity is described as **a heuristic on an approximated scale
+rather than the bound the derivation licenses** — the direction of the approximation's error is the
+conservative one, since `sqrt(OR) < OR` away from the null, and one sentence covers that rather than a
+second E-value reported as a bracket.
+
+The E-value bounds *unmeasured* confounding, and §9's amendment requires the covariates whose residual
+|SMD| exceeds the threshold named beside the primary estimate. Both appear together wherever the
+E-value appears: an E-value printed beside no residual invites the reading that residual confounding
+would have to be strong, at a point in the report where a covariate that is *in* the model is visibly
+not balanced.

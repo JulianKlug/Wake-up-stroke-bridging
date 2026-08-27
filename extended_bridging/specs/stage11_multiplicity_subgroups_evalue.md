@@ -2601,6 +2601,17 @@ surviving counts are above `ci_min_draws()`; the four re-roled rows are exactly
 
 ## 16. Known gaps carried forward
 
+**Amended 2026-08-27 — item 1 is CLOSED by DECISION 8 and the penalisation question by DECISION 9.**
+Item 1 asked what to do about the 12.5% drop rate and put three reporting options; option (i) is
+adopted, and options (ii) and (iii) are declined **on measurement** by a bound sweep run for the
+decision — the `S = 1` level's limits move by 0.1% under a per-key rule, and the interval is stable
+across bounds from 8 to 14 and collapses only above 16, so it is a property of the data and the
+estimator rather than of where the bound sits. §17's closing paragraph put the penalisation question and
+it is closed as *declined on measurement*. [§13] gains the subgroup model as a declaration and [§16]
+gains the mechanism statement as a required one, both amendments of 2026-08-27; [§15] gains the
+analysis-lock rule [§16] had been citing it for and did not contain. **No number in this stage moves and
+no code changes** — the implementation already did option (i). Items 2 through 8 stand.
+
 1. **A 12.5% drop rate exists, it is selection on the estimate, and nothing prescribes what to do
    about it.** `unknown_onset` loses 250 of 2000 replicates — 2 propensity, 9 O6, 239 G9 (§8.4).
    G9's condition is on the estimated coefficients, so the survivors are selected on the estimate and
@@ -2675,12 +2686,31 @@ Each is **PI-reversible** and each names what reversing costs.
 | No E-value beyond the primary; no `RR = OR` bracket; no p on the level odds ratios | 7.5, 8.5 | One number each |
 | The six `RD_k` are not reported per subgroup level | 8.6 | Twelve intervals |
 
+**Amended 2026-08-27.** Two rows of the table above are now decided rather than reversible. The
+subgroup model is DECLARED in [§13] as of that date, so *"one pooled weighted proportional-odds fit
+with an interaction"* and *"`S` enters the linear predictor and no [§6] covariate does"* are
+prespecified rather than this stage's choices — DECISION 8, which also declares the assumption they
+cost: `δ` is taken to be a single proportional-odds shift, and where it is not, `exp(β)` is not the
+within-level effect. The other nine rows stand as reversible. And two rows that were never put as
+questions are now written into [§13] with what reversing them costs, in the register's own
+*"Specified, not put as questions"* section: Benjamini–Hochberg on the safety family carrying [§10]'s
+label, and `m` as the number of tests performed.
+
 **And one thing this stage records rather than decides.** The two questions
 `../out/questions_for_the_pi.md` deferred with *"ask after Stage 10"* are now both answerable.
 Whether the ordinal fit should be penalised: Stage 10 measured the drop rate a penalised fit would
 reduce at **zero on the primary**, which was the answer that made the question moot — and this stage
 produces a drop rate of **12.5% on a subgroup level**, which makes the same question live again for
 a quantity [§13] labels hypothesis-generating and [§8] does not cover. It is put, not answered.
+
+**Answered 2026-08-27, DECISION 9: declined on measurement.** The quantity a penalty would rescue is a
+hypothesis-generating subgroup odds ratio whose interval spans nearly three orders of magnitude either
+way, and the interaction p moves by about 0.03 between the bounded and the unbounded fits — so making
+the estimate available in 239 more replicates does not make it informative. Against that, one estimator
+is refit identically everywhere, so penalising would change the **primary's** reported quantity to a
+penalised common odds ratio and change the null its p-value is read against. Declining is [§8]
+unchanged; adopting would have been an [§8] amendment. With it the register's last open decision closes
+and the analysis is locked, which is what unblocks the regression pins.
 
 ---
 

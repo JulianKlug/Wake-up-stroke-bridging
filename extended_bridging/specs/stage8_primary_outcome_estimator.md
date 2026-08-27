@@ -3468,15 +3468,27 @@ exists for.
 
 ## 15. Known gaps carried forward
 
-- **There is no pinned regression number on the primary effect anywhere in git, and that is §4.3's
-  cost.** An edit that moves `β` in the fourth decimal without changing convergence, ordering,
-  orientation or monotonicity passes the whole suite. §14.0.2's golden vector is the mitigation and it
-  is a partial one: its cohort has five records and four cutpoints where the workbook's has
-  ninety-two and six, so it exercises the same arithmetic at a different scale and cannot witness a
-  defect that only appears at the workbook's. **What closes this is not a code change.** Once the PI has
-  seen the estimate and the analysis is locked, the workbook's `β`, `exp(β)` and six `RD_k` become
-  legitimate regression pins in `test_outcome.py` — the objection in §4.3 is to computing them *while
-  specifying the estimator*, not to pinning them afterwards. Filed in `TODOS.md` with that trigger.
+- ~~**There is no pinned regression number on the primary effect anywhere in git, and that is §4.3's
+  cost.**~~ **CLOSED 2026-08-27, and not by the route this bullet predicted.** The gap was real: an
+  edit that moves `β` in the fourth decimal without changing convergence, ordering, orientation or
+  monotonicity passed the whole suite, and §14.0.2's golden vector is a partial mitigation only —
+  five records and four cutpoints against the workbook's ninety-two and six, so it exercises the same
+  arithmetic at a different scale and cannot witness a defect that appears only at the workbook's.
+
+  **What this bullet got wrong was the FORM of the fix.** It said the numbers *"become legitimate
+  regression pins"* once the analysis is locked, which read "pin" as "write the number down" — and on
+  that reading the gap needed a PI decision, an [§15] amendment and the dismantling of §14.12a, the
+  meta-assertion built to keep the estimate out of git. None of that follows. The pin is a **content
+  hash**, which is `config.DATA_SHA256`'s own pattern one stage on: `test_outcome.py`'s
+  locked-estimate section renders the primary through `data._fmt` in a declared order and asserts a
+  SHA-256 of it. It fires on any drift at the precision the audit log publishes, it localises to the
+  stage, **no estimate enters version control**, and §14.12a needs no change because there is no float
+  literal to scan — asserted, so that stays true.
+
+  **So the pin did not need the lock and could have existed since this stage landed.** DECISION 9 and
+  [§15]'s amendment of 2026-08-27 stand on their own — [§16] was citing [§15] for a rule [§15] did not
+  contain — but they are not what this bullet was waiting for. The baseline the digest is checked
+  against lives beside the log in `../out/stage0_data_inventory.md`, which is where the numbers stay.
 - **The proportional-odds assumption is not tested, and this stage adds no test of it.** [§8] specifies
   a common odds ratio and gives its own reason for not augmenting each threshold separately; it does not
   ask whether one `β` summarises the shift at all six cutpoints. A Brant test or a partial-proportional-

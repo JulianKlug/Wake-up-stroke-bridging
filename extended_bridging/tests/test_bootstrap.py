@@ -60,6 +60,7 @@ import propensity
 from fixtures_stage10 import (ALPHA_TRUE, B_INNER, BETA_TRUE, COVERAGE_SEED, M_OUTER,
                               boundary_draws, known_effect_population, separable_ordinal_frame,
                               two_centre_frame, unfittable_nuisance_frame)
+from fixtures_stage11 import subgroup_frame
 from test_data import hand_source
 
 DATA_GATED = pytest.mark.skipif(
@@ -163,14 +164,15 @@ def test_the_coverage_generator_produces_THE_DECLARED_NUMBER_OF_CATEGORIES():
 
 # --- 15.1  the preconditions, one frame per branch ------------------------------------------------------
 #
-# Eight branches, eight frames, each derived from the fixture cohort by breaking exactly one thing.
+# NINE branches from Stage 11 §4.5, nine frames, each derived from the fixture cohort by breaking
+# exactly one thing.
 # Every one asserts a `SchemaError` WHOSE MESSAGE NAMES ITS OWN CONDITION — not merely that something
 # raised — because a collected assertion that reports the wrong branch is worse than one that reports
 # nothing. Stage 9 §15.1a's rule applies unchanged: a frame testing phase k must be PRISTINE for
 # phases 1 through k-1.
 
 BRANCH_PHASE: Final[dict[str, int]] = {
-    "R1": 1, "R2": 1, "R3": 1, "R4": 1, "R5": 1, "R6": 2, "R7": 2, "R8": 2}
+    "R1": 1, "R2": 1, "R3": 1, "R4": 1, "R5": 1, "R6": 2, "R7": 2, "R8": 2, "R9": 1}
 
 
 def broken_run(branch: str, monkeypatch):
@@ -204,6 +206,17 @@ def broken_run(branch: str, monkeypatch):
         bent = dict(sec.estimates)
         bent["ph2"] = dataclasses.replace(bent["ph2"], augmented_path="partial")
         return df, ps, est, outcome.Secondary(estimates=bent), audit
+    if branch == "R9":
+        # The [§13] arm's Propensity, handed to `run`. Stage 11 §4.5: `_replicate` calls
+        # `propensity.fit` unconditionally, so without R9 this returns twenty-six intervals whose
+        # point estimates are the arm's and whose replicates are the primary's specification.
+        #
+        # `subgroup_frame()` and not `two_centre_frame()`: `C.PROPENSITY_FULL` names four covariates
+        # Stage 10's fixture does not carry, so `fit_full` on it is a bare KeyError rather than the
+        # arm's Propensity — which would test the frame instead of the guard.
+        wide = subgroup_frame()
+        wide_ps, wide_est, wide_sec, wide_audit = fitted(wide)
+        return wide, propensity.fit_full(wide, wide_audit), wide_est, wide_sec, wide_audit
     if branch == "R8":
         # `run` takes no `level`, so the ONLY way to reach R8 is to move the constant — which is why
         # test_config.py carries `N_BOOT >= ci_min_draws(CI_LEVEL)` as a static assertion beside it.
@@ -230,6 +243,42 @@ def test_each_precondition_branch_raises_a_SchemaError_NAMING_ITS_OWN_CONDITION(
         bootstrap.run(df, ps, est, sec, audit)
     assert branch in message_of(e), (
         f"{branch}'s frame raised, but the message names a different branch:\n{message_of(e)}")
+
+
+def test_WITHOUT_R9_run_SUCCEEDS_and_returns_a_FULL_TABLE_that_is_a_lie_about_the_arm(boot_n):
+    """Stage 11 §4.5 and §15.2's companion. A guard whose absence is never demonstrated is a guard
+    nobody can price.
+
+    With the check monkeypatched out, `run` over the [§13] arm's `Propensity` returns every interval
+    it would return for the primary. Every number is finite. `Draws.__post_init__` reconciles. R3
+    passes — the index is aligned. R5 passes — the `Secondary` is complete. Nothing raises, and the
+    arm's interval is a lie about the arm: the point estimates came from the full-covariate weights
+    and all `boot_n` replicates refitted the [§7] specification.
+    """
+    df = subgroup_frame()                # carries what C.PROPENSITY_FULL names — see `broken_run`
+    ps, est, sec, audit = fitted(df)
+    arm = propensity.fit_full(df, audit)
+
+    with pytest.raises(config.SchemaError) as e:
+        bootstrap.run(df, arm, est, sec, audit)
+    assert "R9" in message_of(e)
+
+    landed = bootstrap._assert_run_inputs
+
+    def without_r9(frame, propensity_object, primary, secondary):
+        return landed(frame, dataclasses.replace(propensity_object,
+                                                 spec=config.PROPENSITY_PRIMARY),
+                      primary, secondary)
+
+    original = bootstrap._assert_run_inputs
+    bootstrap._assert_run_inputs = without_r9
+    try:
+        boot = bootstrap.run(df, arm, est, sec, audit)
+    finally:
+        bootstrap._assert_run_inputs = original
+
+    assert len(boot.intervals) == len(boot.draws) == 26
+    assert all(np.isfinite([i.lo, i.hi]).all() for i in boot.intervals.values())
 
 
 def test_PHASE_1_FAILURES_ARE_COLLECTED_and_a_two_failure_frame_reports_BOTH():
@@ -765,7 +814,7 @@ def test_the_scan_finds_NINETEEN_sites_and_the_SPECS_SIXTEEN_is_its_own_scope():
     re-scanning reproduces exactly those sixteen. What the specification's SCOPE omitted is
     `propensity.py`, which raises `model.FitError` three more times, with the tokens `ESS:` and
     `F5`, both on `propensity.fit`'s own path — which is precisely the path §7.1 says fails a WHOLE
-    replicate. Without them `_bucket` turns a droppable sparse replicate into a crash.
+    replicate. Without them `bucket` turns a droppable sparse replicate into a crash.
 
     Pinned as a COUNT PER MODULE rather than as a total, because that is what makes the departure
     legible rather than a number nobody can locate.
@@ -1267,6 +1316,19 @@ def test_the_public_surface_is_EIGHT_NAMES_and_the_privates_are_the_declared_ONE
         "_replicates_detail", "_record_replicates", "_padded", "_spread"])
 
 
+def test_NO_FORWARDING_ALIAS_IS_LEFT_ON_ANY_OF_THE_THREE():
+    """Stage 11 §5.4: the three cease to exist under their private names rather than becoming
+    one-line forwarders, so a reader cannot find two spellings of one function and the rename is
+    provably complete rather than provably started."""
+    for gone in ("_bucket", "_collect", "_diagnostics"):
+        assert not hasattr(bootstrap, gone)
+    assert callable(bootstrap.bucket) and callable(bootstrap.collect)
+    assert callable(bootstrap.diagnostics)
+    # `_diagnostics_table` is a DIFFERENT name and is NOT renamed. A sweep matching `_diagnostics`
+    # without anchoring the open paren rewrites it wrongly (Stage 11 T5).
+    assert callable(bootstrap._diagnostics_table)
+
+
 def test_run_WRITES_NO_LOOP_OF_ITS_OWN_and_the_loop_is_replicates(boot_n):
     """§20's Definition of done item 12a: `run` contains no `for` and no comprehension over
     `range(C.N_BOOT)`. A second loop is the DRY failure the engineering review removed — the seeding
@@ -1410,7 +1472,7 @@ def test_the_LOG_IS_BYTE_IDENTICAL_ACROSS_TWO_HASH_SEEDS(tmp_path):
     assert "bootstrap_replicates" in outputs[0]
 
 
-# --- 15.15  `_diagnostics`, and what a `None` means -------------------------------------------------------
+# --- 15.15  `diagnostics`, and what a `None` means -------------------------------------------------------
 
 def test_the_four_scalar_distributions_sum_to_the_LIVE_count_and_NOT_to_N_BOOT(monkeypatch, boot_n):
     """A `None` counted as a `0` would put a spurious mode at zero in three distributions at once
