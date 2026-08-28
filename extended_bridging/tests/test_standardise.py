@@ -985,7 +985,7 @@ def test_model_and_balance_keep_their_landed_public_surfaces_plus_exactly_the_de
     assert [n.name for n in bootstrap_tree.body
             if isinstance(n, ast.FunctionDef) and not n.name.startswith("_")] == [
         "resample", "replicates", "percentile_ci", "bootstrap_p", "intervals", "bucket",
-        "collect", "run"]
+        "collect", "diagnostics", "run"]
 
 
 def test_the_public_surface_is_FIVE_NAMES_and_the_privates_are_the_declared_ONES():

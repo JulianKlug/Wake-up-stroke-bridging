@@ -356,6 +356,11 @@ FAILURE_BUCKETS: Final[dict[str, str]] = {
     # the scan would pass, because it asserts every token it finds is in this map and `polr_ri:` is
     # in this map. T1 and T12 lead with their own identifiers for the same reason. Stage 12 §14
     # records this as the second documented instance of a wrong-but-mapped bucket.
+    # Stage 11's two [Stage 11 §8.4, §9]: G8 is a treatment x subgroup design that lost a column, G9 a
+    # subgroup fit whose reported quantity reached POLR_MAX_ABS_BETA. Restored here after the Stage 12
+    # merge dropped them; test_config.py pins both.
+    "G8": "degenerate_design",
+    "G9": "separation",
     "T1": "degenerate_design",
     "polr_ri:": "nonconvergence",
     "T4": "degenerate_design",

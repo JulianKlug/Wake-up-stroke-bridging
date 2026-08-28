@@ -768,7 +768,7 @@ def test_the_workbooks_counters_read_zero_and_zero(run_once):
 # reworded token and not a wrong-but-mapped one, which is `TODOS`' `code`-field item and which
 # Stage 12 §14 fired for the second time with T4.
 FITERROR_MODULES: Final[tuple[str, ...]] = (
-    "model.py", "outcome.py", "propensity.py", "standardise.py")
+    "model.py", "outcome.py", "propensity.py", "sensitivity.py", "standardise.py")
 
 
 def raise_sites() -> list[tuple[str, int, str]]:
@@ -823,9 +823,9 @@ def test_the_scan_finds_NINETEEN_sites_and_the_SPECS_SIXTEEN_is_its_own_scope():
     per_module = {name: sum(1 for m, _, _ in sites if m == name) for name in FITERROR_MODULES}
     # Stage 12 adds three to `model.py` — T2, T3 and T4 in `polr_ri` — and two of its own, T1 and
     # T12 in `standardise.py` (§14, §18).
-    assert per_module == {"model.py": 17, "outcome.py": 3, "propensity.py": 3,
+    assert per_module == {"model.py": 17, "outcome.py": 3, "propensity.py": 3, "sensitivity.py": 2,
                           "standardise.py": 2}
-    assert len(sites) == 25
+    assert len(sites) == 27
     # `outcome.py` is THREE and not the specification's two, and the third is S8 — which §5.4 moved
     # from `SchemaError` to `FitError` in this very stage, so the specification's own count of the
     # sites it was creating is one behind itself.
@@ -1305,13 +1305,13 @@ def test_the_public_surface_is_EIGHT_NAMES_and_the_privates_are_the_declared_ONE
     public = [n for n in functions if not n.startswith("_")]
     private = [n for n in functions if n.startswith("_")]
     assert public == ["resample", "replicates", "percentile_ci", "bootstrap_p", "intervals",
-                      "bucket", "collect", "run"]
+                      "bucket", "collect", "diagnostics", "run"]
     # §3.2 counts twelve. This module has thirteen, and the thirteenth is `_padded` — §10.1's own
     # requirement that the grid be concatenated and the short rows padded, which the specification
     # describes and does not list, and which is a COPY of `propensity._padded` rather than an import
     # of it precisely because §0.2's claim is that `propensity.py` is untouched.
     assert sorted(private) == sorted([
-        "_assert_run_inputs", "_replicate", "_diagnostics", "_tested",
+        "_assert_run_inputs", "_replicate", "_tested",
         "_estimand_keys", "_shared_design", "_counters_table", "_diagnostics_table",
         "_replicates_detail", "_record_replicates", "_padded", "_spread"])
 

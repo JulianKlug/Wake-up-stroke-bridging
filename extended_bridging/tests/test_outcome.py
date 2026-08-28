@@ -1602,7 +1602,9 @@ def test_model_names_no_ivt_or_mrs_STRING_LITERAL():
 
 
 def test_only_the_TWO_STAGES_THAT_ESTIMATE_ON_IT_name_PRIMARY_OUTCOME():
-    """§14.13's invariant, widened by exactly one module at Stage 12 and for a stated reason.
+    """§14.13's invariant, widened by one module each at Stages 11 and 12, for stated reasons.
+
+    `sensitivity.py` names it because the [§13] subgroup fits ARE on the primary outcome (Stage 11 §8);
 
     It read `== ["outcome.py"]` through Stage 11 and now admits `standardise.py`, because [§14a]
     STANDARDISES THE PRIMARY OUTCOME — that is what the section is about, and a module that estimates
@@ -1617,7 +1619,7 @@ def test_only_the_TWO_STAGES_THAT_ESTIMATE_ON_IT_name_PRIMARY_OUTCOME():
     shipped = sorted(p for p in MODULE_DIR.glob("*.py"))
     naming = [p.name for p in shipped
               if "PRIMARY_OUTCOME" in p.read_text(encoding="utf-8") and p.name != "config.py"]
-    assert naming == ["outcome.py", "standardise.py"]
+    assert naming == ["outcome.py", "sensitivity.py", "standardise.py"]
     assert "PRIMARY_OUTCOME" not in (MODULE_DIR / "model.py").read_text(encoding="utf-8")
     assert "PRIMARY_OUTCOME" not in (MODULE_DIR / "bootstrap.py").read_text(encoding="utf-8")
 
