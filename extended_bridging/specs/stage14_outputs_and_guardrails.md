@@ -83,7 +83,6 @@ the audit log is byte-identical before and after (§12.12).
 | `standardise.py`, `policy.py` | **amended.** call the row-builders; five pipe-in-cell sites fixed (§8) |
 | `config.py` | **amended.** §11 |
 | `tests/test_sensitivity.py`, `tests/test_standardise.py`, `tests/test_policy.py` | **amended.** drivers delegate to `report._stage*` (§0.1) |
-| `pyproject.toml` | **amended.** `[project.scripts] report = "report:main"` |
 | `implementation_roadmap.md`, `TODOS.md` | **amended.** §13, §15 task 8 |
 | `statistical_analysis_plan.md` | **unchanged.** Nothing here needs an amendment |
 
@@ -92,7 +91,9 @@ the audit log is byte-identical before and after (§12.12).
 ## 2. Environment
 
 Pins unchanged. `matplotlib>=3.9` is already a dependency; `report.py` sets the `Agg` backend before
-importing `pyplot`. Run: `cd extended_bridging && uv sync && uv run report`, or `uv run pytest -v`.
+importing `pyplot`. Run: `cd extended_bridging && uv sync && uv run python -m report`, or `uv run pytest -v`.
+**Landed:** no `[project.scripts]` entry — the project has no build system by design (`pyproject.toml`),
+so a console script cannot be installed; `python -m report` is the entry point.
 Cost: one full run is three bootstraps of `N_BOOT` plus Stage 11's; measured in §16.
 
 ---

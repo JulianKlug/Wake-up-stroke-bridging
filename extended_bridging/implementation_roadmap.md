@@ -882,7 +882,7 @@ average** — and the output is labelled an operational policy contrast, distinc
 ## Stage 14 — Outputs and guardrails [§16]
 
 **Spec:** `specs/stage14_outputs_and_guardrails.md`. **Landed 2026-08-29**: `report.py` (`run`, `write`,
-`main`; `uv run report`), 22 tables as Markdown + CSV, 5 SVG figures, the audit log written once, a
+`main`; `uv run python -m report`), 22 tables as Markdown + CSV, 5 SVG figures, the audit log written once, a
 run summary (T20) and the STROBE/RECORD checklist (T21). Both DECISION 5 statements are computed from
 `Primary.rd` and the result objects; the accept-when test is `tests/test_report.py` §12.3.
 
