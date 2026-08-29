@@ -201,6 +201,17 @@ hypothetical, and where the refactor can be verified against a second real calle
 one. Whoever does it should read Stage 6 §7.4 first: it records what was declined and why, so the
 refactor can be judged against the argument rather than against the code.
 
+**Stage 13 is the next instance (engineering review of `specs/stage13_feasible_policy.md`, 2026-08-29).**
+`policy.py` writes its own `_fit_table`, `_contrast_table` and `_replicates_table` — Stage 12's three
+renderers with [§14b]'s roles, keys and labels — because Stage 12's hard-code `[§14a]` strings, arm-coded
+keys and `hier.*` lookups (Stage 13 §12). Two shapes now exist twice: a coefficient table with a role
+column (`standardise._fit_table`, `policy._fit_table`) and a replicate grid with a labelled denominator
+per block (`bootstrap._counters_table`/`_diagnostics_table`, `standardise._replicates_table`,
+`policy._replicates_table`). **Trigger sharpened:** the next stage adding either shape — Stage 14 if it
+renders any — extracts a row-builder that takes the role/label mapping as an argument, and the three
+Stage 12/13 pairs are its first callers. The `|`-in-cell rule (Stage 7) is the one invariant every
+copy must keep and the builder would enforce once.
+
 ---
 
 ## Get the cross-model second opinion on the Stage 6 spec
@@ -773,7 +784,16 @@ is now: **the first bucket that is wrong in landed code**, or the first stage th
 a failure kind rather than count it. Stage 13 adds raise sites to this scheme and is the next
 opportunity.
 
-**Status: open, trigger fired, fix deliberately deferred past Stage 12.**
+**Stage 13 paid for the deferral in code (engineering review of `specs/stage13_feasible_policy.md`,
+2026-08-29).** Stage 13's U1 and U8 guards are three-line restatements of `standardise`'s T1 and T12
+with different literal tokens, because `test_bootstrap.py`'s raise-site scan can only read a literal
+first token (`assert isinstance(first, ast.Constant)`, `raise_sites()`) — a shared guard taking the
+token as a parameter would crash the scan, and relaxing the scan would give up the one static defence
+against a wrong-but-mapped bucket. With a `code` field on `FitError` the scan reads the attribute and
+each pair collapses to one public guard. Six duplicated lines; recorded so the eventual refactor knows
+they are its to remove (Stage 13 §5.3, §17 item 9).
+
+**Status: open, trigger fired, fix deliberately deferred past Stage 13.**
 
 ## Measure bootstrap coverage under near-separation (Stage 10 §8.4, §16 item 4)
 
@@ -1373,7 +1393,7 @@ cannot move the contraindicated patients' own contribution to any `RD_k`, which 
 **Trigger.** A reviewer asking whether the contraindicated patients' EVT outcome model is the same
 model, or a [§14] amendment adding an interaction. **Status: open, a [§14] question.**
 
-## A hybrid plug-in for the contraindicated patients' distributions (Stage 13 §7.3, §17 item 3)
+## A hybrid plug-in for the contraindicated patients' distributions (Stage 13 §7.3, §17 item 3) — CLOSED 2026-08-29
 
 **What.** For a contraindicated patient `Y^0 = Y` observed, so their block of the two regime
 distributions could be the empirical one rather than a model prediction. Identical `rd_k` — the block
@@ -1395,3 +1415,5 @@ and U8 deliberately does not bind the indicator.
 **Trigger.** The rate exceeding 1%, or a workbook where a centre's contraindicated patients share one
 outcome — at which point the fit is slow rather than wrong, and the question is cost. **Status: open,
 low consequence.**
+
+**Status: CLOSED.** Put to the PI on 2026-08-29 after the engineering review's outside voice called the plug-in the natural estimator for the fourteen distribution keys. The PI confirmed the model prediction, which the SAP prescribes (*"predict every resampled patient under both regimes"*, *"model-based transported results"*); DECISION 10 stands unamended. Reopening requires a [§14b] amendment.

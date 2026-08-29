@@ -557,7 +557,7 @@ def test_the_balance_set_is_the_confounders_plus_the_balance_only_names():
 @pytest.mark.parametrize("name", [
     "PS_COVARIATES", "BALANCE_ONLY", "CENTER_ORDER", "ELIGIBILITY_ORDER", "MRS_THRESHOLDS",
     "PS_COVARIATES_FULL", "STANDARDISATION_COVARIATES", "BINARY_COLUMNS", "DERIVED_NAMES",
-    "CATEGORICAL", "EXPECTED_NEVER_IVT", "NA_VALUES", "SUPPORT_COVARIATES",
+    "CATEGORICAL", "EXPECTED_NEVER_IVT", "NA_VALUES", "SUPPORT_COVARIATES", "POLICY_COVARIATES",
     # Stage 3's four. This list is explicit rather than discovered, so a new declared sequence is
     # outside it until it is added by hand — which is the point, but it means adding it is part of
     # declaring one.
@@ -1107,6 +1107,32 @@ def test_SUPPORT_COVARIATES_is_a_COMPUTED_VIEW_and_never_a_fourth_literal_list()
     assert "center" not in config.SUPPORT_COVARIATES
     assert "onset_type" not in config.SUPPORT_COVARIATES
     assert isinstance(config.SUPPORT_COVARIATES, tuple)
+
+
+def test_POLICY_COVARIATES_is_STANDARDISATION_COVARIATES_plus_the_indicator_and_NOTHING_ELSE():
+    """Stage 13 §5.1, §15, §16.2. DECISION 10 held statically; the load-bearing line is the third.
+
+    [§15]'s *"omitting centre … permitted inside §14 only"* covers both subsections, so the [§14b]
+    model is [§14a]'s covariates plus the contraindication indicator and no other edit. The indicator
+    in `PS_COVARIATES` would be [§3] restriction 2 undone inside the [§7] propensity model; in
+    `CATEGORICAL` it would be dummied and reference-dropped rather than entering as one float column.
+    """
+    assert config.POLICY_COVARIATES == config.STANDARDISATION_COVARIATES + (config.CONTRAINDICATED,)
+    assert "center" not in config.POLICY_COVARIATES
+    assert config.CONTRAINDICATED not in config.PS_COVARIATES
+    assert config.CONTRAINDICATED not in config.CATEGORICAL
+    assert config.CONTRAINDICATED not in config.STANDARDISATION_COVARIATES
+    assert isinstance(config.POLICY_COVARIATES, tuple)
+    assert isinstance(config.CONTRAINDICATED, str)
+
+
+def test_the_TWO_Stage_13_FAILURE_BUCKETS_tokens_and_neither_leads_with_polr():
+    """Stage 13 §11, §15, §16.2. U1 is T1's bucket and U8 is T12's; the values stay the four names."""
+    assert config.FAILURE_BUCKETS["U1"] == "degenerate_design"
+    assert config.FAILURE_BUCKETS["U8"] == "separation"
+    assert not [t for t in config.FAILURE_BUCKETS if t.startswith("U") and t not in ("U1", "U8")]
+    assert set(config.FAILURE_BUCKETS.values()) == {
+        "separation", "constant_outcome", "nonconvergence", "degenerate_design"}
 
 
 def test_the_FOUR_Stage_12_FAILURE_BUCKETS_tokens_and_T4_IS_NOT_polr_ri():

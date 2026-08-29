@@ -171,18 +171,35 @@ class Hierarchical:
     fit: model.RIFit
 
 
+@dataclass(frozen=True)
+class GComputation:
+    """What a g-computation COMPUTES, and nothing about what it means. §7 / Stage 13 §6.1.
+
+    Two averaged distributions keyed by whatever `gcompute` was told to call them, the cumulative
+    tables, RD_k and the two namings. NO `beta`, NO `measure`, NO population label: those belong to
+    the record that interprets this one — `Standardisation` for [§14a], `Policy` for [§14b] — and a
+    record that carried both would be a record one of its two callers has to lie in.
+    """
+
+    n_average: int                                  # over.sum()
+    n_fit: int                                      # len(X)
+    distribution: dict[object, dict[int, float]]    # key -> mRS level -> P, over MRS_LEVELS
+    cumulative: dict[object, dict[int, float]]      # key -> threshold -> P(Y <= k)
+    rd: dict[int, float]                            # cumulative[keys[0]] - cumulative[keys[1]]
+    mrs_0_2: float                                  # == rd[2], one computation
+    mortality: float                                # from the distributions; asserted == -rd[5]
+
+
 # --- the population [§14a, §11, §4] ---------------------------------------------------------------
 
-def _record_removal(audit: Audit, step: str, removed: pd.DataFrame, detail: str,
-                    table: tuple[tuple[str, ...], ...]) -> None:
-    """The one way this stage's row removals reach the log. Names every record removed, or raises.
+def record_removal(audit: Audit, step: str, removed: pd.DataFrame, detail: str,
+                   table: tuple[tuple[str, ...], ...]) -> None:
+    """The one way a §14 population's row removals reach the log. Names every record removed, or raises.
 
-    `cohort._record_removal`'s discipline, applied to a different rule, and **it is a second copy on
-    purpose**: §18's ledger says `cohort.py` does not change at all, so that function cannot be made
-    public here, and the rule it enforces is about [§3]'s two restrictions while this one is about
-    [§14a]'s population. What is shared is the ASSERTION — an entry must name exactly as many
-    patients as it says it removed — and it is stronger than `data.py`'s kind-keyed rule, which asks
-    only that *some* case be named.
+    `cohort._record_removal`'s discipline, made public here as the shared rule with two callers —
+    [§14a]'s `population` and Stage 13's `policy.population` [Stage 13 §4.2]. What is shared is the
+    ASSERTION — an entry must name exactly as many patients as it says it removed — and it is
+    stronger than `data.py`'s kind-keyed rule, which asks only that *some* case be named.
 
     A population that reported 22 removals and named 3 would satisfy `_MUST_NAME_CASES` and would be
     a population nobody could reconstruct from the log, which matters more here than at Stage 5: this
@@ -192,8 +209,8 @@ def _record_removal(audit: Audit, step: str, removed: pd.DataFrame, detail: str,
     case_ids = tuple(sorted(set(named)))
     if len(case_ids) != len(removed):
         raise C.SchemaError(
-            f"{step} removed {len(removed)} record(s) and names {len(case_ids)}. A [§14a] population "
-            "that cannot name what it removed makes the analysis unreconstructable from the log.")
+            f"{step} removed {len(removed)} record(s) and names {len(case_ids)}. A population that "
+            "cannot name what it removed makes the analysis unreconstructable from the log.")
     audit.record("cohort", step, len(removed), detail, case_ids=case_ids, table=table)
 
 
@@ -294,7 +311,7 @@ def population(df: pd.DataFrame, audit: Audit) -> pd.DataFrame:
         "because both remove rows from the same classified frame under kind='cohort' and "
         "`Audit.entry` is first-match [Stage 11 §4.2, Stage 12 §4.2].",
     ])
-    _record_removal(audit, "standardisation_population",
+    record_removal(audit, "standardisation_population",
                     pd.concat([ineligible, removed]), detail,
                     _population_table(df, retained, pop))
 
@@ -437,8 +454,9 @@ def _assert_identities(rd: dict[int, float], mrs_0_2: float, mortality: float,
 
 # --- the standardisation [§7] ---------------------------------------------------------------------
 
-def _regime_design(X: pd.DataFrame, arm: int) -> pd.DataFrame:
-    """`X` with the treatment COLUMN overwritten. Never a new design, and §7.1 is why.
+def _regime_design(X: pd.DataFrame, arm: np.ndarray | float) -> pd.DataFrame:
+    """`X` with the treatment COLUMN overwritten by `arm` — a per-row vector, or a scalar that
+    broadcasts. Never a new design, and §7.1 is why.
 
     [§14a] says *"duplicate every patient with `A = 1` and `A = 0`"*. The obvious implementation —
     copy the frame, set the treatment column, re-run `model.design` — **is wrong and it fails
@@ -454,8 +472,14 @@ def _regime_design(X: pd.DataFrame, arm: int) -> pd.DataFrame:
     The arm codes come from `C.TREATMENT_LABELS` exactly as `outcome.py:118-119` takes them, and are
     never written as 1 and 0 in the arithmetic.
     """
+    regime = np.asarray(arm, dtype=float)
+    if regime.ndim == 1 and len(regime) != len(X):
+        raise C.SchemaError(
+            f"a regime vector of length {len(regime)} against a design of {len(X)} row(s). The "
+            "regime is written INTO the fitted design row by row [Stage 13 §6.1]; a length mismatch "
+            "would broadcast or misalign silently.")
     Xa = X.copy()
-    Xa[C.TREATMENT] = float(arm)
+    Xa[C.TREATMENT] = regime
     return Xa
 
 
@@ -536,12 +560,15 @@ def _expanded(probabilities: np.ndarray, categories: tuple[int, ...]) -> np.ndar
     return out
 
 
-def _standardise(X: pd.DataFrame, fit: model.PolrFit | model.RIFit, over: np.ndarray,
-                 label: str, dropped: tuple[str, ...],
-                 groups: pd.Series | None = None) -> Standardisation:
-    """The g-computation: duplicate on the DESIGN, predict, re-expand, average. §7.
+def gcompute(X: pd.DataFrame, fit: model.PolrFit | model.RIFit, over: np.ndarray,
+             active: np.ndarray, comparator: np.ndarray, *, label: str,
+             groups: pd.Series | None = None,
+             keys: tuple[object, object] = (max(C.TREATMENT_LABELS), min(C.TREATMENT_LABELS)),
+             ) -> GComputation:
+    """The g-computation: overwrite the treatment column of the FITTED design with `active`, then
+    with `comparator`, predict, re-expand onto MRS_LEVELS, average over `over`. §7, Stage 13 §6.1.
 
-        P_hat(Y = j | A = a)  =  (1/N) * SUM_i  P(Y = j | A = a, X_i)
+        P_hat(Y = j | regime)  =  (1/N) * SUM_i  P(Y = j | A_i(regime), X_i)
 
     over the `N = over.sum()` records of the averaging population, UNWEIGHTED. `over` restricts the
     averaging set and never the fit, which is what makes §11's sensitivity one change rather than two.
@@ -560,19 +587,34 @@ def _standardise(X: pd.DataFrame, fit: model.PolrFit | model.RIFit, over: np.nda
     T10 and T11 run on every record this function builds — the point estimate AND every replicate —
     because a self-check that runs only on the point estimate is a self-check the bootstrap does not
     have.
-    """
-    treated, control = max(C.TREATMENT_LABELS), min(C.TREATMENT_LABELS)
-    distribution: dict[int, dict[int, float]] = {}
-    cumulative: dict[int, dict[int, float]] = {}
-    for arm in (treated, control):
-        per_row = _expanded(
-            _arm_probabilities(fit, _regime_design(X, arm), groups), fit.categories)
-        averaged = per_row[over].mean(axis=0)                     # UNWEIGHTED — [§14a] weights nobody
-        distribution[arm] = {level: float(p) for level, p in zip(C.MRS_LEVELS, averaged)}
-        running = np.cumsum(averaged)
-        cumulative[arm] = {k: float(running[j]) for j, k in enumerate(C.MRS_THRESHOLDS)}
 
-    rd = {k: cumulative[treated][k] - cumulative[control][k] for k in C.MRS_THRESHOLDS}
+    **`active` and `comparator` are per-row arrays of length `len(X)`; a length mismatch or a scalar
+    raises `SchemaError`.** `_standardise` passes the two arm codes broadcast to vectors; Stage 13
+    passes `1[eligible]` and zeros, which is the whole of what makes a REGIME differ from an ARM.
+    `keys` names the two distributions — Stage 12's arm codes by default, Stage 13's regime literals —
+    and `keys[0]` is the minuend of every RD_k. The record carries no `beta`, `measure` or population
+    label: those are the interpreting record's (`GComputation`).
+    """
+    for name, regime in (("active", active), ("comparator", comparator)):
+        shape = np.shape(regime)
+        if len(shape) != 1 or shape[0] != len(X):
+            raise C.SchemaError(
+                f"`{name}` has shape {shape} against a design of {len(X)} row(s). A regime is a "
+                "per-row vector of length len(X) and the vector form is the only form: a scalar "
+                "here would hide which rows a caller meant to assign [Stage 13 §6.1].")
+
+    distribution: dict[object, dict[int, float]] = {}
+    cumulative: dict[object, dict[int, float]] = {}
+    for key, regime in zip(keys, (active, comparator)):
+        per_row = _expanded(
+            _arm_probabilities(fit, _regime_design(X, regime), groups), fit.categories)
+        averaged = per_row[over].mean(axis=0)                     # UNWEIGHTED — [§14a] weights nobody
+        distribution[key] = {level: float(p) for level, p in zip(C.MRS_LEVELS, averaged)}
+        running = np.cumsum(averaged)
+        cumulative[key] = {k: float(running[j]) for j, k in enumerate(C.MRS_THRESHOLDS)}
+
+    first, second = keys
+    rd = {k: cumulative[first][k] - cumulative[second][k] for k in C.MRS_THRESHOLDS}
     _assert_distribution(distribution, cumulative, label)         # T10
 
     # [§14a]'s TWO NAMINGS. `mrs_0_2` IS `rd[2]` — one computation read under its clinical name, not a
@@ -581,14 +623,29 @@ def _standardise(X: pd.DataFrame, fit: model.PolrFit | model.RIFit, over: np.nda
     # would pass the identity trivially and would be the "simplification" that hides a real defect.
     top = C.MRS_LEVELS[-1]
     mrs_0_2 = rd[2]
-    mortality = distribution[treated][top] - distribution[control][top]
+    mortality = distribution[first][top] - distribution[second][top]
     _assert_identities(rd, mrs_0_2, mortality, label)             # T11
+
+    return GComputation(
+        n_average=int(over.sum()), n_fit=len(X), distribution=distribution,
+        cumulative=cumulative, rd=rd, mrs_0_2=mrs_0_2, mortality=mortality)
+
+
+def _standardise(X: pd.DataFrame, fit: model.PolrFit | model.RIFit, over: np.ndarray,
+                 label: str, dropped: tuple[str, ...],
+                 groups: pd.Series | None = None) -> Standardisation:
+    """One [§14a] standardisation: `gcompute` with the two ARM codes broadcast to vectors, wrapped
+    with `beta`, `_CONDITIONAL` and the [§14a] population label. Signature and callers unchanged
+    across the Stage 13 extraction, which §16.11 of that spec asserts by two digests."""
+    treated, control = max(C.TREATMENT_LABELS), min(C.TREATMENT_LABELS)
+    g = gcompute(X, fit, over, np.full(len(X), float(treated)), np.full(len(X), float(control)),
+                 label=label, groups=groups, keys=(treated, control))
 
     beta = float(fit.beta[fit.columns.index(C.TREATMENT)])
     return Standardisation(
-        population=label, n_average=int(over.sum()), n_fit=len(X),
-        distribution=distribution, cumulative=cumulative, rd=rd,
-        mrs_0_2=mrs_0_2, mortality=mortality,
+        population=label, n_average=g.n_average, n_fit=g.n_fit,
+        distribution=g.distribution, cumulative=g.cumulative, rd=g.rd,
+        mrs_0_2=g.mrs_0_2, mortality=g.mortality,
         conditional_log_odds=beta, conditional_odds_ratio=float(np.exp(beta)),
         measure=_CONDITIONAL, fit=fit, dropped=dropped)
 
@@ -1288,8 +1345,8 @@ def _replicate(draw: pd.DataFrame, keys: tuple[str, ...]) -> bootstrap.Replicate
     return bootstrap.Replicate(values=values, failures=failures, **diagnostics)
 
 
-def _diagnostics(collected: tuple[object, ...]) -> bootstrap.Diagnostics:
-    """`bootstrap.Diagnostics` over this stage's replicates.
+def diagnostics(collected: tuple[object, ...]) -> bootstrap.Diagnostics:
+    """`bootstrap.Diagnostics` over a §14 stage's replicates. Public: Stage 13 calls it (its §10.2).
 
     `bootstrap._diagnostics` is not reused and is not merely private: it aggregates `max_abs_beta` and
     `or_corrected`, which are Stage 9's augmented-estimator and continuity-correction diagnostics, and
@@ -1414,7 +1471,7 @@ def inference(pop: pd.DataFrame, audit: Audit) -> bootstrap.Bootstrap:
     collected = bootstrap.replicates(
         pop, lambda draw: _replicate(draw, keys), C.N_BOOT, C.SEED, C.BOOT_STRATUM)
     draws = bootstrap.collect(collected, keys)
-    diagnostics = _diagnostics(collected)
+    diag = diagnostics(collected)
     limits = bootstrap.intervals(draws, lambda key: False)       # §3.3 — no p on ANY key
 
     # ENTRY 10.
@@ -1441,6 +1498,6 @@ def inference(pop: pd.DataFrame, audit: Audit) -> bootstrap.Bootstrap:
             "points, which a manuscript prints — while under numpy's default they agree to 5.6e-16. "
             "The pin that makes [§10]'s p-value agree with its interval is the same pin that breaks "
             "reflection symmetry [§7.4].",
-        ]), table=_replicates_table(draws, diagnostics, collected))
+        ]), table=_replicates_table(draws, diag, collected))
 
-    return bootstrap.Bootstrap(C.SEED, C.N_BOOT, draws, limits, diagnostics)
+    return bootstrap.Bootstrap(C.SEED, C.N_BOOT, draws, limits, diag)

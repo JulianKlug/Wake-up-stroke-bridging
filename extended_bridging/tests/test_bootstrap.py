@@ -768,7 +768,7 @@ def test_the_workbooks_counters_read_zero_and_zero(run_once):
 # reworded token and not a wrong-but-mapped one, which is `TODOS`' `code`-field item and which
 # Stage 12 §14 fired for the second time with T4.
 FITERROR_MODULES: Final[tuple[str, ...]] = (
-    "model.py", "outcome.py", "propensity.py", "sensitivity.py", "standardise.py")
+    "model.py", "outcome.py", "propensity.py", "sensitivity.py", "standardise.py", "policy.py")
 
 
 def raise_sites() -> list[tuple[str, int, str]]:
@@ -823,9 +823,11 @@ def test_the_scan_finds_NINETEEN_sites_and_the_SPECS_SIXTEEN_is_its_own_scope():
     per_module = {name: sum(1 for m, _, _ in sites if m == name) for name in FITERROR_MODULES}
     # Stage 12 adds three to `model.py` — T2, T3 and T4 in `polr_ri` — and two of its own, T1 and
     # T12 in `standardise.py` (§14, §18).
+    # Stage 13 adds two of its own, U1 and U8 in `policy.py` — T1 and T12 restated with literal
+    # tokens, because this scan can only read a literal (Stage 13 §5.3, §11).
     assert per_module == {"model.py": 17, "outcome.py": 3, "propensity.py": 3, "sensitivity.py": 2,
-                          "standardise.py": 2}
-    assert len(sites) == 27
+                          "standardise.py": 2, "policy.py": 2}
+    assert len(sites) == 29
     # `outcome.py` is THREE and not the specification's two, and the third is S8 — which §5.4 moved
     # from `SchemaError` to `FitError` in this very stage, so the specification's own count of the
     # sites it was creating is one behind itself.
@@ -834,6 +836,7 @@ def test_the_scan_finds_NINETEEN_sites_and_the_SPECS_SIXTEEN_is_its_own_scope():
     # And Stage 12's own two, which are T1 and T12 and lead with their OWN identifiers rather than
     # with a shared prefix, for the reason §14 gives and T4 demonstrates.
     assert sorted(t for m, _, t in sites if m == "standardise.py") == ["T1", "T12"]
+    assert sorted(t for m, _, t in sites if m == "policy.py") == ["U1", "U8"]
     assert sorted(set(t for m, _, t in sites if m == "model.py")
                   & {"T2", "T3", "T4", "polr_ri:"}) == ["T4", "polr_ri:"]
 
@@ -861,7 +864,9 @@ def test_bucket_RAISES_on_an_unrecognised_token_and_does_not_default():
     # its own identifier BECAUSE `polr_ri:` is also a valid key, which is the one misclassification
     # the raise-site scan above cannot catch.
     ("T1", "degenerate_design"), ("T4", "degenerate_design"),
-    ("T12", "separation"), ("polr_ri:", "nonconvergence")])
+    ("T12", "separation"), ("polr_ri:", "nonconvergence"),
+    # Stage 13's two (Stage 13 §11).
+    ("U1", "degenerate_design"), ("U8", "separation")])
 def test_bucket_maps_each_token_to_the_bucket_7_2_names(token, bucket):
     assert bootstrap.bucket(f"{token}  a message") == bucket
 

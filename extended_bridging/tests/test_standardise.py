@@ -483,11 +483,12 @@ def test_mortality_is_computed_from_the_DISTRIBUTIONS_and_not_as_minus_rd_5():
     honest = standardise.all_centre(pop, audit_of())
 
     tree = ast.parse(SOURCE)
+    # In `gcompute` since Stage 13 lifted the arithmetic out of `_standardise` (Stage 13 §6.1).
     node = next(n for n in ast.walk(tree)
-                if isinstance(n, ast.FunctionDef) and n.name == "_standardise")
+                if isinstance(n, ast.FunctionDef) and n.name == "gcompute")
     body = ast.unparse(node)
     # The expression is a difference of two DISTRIBUTION entries at the top level, not of `rd`.
-    assert "mortality = distribution[treated][top] - distribution[control][top]" in body
+    assert "mortality = distribution[first][top] - distribution[second][top]" in body
     assert "mortality = -rd[" not in body
     assert "mortality = -std.rd" not in body
 
@@ -717,8 +718,12 @@ def test_record_removal_RAISES_when_it_cannot_name_what_it_removed():
     frame = four_centre_frame().head(3).copy()
     frame.loc[frame.index[0], "case_id"] = pd.NA
     with pytest.raises(config.SchemaError) as excinfo:
-        standardise._record_removal(audit_of(), "probe", frame, "detail", (("a",), ("b",)))
+        standardise.record_removal(audit_of(), "probe", frame, "detail", (("a",), ("b",)))
     assert "names" in message_of(excinfo)
+    # Public since Stage 13, with two callers, so the message names the STEP and no section: a
+    # [§14b] removal described as [§14a]'s would be the mislabelling §8 forbids (Stage 13 §4.2).
+    assert "probe" in message_of(excinfo)
+    assert "§14a" not in message_of(excinfo) and "§14b" not in message_of(excinfo)
 
 
 @DATA_GATED
@@ -961,6 +966,15 @@ def test_bootstrap_and_balance_expose_the_names_Stage_12_needs_and_reimplements_
     # be the second definition of the yardstick §10.3 forbids.
     private = {c for c in calls if "._" in c}
     assert private == {"balance._pooled_sd"}, private
+    # And the same assertion over `policy.py` is EMPTY: Stage 13 reaches into no private name of any
+    # module, which is why its U1 and U8 are its own raise sites (Stage 13 §0.1, §16.15).
+    import policy
+    policy_calls = {ast.unparse(c.func) for c in ast.walk(ast.parse(
+        Path(policy.__file__).resolve().read_text(encoding="utf-8"))) if isinstance(c, ast.Call)}
+    assert {c for c in policy_calls if "._" in c} == set()
+    assert {"standardise.gcompute", "standardise.record_removal", "standardise.diagnostics",
+            "bootstrap.bucket", "bootstrap.collect", "bootstrap.intervals",
+            "bootstrap.replicates"} <= policy_calls
 
 
 def test_model_and_balance_keep_their_landed_public_surfaces_plus_exactly_the_declared_additions():
@@ -988,19 +1002,111 @@ def test_model_and_balance_keep_their_landed_public_surfaces_plus_exactly_the_de
         "collect", "diagnostics", "run"]
 
 
-def test_the_public_surface_is_FIVE_NAMES_and_the_privates_are_the_declared_ONES():
-    """§3.2's count, re-derived rather than repeated, on `test_bootstrap.py`'s pattern."""
+def test_the_public_surface_is_EIGHT_NAMES_and_the_privates_are_the_declared_ONES():
+    """§3.2's count, re-derived rather than repeated, on `test_bootstrap.py`'s pattern.
+
+    Five at Stage 12; eight since Stage 13 lifted `gcompute`, `record_removal` and `diagnostics`
+    from privates (Stage 13 §0.1, §16.15). Each stays where its section is, so the source order is
+    the sections' and not the roster's. `_standardise` stays private as the `Standardisation`
+    wrapper; the module's dataclasses gain `GComputation` at the end.
+    """
     tree = ast.parse(SOURCE)
     functions = [n.name for n in tree.body if isinstance(n, ast.FunctionDef)]
     assert [n for n in functions if not n.startswith("_")] == [
-        "population", "all_centre", "support", "hierarchical", "inference"]
+        "record_removal", "population", "gcompute", "all_centre", "support", "hierarchical",
+        "diagnostics", "inference"]
     assert sorted(n for n in functions if n.startswith("_")) == sorted([
-        "_record_removal", "_population_table", "_assert_exposure_survived",
+        "_population_table", "_assert_exposure_survived",
         "_assert_beta_reportable", "_assert_distribution", "_assert_identities",
         "_regime_design", "_arm_probabilities", "_expanded", "_standardise", "_over_mask",
         "_fit_table", "_distribution_table", "_box", "_inside", "_never_ivt", "_role",
         "_baseline", "_box_table", "_baseline_table", "_intercept_table", "_estimand_keys",
-        "_standardised_values", "_replicate", "_diagnostics", "_tally", "_replicates_table"])
+        "_standardised_values", "_replicate", "_tally", "_replicates_table"])
+    assert [n.name for n in tree.body if isinstance(n, ast.ClassDef)] == [
+        "Standardisation", "Support", "Hierarchical", "GComputation"]
+
+
+# --- Stage 13 §16.15  the `gcompute` extraction ---------------------------------------------------
+
+def fitted_pooled():
+    """`four_centre_frame`'s [§14a] design and fit, for the extraction tests."""
+    pop = standardise.population(four_centre_frame(), audit_of())
+    X, dropped = model.design(pop, (config.TREATMENT,) + config.STANDARDISATION_COVARIATES)
+    fit = model.polr(X, pop[config.PRIMARY_OUTCOME].to_numpy(dtype=float))
+    return X, fit, dropped
+
+
+def test_GComputation_is_ARITHMETIC_ONLY_with_exactly_seven_fields():
+    """Stage 13 §16.15. No `beta`, no `measure`, no population label: those are the interpreting
+    record's, and a record that carried both would be one its two callers has to lie in."""
+    assert [f.name for f in dataclasses.fields(standardise.GComputation)] == [
+        "n_average", "n_fit", "distribution", "cumulative", "rd", "mrs_0_2", "mortality"]
+    X, fit, _ = fitted_pooled()
+    n = len(X)
+    g = standardise.gcompute(X, fit, np.ones(n, dtype=bool), np.full(n, 1.0), np.full(n, 0.0),
+                             label="probe")
+    for absent in ("measure", "population", "conditional_log_odds", "beta", "label"):
+        assert not hasattr(g, absent), absent
+
+
+def test_gcompute_with_BROADCAST_scalars_equals_the_wrapper_field_for_field_by_EQUALITY():
+    """Stage 13 §16.15. `==` and not `isclose`: the same floats in the same order."""
+    X, fit, dropped = fitted_pooled()
+    n = len(X)
+    treated, control = max(config.TREATMENT_LABELS), min(config.TREATMENT_LABELS)
+    over = np.ones(n, dtype=bool)
+    g = standardise.gcompute(X, fit, over, np.full(n, float(treated)), np.full(n, float(control)),
+                             label="probe", keys=(treated, control))
+    std = standardise._standardise(X, fit, over, "probe", dropped)
+    for name in ("n_average", "n_fit", "distribution", "cumulative", "rd", "mrs_0_2", "mortality"):
+        assert getattr(g, name) == getattr(std, name), name
+
+
+def test_a_regime_of_the_WRONG_LENGTH_raises_naming_both_lengths_and_a_SCALAR_raises_too():
+    """Stage 13 §16.15. The vector form is the only form."""
+    X, fit, _ = fitted_pooled()
+    n = len(X)
+    over = np.ones(n, dtype=bool)
+    with pytest.raises(config.SchemaError) as excinfo:
+        standardise.gcompute(X, fit, over, np.ones(n - 1), np.zeros(n), label="probe")
+    assert str(n - 1) in message_of(excinfo) and str(n) in message_of(excinfo)
+    with pytest.raises(config.SchemaError):
+        standardise.gcompute(X, fit, over, np.ones(n), np.zeros(n + 3), label="probe")
+    with pytest.raises(config.SchemaError):
+        standardise.gcompute(X, fit, over, 1.0, np.zeros(n), label="probe")
+    # `_regime_design` itself rejects a vector of the wrong length and still broadcasts a scalar.
+    with pytest.raises(config.SchemaError):
+        standardise._regime_design(X, np.ones(n + 1))
+    assert (standardise._regime_design(X, 1.0)[config.TREATMENT] == 1.0).all()
+
+
+def test_keys_reach_the_record_and_keys_0_is_the_MINUEND_of_every_RD_k():
+    """Stage 13 §16.15. Stage 12 passes arm codes, Stage 13 passes regime literals."""
+    X, fit, _ = fitted_pooled()
+    n = len(X)
+    g = standardise.gcompute(X, fit, np.ones(n, dtype=bool), np.full(n, 1.0), np.full(n, 0.0),
+                             label="probe", keys=("a", "b"))
+    assert set(g.distribution) == {"a", "b"} and set(g.cumulative) == {"a", "b"}
+    for k in config.MRS_THRESHOLDS:
+        assert g.rd[k] == g.cumulative["a"][k] - g.cumulative["b"][k]
+
+
+def test_a_regime_VECTOR_differs_from_a_broadcast_arm_exactly_where_it_is_set_to_control():
+    """Stage 13 §6.1, §7.3. The per-row contrast of a row set to `control` under both regimes is
+    exactly 0.0, so a mixed vector's RD_k is the all-treated RD_k scaled by the treated share."""
+    X, fit, _ = fitted_pooled()
+    n = len(X)
+    over = np.ones(n, dtype=bool)
+    mixed = np.ones(n)
+    mixed[: n // 3] = 0.0
+    full = standardise.gcompute(X, fit, over, np.ones(n), np.zeros(n), label="probe")
+    part = standardise.gcompute(X, fit, over, mixed, np.zeros(n), label="probe")
+    assert part.rd != full.rd
+    share = mixed.mean()
+    only = standardise.gcompute(X[mixed == 1.0], fit, np.ones(int(mixed.sum()), dtype=bool),
+                                np.ones(int(mixed.sum())), np.zeros(int(mixed.sum())), label="probe")
+    for k in config.MRS_THRESHOLDS:
+        assert abs(part.rd[k] - share * only.rd[k]) < 1e-12
 
 
 # The SHA-256 of `bootstrap.run`'s twenty-six intervals, canonicalised, **captured on this branch
@@ -1056,6 +1162,65 @@ def test_bootstrap_runs_TWENTY_SIX_intervals_are_BYTE_IDENTICAL_across_the_extra
         "`bootstrap.intervals` was extracted, so a mismatch means the interval loop no longer "
         "reproduces Stage 10's landed output — which is the one thing Stage 11 §16 said this "
         "refactor had to be able to prove [Stage 12 §20.11].")
+
+
+# Stage 13 §16.11's two digests, **captured on this branch BEFORE Stage 13 §21 task 2b touched
+# `standardise.py`** — before `gcompute` was extracted from `_standardise`, before `_record_removal`
+# and `_diagnostics` were made public — by running the Stage 1–12 pipeline at `C.N_BOOT = 2000`. So
+# they are the cross-refactor comparison and not a determinism check of the shipped code against
+# itself. Two and not one, because entry 4's table is where a wrong `keys=` default or a swapped
+# minuend would show first, and the 56-entry prefix test checks count and order rather than content.
+# A hash quotes no interval limit and no standardised probability (§4.3, Stage 10 §4.5).
+STAGE12_INTERVALS_SHA256: Final[str] = (
+    "40f6f27cbc8e14ee518d462df8d25b6a5d39e9f799df93324b6d76acaca5c3fd")
+STAGE12_ENTRIES_SHA256: Final[str] = (
+    "dcc934edcd3a677b09964b8d990b942f8d1579ef7bbc201842ed082b661971dd")
+
+
+def stage12_run():
+    """The Stage 1–12 pipeline at `C.N_BOOT`, returning the Bootstrap and this stage's ten entries."""
+    df, audit = classified()
+    before = len(audit.entries)
+    _, _, _, _, _, boot = driver(df, audit, with_inference=True)
+    return boot, audit.entries[before:]
+
+
+@SLOW
+@DATA_GATED
+def test_STAGE12_INTERVALS_SHA256_pins_the_SIXTY_NINE_intervals_across_the_gcompute_extraction():
+    """Stage 13 §16.11, §21 task 2a. [slow] [data-gated]
+
+    **The gate is a run, not a test**: `STAGE12_SLOW=1 uv run pytest -k SHA256 -rs` must report this
+    as passed, not skipped — a skipped gated test is green and proves nothing.
+    """
+    import hashlib
+    import json
+
+    boot, _ = stage12_run()
+    got = {k: [repr(i.lo), repr(i.hi), i.level, i.method, i.n_draws, repr(i.p)]
+           for k, i in boot.intervals.items()}
+    assert len(got) == 69
+    canonical = json.dumps(got, sort_keys=True, separators=(",", ":"))
+    assert hashlib.sha256(canonical.encode("utf-8")).hexdigest() == STAGE12_INTERVALS_SHA256, (
+        "Stage 12's sixty-nine intervals changed. The digest was captured BEFORE `gcompute` was "
+        "extracted from `_standardise`, so a mismatch means the extraction does not reproduce the "
+        "landed [§14a] output [Stage 13 §16.11].")
+
+
+@SLOW
+@DATA_GATED
+def test_STAGE12_ENTRIES_SHA256_pins_the_TEN_entries_across_the_gcompute_extraction():
+    """Stage 13 §16.11's second digest: the rendered markdown of entries 1–10, in ledger order.
+    [slow] [data-gated]"""
+    import hashlib
+
+    _, entries = stage12_run()
+    assert len(entries) == 10
+    rendered = "\n".join("\n".join(data._render_entry(e)) for e in entries)
+    assert hashlib.sha256(rendered.encode("utf-8")).hexdigest() == STAGE12_ENTRIES_SHA256, (
+        "Stage 12's ten audit entries changed across the `gcompute` extraction and the two renames "
+        "[Stage 13 §16.11]. Entry 4's table is where a wrong `keys=` default or a swapped minuend "
+        "shows first.")
 
 
 # --- 20.13  the replicate loop --------------------------------------------------------------------

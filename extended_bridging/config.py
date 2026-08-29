@@ -365,6 +365,11 @@ FAILURE_BUCKETS: Final[dict[str, str]] = {
     "polr_ri:": "nonconvergence",
     "T4": "degenerate_design",
     "T12": "separation",
+    # Stage 13's two [§14b, Stage 13 §11, §15]. U1 is Stage 12's T1 and U8 its T12, restated as
+    # literal raise sites in policy.py because the raise-site scan reads a literal first token and
+    # cannot read a parameter. No Stage 13 token leads with `polr:`.
+    "U1": "degenerate_design",
+    "U8": "separation",
 }
 
 
@@ -624,6 +629,20 @@ PS_COVARIATES_FULL: Final[tuple[str, ...]] = PS_COVARIATES + (
 # workbook where the narrow one is right.
 SUPPORT_COVARIATES: Final[tuple[str, ...]] = tuple(
     c for c in STANDARDISATION_COVARIATES if c not in CATEGORICAL)          # [§14a]
+
+# --- [§14b] the contraindication indicator and the policy model's covariates ---------------------
+#
+# The NAME of the 0/1 column `policy.population` derives from `eligibility` — never from the raw
+# `ivt_contraindicated` flag, because Stage 4 is the one classifier and a stage re-reading the flag
+# would be a second one that agrees with the first on this workbook (Stage 13 §5.2). A float 0/1
+# like `atrial_fib`, NOT in CATEGORICAL, so `model.design` takes it as one column.
+CONTRAINDICATED: Final[str] = "contraindicated"                                # [§14b]
+
+# A computed view, never a fifth literal list. DECISION 10: [§14b]'s model is [§14a]'s covariates plus
+# the indicator, and test_config.py holds it to exactly that — [§15]'s "inside §14 only" permission
+# for omitting centre covers both subsections, and adding the indicator to PS_COVARIATES would be [§3]
+# restriction 2 undone inside the propensity model, which the same test forbids.
+POLICY_COVARIATES: Final[tuple[str, ...]] = STANDARDISATION_COVARIATES + (CONTRAINDICATED,)   # [§14b]
 
 # [§6] names four vascular risk factors as balance negative controls and adds them back in the
 # [§13] full-covariate sensitivity propensity model. Those are the same four, so the set is

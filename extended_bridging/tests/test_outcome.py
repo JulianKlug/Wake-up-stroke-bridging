@@ -1609,7 +1609,8 @@ def test_only_the_TWO_STAGES_THAT_ESTIMATE_ON_IT_name_PRIMARY_OUTCOME():
     It read `== ["outcome.py"]` through Stage 11 and now admits `standardise.py`, because [§14a]
     STANDARDISES THE PRIMARY OUTCOME — that is what the section is about, and a module that estimates
     on an outcome has to be able to name it. The widening is one entry and is asserted as a list
-    rather than as a membership test, so a THIRD module naming it is still a failure.
+    rather than as a membership test, so a FIFTH module naming it is still a failure. Stage 13
+    widened it once more with `policy.py`, which fits [§14b]'s pooled model on the primary outcome.
 
     **The load-bearing half is unchanged and is the second assertion**: `model.py` must not name it.
     That module is outcome-agnostic by Stage 6 §0.1 — it takes a design and a response and does not
@@ -1619,7 +1620,7 @@ def test_only_the_TWO_STAGES_THAT_ESTIMATE_ON_IT_name_PRIMARY_OUTCOME():
     shipped = sorted(p for p in MODULE_DIR.glob("*.py"))
     naming = [p.name for p in shipped
               if "PRIMARY_OUTCOME" in p.read_text(encoding="utf-8") and p.name != "config.py"]
-    assert naming == ["outcome.py", "sensitivity.py", "standardise.py"]
+    assert naming == ["outcome.py", "policy.py", "sensitivity.py", "standardise.py"]
     assert "PRIMARY_OUTCOME" not in (MODULE_DIR / "model.py").read_text(encoding="utf-8")
     assert "PRIMARY_OUTCOME" not in (MODULE_DIR / "bootstrap.py").read_text(encoding="utf-8")
 
