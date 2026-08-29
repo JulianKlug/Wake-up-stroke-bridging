@@ -1416,21 +1416,13 @@ def workbook():
     the length. §14's own numbers are produced by the shipped pipeline and live in the gitignored
     log, never here (§1).
     """
-    import cohort
-    import derive
-    import eligibility
+    import report
     original = config.N_BOOT
     config.N_BOOT = RUN_BOOT
     try:
-        df, audit = data.load(data.WORKBOOK)
-        df = derive.derive(df, audit)
-        df = eligibility.classify(df, audit)
-        df = cohort.build(df, audit)
-        ps = propensity.fit(df, audit)
-        bal = balance.assess(df, ps, audit)
-        est = outcome.primary(df, ps, audit)
-        sec = outcome.secondary(df, ps, audit)
-        yield df, ps, bal, est, sec, audit, bootstrap.run(df, ps, est, sec, audit)
+        # The canonical Stage 1-10 order is written once, in `report._stages_1_10` [Stage 14 §4].
+        _, df, audit, ps, bal, est, sec, boot = report._stages_1_10(data.WORKBOOK)
+        yield df, ps, bal, est, sec, audit, boot
     finally:
         config.N_BOOT = original
 

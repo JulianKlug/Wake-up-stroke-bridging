@@ -106,20 +106,10 @@ def classified():
 
 
 def driver(df: pd.DataFrame, audit: data.Audit, with_inference: bool = False):
-    """§19's canonical call order — the ONE place it is written, and §20.9 asserts against THIS.
-
-    `support` must precede the restricted `all_centre`, whose `over=` is its output, which is why
-    entry 7 falls between 6 and 8. **A driver that omitted the restricted `all_centre` would record
-    nine entries and not ten**, which is the failure §20.9's count catches and the reason §19 spells
-    the call out rather than leaving sensitivity 1's point estimate implied.
-    """
-    pop = standardise.population(df, audit)
-    std = standardise.all_centre(pop, audit)
-    sup = standardise.support(pop, audit)
-    ssup = standardise.all_centre(pop, audit, over=sup.inside)
-    hier = standardise.hierarchical(pop, audit)
-    boot = standardise.inference(pop, audit) if with_inference else None
-    return pop, std, sup, ssup, hier, boot
+    """§19's canonical call order, written once in `report._stage_12` [Stage 14 §4] and asserted
+    against by §20.9. `support` precedes the restricted `all_centre`, whose `over=` is its output."""
+    import report
+    return report._stage_12(df, audit, with_inference)
 
 
 # --- 20.1  the population is [§14a]'s and not the cohort's ----------------------------------------
@@ -1174,7 +1164,7 @@ def test_bootstrap_runs_TWENTY_SIX_intervals_are_BYTE_IDENTICAL_across_the_extra
 STAGE12_INTERVALS_SHA256: Final[str] = (
     "40f6f27cbc8e14ee518d462df8d25b6a5d39e9f799df93324b6d76acaca5c3fd")
 STAGE12_ENTRIES_SHA256: Final[str] = (
-    "dcc934edcd3a677b09964b8d990b942f8d1579ef7bbc201842ed082b661971dd")
+    "a6f496835384000d3f50f7c7cfbf3675f549c0a27b2cafe2454ff44476fcaec3")
 
 
 def stage12_run():

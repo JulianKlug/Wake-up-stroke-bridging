@@ -44,7 +44,7 @@ import cohort
 import config as C
 import eligibility
 import model
-from data import Audit, absence_by_column
+from data import Audit, absence_by_column, coefficient_rows, replicate_rows
 
 # --- the guard string, and it is DATA rather than a docstring [§8] --------------------------------
 #
@@ -704,13 +704,10 @@ def _fit_table(fit: model.PolrFit, dropped: tuple[str, ...]) -> tuple[tuple[str,
     when a covariate is nearly collinear in a resample, and bounding it would drop replicates for a
     reason the reported quantity does not care about.
     """
-    header = ("design column", "coefficient", "|coef|", "role")
-    rows = [(name, f"{value:+.6f}", f"{abs(value):.6f}",
-             "EXPOSURE — the guarded one [T12]" if name == C.TREATMENT else "gamma, unbounded [§9.2]")
-            for name, value in zip(fit.columns, fit.beta)]
-    for name in dropped:
-        rows.append((name, "—", "—", "DROPPED as constant [§5.3]"))
-    return (header, *rows)
+    def role(name: str) -> str:
+        return "EXPOSURE — the guarded one [T12]" if name == C.TREATMENT else "gamma, unbounded [§9.2]"
+
+    return coefficient_rows(fit.columns, fit.beta, dropped, role)
 
 
 def _distribution_table(std: Standardisation) -> tuple[tuple[str, ...], ...]:
@@ -722,8 +719,11 @@ def _distribution_table(std: Standardisation) -> tuple[tuple[str, ...], ...]:
     (§15, entry 4).
     """
     treated, control = max(C.TREATMENT_LABELS), min(C.TREATMENT_LABELS)
-    header = ("mRS", f"P | {C.TREATMENT_LABELS[treated]}", f"P | {C.TREATMENT_LABELS[control]}",
-              "P(Y<=k) | bridging", "P(Y<=k) | EVT alone", "RD_k")
+    # No `|` in a header cell: `data._md_table` does no escaping, and the earlier `P | arm` headers
+    # rendered nine markdown cells over a six-column separator [Stage 14 §8].
+    header = ("mRS", f"P(Y=j) {C.TREATMENT_LABELS[treated]}", f"P(Y=j) {C.TREATMENT_LABELS[control]}",
+              f"P(Y<=k) {C.TREATMENT_LABELS[treated]}", f"P(Y<=k) {C.TREATMENT_LABELS[control]}",
+              "RD_k")
     rows = []
     for level in C.MRS_LEVELS:
         cumulative = (
@@ -733,9 +733,9 @@ def _distribution_table(std: Standardisation) -> tuple[tuple[str, ...], ...]:
                      f"{std.distribution[control][level]:.6f}", *cumulative))
     rows.append(("mRS 0-2 [§14a]", "", "", "", "", f"{std.mrs_0_2:+.6f}"))
     rows.append(("mortality [§14a]", "", "", "", "", f"{std.mortality:+.6f}"))
-    rows.append(("|mrs_0_2 - RD_2|", "", "", "", "",
+    rows.append(("abs(mrs_0_2 - RD_2)", "", "", "", "",
                  f"{abs(std.mrs_0_2 - std.rd[2]):.3e}"))
-    rows.append(("|mortality + RD_5|", "", "", "", "",
+    rows.append(("abs(mortality + RD_5)", "", "", "", "",
                  f"{abs(std.mortality + std.rd[5]):.3e}"))
     return (header, *rows)
 
@@ -998,7 +998,7 @@ def _baseline_table(rows: tuple[balance.CovariateBalance, ...]) -> tuple[tuple[s
     report a DEFINITION and not a difference, so flagging them would be flagging the grouping variable
     for being the grouping variable.
     """
-    header = ("covariate", "role", "n", "pooled SD", "SMD", f"|SMD| > {C.SMD_THRESHOLD:g}")
+    header = ("covariate", "role", "n", "pooled SD", "SMD", f"abs_SMD > {C.SMD_THRESHOLD:g}")
     out = []
     for row in rows:
         if row.role == _GROUPING:
@@ -1398,7 +1398,7 @@ def _replicates_table(draws: dict[str, bootstrap.Draws],
     at_floor = sum(1 for r in collected if r.values.get("hier.sigma") == C.POLR_RI_SIGMA_FLOOR)
     buckets = tuple(sorted(set(C.FAILURE_BUCKETS.values())))
 
-    rows: list[tuple[str, ...]] = [("block / denominator", "quantity", "value")]
+    rows: list[tuple[str, str, str]] = []
     rows.append((f"attempted = {attempted}", "estimand keys", str(len(draws))))
     for name in buckets:
         total = sum(d.failures.get(name, 0) for d in draws.values())
@@ -1416,7 +1416,7 @@ def _replicates_table(draws: dict[str, bootstrap.Draws],
                  f"{draws['hier.sigma'].draws.min():.6g} to "
                  f"{draws['hier.sigma'].draws.max():.6g}" if hier else "—"))
     for key, spread in sorted(diagnostics.max_abs_beta.items()):
-        rows.append((f"reached the {key} fit = {len(spread)}", f"max |coefficient|, {key}",
+        rows.append((f"reached the {key} fit = {len(spread)}", f"max_abs_coef, {key}",
                      f"{spread.min():.4f} to {spread.max():.4f} against POLR_MAX_ABS_BETA = "
                      f"{C.POLR_MAX_ABS_BETA:g}"))
     # THE SUPPORT ARM's `n_average` SPREAD IS NOT HERE, and its absence is `Replicate`'s rather than
@@ -1424,7 +1424,7 @@ def _replicates_table(draws: dict[str, bootstrap.Draws],
     # of a second arm is not one of its fields. §21 item 4 declines widening it, so the spread is
     # measured by a probe (69 to 102 over 2000 replicates, median 91) and stated in §11 rather than
     # rendered here. A row reading "not carried" would be a row nobody can act on.
-    return tuple(rows)
+    return replicate_rows([(denominator, [(quantity, value)]) for denominator, quantity, value in rows])
 
 
 def inference(pop: pd.DataFrame, audit: Audit) -> bootstrap.Bootstrap:

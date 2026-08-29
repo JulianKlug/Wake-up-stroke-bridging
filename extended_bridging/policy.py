@@ -43,7 +43,7 @@ import config as C
 import eligibility
 import model
 import standardise
-from data import Audit, absence_by_column
+from data import Audit, absence_by_column, coefficient_rows, replicate_rows
 
 # --- the two guard strings, and they are DATA rather than docstrings [§8] -------------------------
 #
@@ -81,6 +81,9 @@ _NO_CONTRAINDICATED: Final[str] = (
     "fit with no indicator; read it with that stated.")
 
 # The label `gcompute`'s T10/T11 messages name this stage's records by.
+# Public alias for the reporting layer: T18 prints this sentence when `share_eligible` is 1 [Stage 14].
+NO_CONTRAINDICATED: Final[str] = _NO_CONTRAINDICATED
+
 _GCOMPUTE_LABEL: Final[str] = "[§14b] policy"
 
 
@@ -383,12 +386,7 @@ def _fit_table(fit: model.PolrFit, dropped: tuple[str, ...]) -> tuple[tuple[str,
             return "contraindication indicator — a NUISANCE, unbounded [§9], not a result [§4.3]"
         return "gamma, unbounded [§9.2]"
 
-    header = ("design column", "coefficient", "abs_coef", "role")
-    rows = [(name, f"{value:+.6f}", f"{abs(value):.6f}", role(name))
-            for name, value in zip(fit.columns, fit.beta)]
-    for name in dropped:
-        rows.append((name, "—", "—", "DROPPED as constant [§5.3]"))
-    return (header, *rows)
+    return coefficient_rows(fit.columns, fit.beta, dropped, role)
 
 
 def _contrast_table(pol: Policy) -> tuple[tuple[str, ...], ...]:
@@ -555,7 +553,7 @@ def _replicates_table(draws: dict[str, bootstrap.Draws], diagnostics: bootstrap.
     share_one = sum(1 for r in collected
                     if r.n_alpha is not None and r.values.get("share_eligible") == 1.0)
 
-    rows: list[tuple[str, ...]] = [("block / denominator", "quantity", "value")]
+    rows: list[tuple[str, str, str]] = []
     rows.append((f"attempted = {attempted}", "estimand keys", str(len(draws))))
     for name in sorted(set(C.FAILURE_BUCKETS.values())):
         total = sum(d.failures.get(name, 0) for d in draws.values())
@@ -575,7 +573,7 @@ def _replicates_table(draws: dict[str, bootstrap.Draws], diagnostics: bootstrap.
                      f"{spread.min():.4f} to {spread.max():.4f}; POLR_MAX_ABS_BETA = "
                      f"{C.POLR_MAX_ABS_BETA:g} binds beta ONLY, not the indicator — a separated "
                      "magnitude reflects POLR_TOL, not the data [§9.1]"))
-    return tuple(rows)
+    return replicate_rows([(denominator, [(quantity, value)]) for denominator, quantity, value in rows])
 
 
 def inference(pop: pd.DataFrame, audit: Audit) -> bootstrap.Bootstrap:

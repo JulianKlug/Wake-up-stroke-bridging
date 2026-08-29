@@ -158,7 +158,15 @@ wants a reproducible file rather than a frame built in Python. Re-evaluate there
 
 ---
 
-## Extract a shared table row-builder from `data.absence_by_column`
+## Extract a shared table row-builder from `data.absence_by_column` — CLOSED 2026-08-29 (in part)
+
+**Status.** Stage 14 fired the sharpened trigger: `data.coefficient_rows` and `data.replicate_rows`
+exist, `standardise` and `policy` call them, and both refuse a `|` in any cell (V1). The full audit log
+was digest-pinned before and after (`tests/test_report.py` §12.12). `bootstrap.py`'s grid was NOT
+moved: `test_bootstrap.py` pins `_padded` in the module's private list, and editing a landed test to
+refactor a landed renderer is the wrong trade. The `absence_by_column` split this item originally asked
+for is still not done — Stage 14's T01 reads the `cohort_flow` entry rather than rendering a fourth
+per-centre loop, so no fourth caller exists.
 
 **Surfaced by:** the engineering review of `specs/stage6_propensity_and_weights.md`, 2026-08-14
 (finding 7; the decision it produced is recorded in that spec's §7.4).
@@ -894,7 +902,12 @@ of the same arm was an optimiser choice, so the remaining 17.5 minutes is not sl
 
 **Status: open**, and it is now actionable rather than deferred.
 
-## Label the denominator on each row of the bootstrap audit grid (Stage 10 §16 item 9)
+## Label the denominator on each row of the bootstrap audit grid (Stage 10 §16 item 9) — CLOSED 2026-08-29
+
+**Status.** Discharged in the reporting layer rather than in the Stage 10 grid: Stage 14's T19 renders
+every draw set (primary/secondary, subgroups, arm, [§14a], [§14b]) with a `denominator` column on every
+row, and every estimate row of T07/T10/T11/T13 carries its own [§11] denominator. The Stage 10 audit
+entry itself is unchanged, for §12.12's byte-identity reason.
 
 **What.** `_diagnostics_table`'s block in the `bootstrap_replicates` audit entry renders four
 distributions and one per-outcome counter, over **three different denominators**, none of them labelled.
@@ -1403,7 +1416,8 @@ cancels — and different `active_j`/`comparator_j`.
 for one sub-population. A [§14] amendment.
 
 **Trigger.** Stage 14 wanting the comparator distribution read as a description of this cohort rather
-than as a model prediction. **Status: open.**
+than as a model prediction. **Status: closed 2026-08-29 — Stage 14 prints `Policy.label` and `Policy.measure`
+beside the model prediction (T18); the PI confirmed the model prediction stands and the plug-in is not built.**
 
 ## The separated-indicator draw is benign, at 1 in 2000 (Stage 13 §9.1, §17 item 5)
 
@@ -1417,3 +1431,14 @@ outcome — at which point the fit is slow rather than wrong, and the question i
 low consequence.**
 
 **Status: CLOSED.** Put to the PI on 2026-08-29 after the engineering review's outside voice called the plug-in the natural estimator for the fourteen distribution keys. The PI confirmed the model prediction, which the SAP prescribes (*"predict every resampled patient under both regimes"*, *"model-based transported results"*); DECISION 10 stands unamended. Reopening requires a [§14b] amendment.
+
+## Figures have no independent oracle (Stage 14 §13 item 1)
+
+**What.** F01–F05 are asserted on bytes, captions and determinism across hash seeds, not on geometry:
+nothing checks that a bar's length is the probability it labels.
+
+**Why it is acceptable today.** Every figure is drawn from the same result object its table prints,
+through `report._pmf`/`_ci` — the table is the oracle a reader can check the figure against.
+
+**Trigger.** A reviewer disputing a figure, or any change to `_bars`/`_forest`. Then: render one
+synthetic `Run` with known probabilities and parse the SVG rect widths. **Status: open.**

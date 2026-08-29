@@ -36,6 +36,10 @@ dependencies = [
     "tabulate>=0.9",
 ]
 
+[project.scripts]
+# Stage 14's entry point: runs Stages 1-13 and writes every table, figure and log under out/.
+report = "report:main"
+
 [dependency-groups]
 dev = ["pytest>=8.0"]
 

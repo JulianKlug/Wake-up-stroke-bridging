@@ -67,7 +67,7 @@ Stage 1 §7 raw-name scan and must never become exempt.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -243,6 +243,43 @@ def _md_table(rows: Sequence[Sequence[str]]) -> str:
     body = ["| " + " | ".join(c.ljust(w) for c, w in zip(row, widths)) + " |" for row in rows]
     separator = "| " + " | ".join("---" for _ in widths) + " |"
     return "\n".join([body[0], separator, *body[1:]])
+
+
+def _assert_no_pipe(rows: Sequence[Sequence[str]]) -> None:
+    """`_md_table` does no escaping and sizes its separator from the header, so one `|` in a cell is
+    a table that renders wrong and stays byte-identical across seeds. Refused at build time (V1)."""
+    bad = [cell for row in rows for cell in row if "|" in cell]
+    if bad:
+        raise C.SchemaError(
+            f"V1  {len(bad)} table cell(s) contain a `|`: {bad[:3]!r}. `data._md_table` does no "
+            "escaping [Stage 14 §8]; write the cell without the pipe.")
+
+
+def coefficient_rows(columns: Sequence[str], beta: Sequence[float], dropped: Sequence[str],
+                     role: Callable[[str], str]) -> tuple[tuple[str, ...], ...]:
+    """A coefficient table with a role column, header first — Stage 12's and Stage 13's fit tables
+    are its two callers, with their own `role` [Stage 14 §8]. Dropped design columns render as
+    dashes so the declared design is visible whether or not the data filled it."""
+    header = ("design column", "coefficient", "abs_coef", "role")
+    rows = [(name, f"{value:+.6f}", f"{abs(value):.6f}", role(name))
+            for name, value in zip(columns, beta)]
+    rows.extend((name, "—", "—", "DROPPED as constant [§5.3]") for name in dropped)
+    table = (header, *rows)
+    _assert_no_pipe(table)
+    return table
+
+
+def replicate_rows(blocks: Sequence[tuple[str, Sequence[tuple[str, str]]]]
+                   ) -> tuple[tuple[str, ...], ...]:
+    """A replicate-diagnostics grid where EVERY row names its denominator: `blocks` is a sequence of
+    `(denominator label, [(quantity, value), ...])`. One builder for Stage 12's and Stage 13's grids,
+    so the labelled-denominator rule is enforced once [Stage 14 §8]."""
+    rows: list[tuple[str, ...]] = [("block / denominator", "quantity", "value")]
+    for denominator, cells in blocks:
+        rows.extend((denominator, quantity, value) for quantity, value in cells)
+    table = tuple(rows)
+    _assert_no_pipe(table)
+    return table
 
 
 def _audit_path(source: Source) -> Path:

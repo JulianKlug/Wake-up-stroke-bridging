@@ -940,6 +940,49 @@ ROW_WISE_DERIVED: Final[tuple[str, ...]] = tuple(
     name for name in DERIVED_NAMES if name not in COHORT_DEPENDENT_SUBGROUPS)
 
 
+# --- [§16] reporting — Stage 14 ------------------------------------------------------------------
+#
+# VanderWeele's `RR ~ sqrt(OR)` conversion is licensed for a common outcome; [§16d] requires the
+# thresholds whose control-arm baseline risk falls outside that licence to be NAMED beside the E-value.
+E_VALUE_PREVALENCE_FLOOR: Final[float] = 0.15
+
+# The one list of outputs. `report.write` iterates it, so an id not here is never written and an id
+# here is written exactly once; `CHECKLIST` may only name ids from it. T = table (.md and .csv),
+# F = figure (.svg). Slugs are file names, never titles.
+OUTPUT_IDS: Final[dict[str, str]] = {
+    "T01": "cohort_flow", "T02": "baseline_by_arm", "T03": "crude_event_rates",
+    "T04": "onset_to_groin_by_arm", "T05": "balance_smd", "T06": "overlap_by_centre",
+    "T07": "primary", "T08": "mrs_distribution_by_arm", "T09": "e_value",
+    "T10": "secondary", "T11": "safety", "T12": "sensitivity_arm", "T13": "subgroups",
+    "T14": "subgroup_cumulative", "T15": "standardised_14a", "T16": "support_box",
+    "T17": "support_baseline", "T18": "policy_14b", "T19": "bootstrap_counters",
+    "T20": "run_summary", "T21": "strobe_record_checklist", "T22": "primary_vs_14",
+    "F01": "mrs_bars_primary", "F02": "forest_binary", "F03": "forest_subgroups",
+    "F04": "overlap_by_centre", "F05": "mrs_bars_primary_vs_14",
+}
+
+# Byte-identical SVG: a fixed hash salt makes element ids deterministic, `none` keeps text as text.
+SVG_RC: Final[dict[str, object]] = {
+    "svg.hashsalt": "stage14", "svg.fonttype": "none", "figure.dpi": 100, "path.simplify": False}
+
+# STROBE + RECORD items that name an output, mapped to the ids that discharge them. An item with an
+# empty tuple is a checklist entry nothing satisfies, and `report.write` refuses it (V3).
+CHECKLIST: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("STROBE 13 participants: numbers at each stage", ("T01",)),
+    ("STROBE 14 descriptive data", ("T02", "T04")),
+    ("STROBE 15 outcome data", ("T03",)),
+    ("STROBE 16 main results", ("T07", "T08", "F01")),
+    ("STROBE 16 other analyses: secondary, safety", ("T10", "T11", "F02")),
+    ("STROBE 17 other analyses: subgroups, sensitivity", ("T12", "T13", "T14", "F03")),
+    ("STROBE 12 statistical methods: balance and overlap", ("T05", "T06", "F04")),
+    ("STROBE 19 limitations: unmeasured confounding", ("T09",)),
+    ("RECORD 12.3 linkage and cleaning", ("T20",)),
+    ("[§14] transported analyses", ("T15", "T16", "T17", "T18", "T22", "F05")),
+    ("[§10] bootstrap and seed", ("T19", "T20")),
+    ("[§16] manuscript checklist emitted as a file", ("T21",)),
+)
+
+
 # --- the no-raw-names rule ---------------------------------------------------------------------
 #
 # "Nothing outside this module may reference a raw column name" is tested, not left as a convention.

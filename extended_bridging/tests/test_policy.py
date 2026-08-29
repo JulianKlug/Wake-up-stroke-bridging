@@ -70,11 +70,9 @@ def audit_of() -> data.Audit:
 
 
 def driver(df: pd.DataFrame, audit: data.Audit, with_inference: bool = False):
-    """§13's canonical call order."""
-    pop = policy.population(df, audit)
-    pol = policy.contrast(pop, audit)
-    boot = policy.inference(pop, audit) if with_inference else None
-    return pop, pol, boot
+    """§13's canonical call order, written once in `report._stage_13` [Stage 14 §4]."""
+    import report
+    return report._stage_13(df, audit, with_inference)
 
 
 def with_boot(n: int, fn):
