@@ -55,7 +55,7 @@ whoever declares the dtype — the first one's whole point disappears if `Float6
 
 ---
 
-## Correct Stage 4 §4.2 and Definition of done 9: a fill on E5 is a no-op, not a bug
+## Correct Stage 4 §4.2 and Definition of done 9: a fill on E5 is a no-op, not a bug — CLOSED 2026-09-08
 
 **Surfaced by:** implementing `specs/stage4_eligibility_classification.md`, 2026-08-12, while working
 Definition of done 9 — the one item of the thirteen that could not be satisfied.
@@ -118,8 +118,11 @@ corrected too — to the no-op reading, with the reason for still not writing th
 on pandas 2.3.3 before editing: the mask is `[False, False, True, True]`, dtype `boolean`, no `<NA>`,
 identical after `.fillna(False)`; `eligibility.py:140-148` already said so.
 
-**Status: the edit is made; PI sign-off on the three amended passages is outstanding.** Nothing in the
-code moved and no test changed.
+**Status: CLOSED 2026-09-08 — edit made and signed off.** The three amended passages (§3.1's
+third-fact paragraph, §4.2's mechanism paragraph, and DoD 9) were reviewed against the diff and
+approved. Nothing in the code moved, no test changed, and no reported number is affected: the
+correction is to a document's account of behaviour that `eligibility.py:140-148` already described
+correctly.
 
 ---
 
