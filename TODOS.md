@@ -1237,7 +1237,7 @@ number the fit produces.
 
 **Status: open**, trigger fired, fix declined with the reason restated.
 
-## A percentile interval on a parameter sitting at its boundary (Stage 12 §12.5, §21 item 7)
+## A percentile interval on a parameter sitting at its boundary (Stage 12 §12.5, §21 item 7) — CLOSED 2026-09-08
 
 **What.** `model.polr_ri`'s between-centre SD reaches `POLR_RI_SIGMA_FLOOR` in **22.0%** of replicates
 — measured over 200 — because [§14a] names `σ²_C = 0` as a legitimate answer and four clusters
@@ -1265,10 +1265,24 @@ surviving hierarchical replicates, 18.4%** — against the 22.0% this item recor
 name the rate rather than only whether the point estimate is at the floor
 (`test_report.py` §12.4a).
 
-**Status: open** on the half that was never code — **the PI's decision on how, or whether, to report an
-interval for `sigma` at all.** Printing the rate stops the interval being misread; it does not decide
-that a boundary-affected interval belongs in the manuscript. The three literature options this item
-rejects are unchanged.
+**DECIDED 2026-09-08 — the PI reports the interval WITH the caveat, and the caveat is the one already
+built.** Of the three options put — report it caveated, drop it and give the random-intercept arm by its
+risk differences alone, or give `sigma`'s point estimate and the boundary rate with no interval — the
+first is chosen. Nothing in the code changes: T15 already carries the rate and the reading rule, and
+that clause is now a reported result rather than an internal note, so it may not be dropped from a
+table that prints the interval.
+
+**What the decision does NOT do**, and it is worth stating because reporting a number tends to launder
+it: it does not make `0.0001 to 1.57427` a percentile interval for a between-centre SD. The lower limit
+is `POLR_RI_SIGMA_FLOOR`, reached in 18.4% of replicates, and a percentile limit at a boundary is the
+boundary rather than a quantile of anything. The three literature routes this item rejects — a
+likelihood-ratio interval against the `0.5·χ²₀ + 0.5·χ²₁` mixture, a parametric bootstrap inside the
+first, and a Bayesian fit with a prior on σ — are each a second inference procedure and remain
+rejected, the last by [§14a] explicitly. **A manuscript reviewer asking for a test of σ²_C = 0 is
+therefore still unanswerable with what is built**, which is the residual this decision accepts.
+
+**Status: CLOSED 2026-09-08** on both halves — the rate is printed and the reporting decision is taken.
+The unanswerable-test residual above is a known limitation and not open work.
 
 ## `RD_5` and `RD_4` coincide in 4.15% of the [§14a] draws (Stage 12 §6.3, §21 item 8)
 
