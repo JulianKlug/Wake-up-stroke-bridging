@@ -799,6 +799,15 @@ present, signed, and third-decimal.
 `death_90d`'s or `mrs_5_6_90d`'s share above 8 exceeds roughly a quarter, where a third-decimal shift
 would have room to become a second-decimal one.
 
+**PI SIGN-OFF, 2026-09-08 — the substitution of the closure test is approved.** The item's prescribed
+trigger was the `tau`/`max_abs_beta` correlation and closing on interval sensitivity instead is a
+change of criterion, not merely of measurement, so it needed a decision that was not the analyst's to
+take. Approved on the argument above: the correlation is nonzero for all five augmented outcomes
+including the one with no separation tail at all, so it does not discriminate contamination from the
+arithmetic of a correction term co-moving with its own coefficient. **The corrected trigger in the
+preceding paragraph is therefore the governing criterion from here**, including for any future workbook,
+and it supersedes the correlation test rather than sitting beside it.
+
 *Everything below is the item AS IT STOOD BEFORE this closure. Its status line is historical.*
 
 
