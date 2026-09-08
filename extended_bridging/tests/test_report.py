@@ -8,8 +8,10 @@ import os
 from pathlib import Path
 from typing import Final
 
+import numpy as np
 import pytest
 
+import bootstrap
 import config
 import data
 import report
@@ -113,6 +115,23 @@ def test_the_thinning_clause_names_surviving_counts_only_where_separation_remove
     assert "55 of 60 survive" in table(mixed[2], "T13")
     assert report.THINNING not in table(one_signed[2], "T13")
     assert report.THINNING in table(mixed[2], "T19") and report.THINNING not in table(one_signed[2], "T19")
+
+
+# --- 12.4a  the sigma boundary rate tracks the draws ----------------------------------------------
+
+def test_the_sigma_floor_rate_counts_draws_AT_the_floor_and_never_merely_NEAR_it():
+    floor = config.POLR_RI_SIGMA_FLOOR
+    at = np.array([floor, floor, 2.0 * floor, 0.5])
+    assert report._floor_rate(bootstrap.Draws("hier.sigma", at, 4, {})) == "2 of 4"
+    assert report._floor_rate(bootstrap.Draws("hier.sigma", np.array([0.5]), 1, {})) == "0 of 1"
+    assert report._floor_rate(None) == report._DASH
+
+
+def test_T15_names_the_sigma_BOUNDARY_RATE_and_not_only_whether_the_POINT_estimate_is_at_the_floor(mixed):
+    rendered = table(mixed[2], "T15")
+    assert "replicates at the floor: 0 of 60" in rendered
+    assert "is not a value for the between-centre SD" in rendered
+    assert "Point estimate at the floor: no" in rendered
 
 
 # --- 12.5  [§14] beside the primary ----------------------------------------------------------------

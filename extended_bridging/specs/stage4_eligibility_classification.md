@@ -208,9 +208,9 @@ this stage is one long chain of masks over nullable columns and the first two fa
 **The third fact is why `~…isin(…)` is the right shape for E4, E5 and `retained` and why none of
 them carries a `.fillna(False)`.** `isin` answers a membership question, and a missing value is not
 a member, so it returns `False` rather than propagating; negating it therefore *catches* the missing
-row instead of silently passing it. A fill on an `isin` mask would be worse than redundant: on E5 it
-would flip a missing exposure from caught to ignored, which is the opposite of what every other fill
-in this module does. The two constructs look alike and behave oppositely, and §4.2 relies on that.
+row instead of silently passing it. A fill on an `isin` mask is a pure **no-op** — the mask carries no
+`<NA>` for it to fill — and it is still wrong to write one, for the reason §4.2 gives. The two
+constructs look alike and behave oppositely, and §4.2 relies on that.
 Verified, not reasoned (§18) — including the dtype asymmetry, which is real and harmless: `isin` on
 the `string` `center` returns numpy `bool`, on the `Int64` exposure it returns pandas `boolean`, and
 neither carries `<NA>`.
@@ -336,12 +336,25 @@ def _assert_classifier_inputs(df: pd.DataFrame) -> None:
 single check: five independent properties of four columns are worth reporting together, so a
 corrected workbook is diagnosed in one run instead of five.
 
-**No fill on E4 or E5, deliberately, and it is the one place in this module where a fill would be a
-bug rather than belt-and-braces.** Both are `~…isin(…)`, and per §3.1 `isin` returns `False` for a
-missing value rather than `<NA>`, so the negation already catches it. `.fillna(False)` on E5 would
-convert "this patient's arm was never recorded" from *caught* into *ignored*. §4.3's masks are the
-opposite case and carry the fill for the opposite reason. Two constructs, one line apart, that look
-alike and must not be made uniform.
+**No fill on E4 or E5, deliberately — and the reason is not the one it is tempting to give.**
+Both are `~…isin(…)`, and per §3.1's third fact `isin` returns `False` for a missing value rather
+than `<NA>`, so the negation already catches it and the mask carries no `<NA>` at all. A
+`.fillna(False)` pasted onto E5 is therefore a **no-op**: it changes no behaviour and breaks no test.
+It is still wrong to write, because it asserts that this mask *can* carry `<NA>` when it cannot,
+which is what makes a reader stop believing the fills in §4.3 that are load-bearing — and because it
+becomes a real bug the moment either check is rewritten as a comparison chain, which propagates.
+`test_eligibility.py`'s `test_the_isin_masks_carry_no_na_on_either_dtype_they_are_used_over` pins the
+property both checks rest on, over both dtypes, so a pandas bump that made `isin` propagate fails
+loudly. §4.3's masks are the opposite case and carry the fill for the opposite reason. Two
+constructs, one line apart, that look alike and must not be made uniform.
+
+**Amended 2026-09-08.** This section previously read that a fill on E5 *"would convert 'this
+patient's arm was never recorded' from caught into ignored"*, and named E4/E5 *"the one place in this
+module where a fill would be a bug rather than belt-and-braces"*. Both are false against pandas
+2.3.3 and contradict §3.1's third fact, which the §20 review of 2026-08-12 added after this section
+was written; §18 and the shipped code were already correct. Measured: `~pd.Series([0, 1, 2, pd.NA],
+dtype="Int64").isin((0, 1))` is `[False, False, True, True]`, dtype `boolean`, carrying no `<NA>`,
+and identical after `.fillna(False)`.
 
 **E5 is checked after E3 although E3 reads the column E5 validates**, and the order is inert because
 the messages are collected rather than raised: a frame that trips both reports both. What E5 changes
@@ -1366,9 +1379,13 @@ Stage 4 is complete when all of the following hold, and not before.
    half must be watched on the bare `hand_frame()`, where it and the reconciliation catch *different*
    subsets — if removing E4 changes nothing, the two guards have been collapsed into one and §7.1's
    argument for keeping both no longer holds.
-9. A `.fillna(False)` pasted onto E5's mask has been **seen to make a test fail** — 12.3's
-   missing-exposure half. This is the one uniformity an implementer is most likely to impose (§3.1),
-   and it must not be silently absorbable.
+9. **Struck, 2026-09-08 — it was unsatisfiable, and §4.2's amendment is why.** It required a
+   `.fillna(False)` pasted onto E5's mask to have been *seen to make a test fail*; the fill is a
+   no-op, so no test can fail on it. The property E4 and E5 actually rest on — that `~…isin(…)`
+   carries no `<NA>` on either dtype — is pinned instead by `test_eligibility.py`'s
+   `test_the_isin_masks_carry_no_na_on_either_dtype_they_are_used_over`, which fails loudly if a
+   pandas bump makes `isin` propagate. Nothing else in this list moves and the numbering is kept, so
+   DoD 13's and §1506's references to the items around it still resolve.
 10. Acceptance 12.14 has been **seen to fail** with `df.copy()` moved below the column assignment:
     the caller's frame gains the column. Nothing else in §12 notices, which is the point.
 11. Acceptance 12.6's two scans have been **seen to fail** against a pasted label literal and a pasted

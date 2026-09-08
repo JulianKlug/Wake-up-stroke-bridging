@@ -107,6 +107,20 @@ sign-off rather than a unilateral edit: **§4.2's mechanism sentence and DoD 9 b
 pointer to §3.1's third fact and to the test named above.** Nothing else in the spec moves — §3.1,
 §18, §12.3 and the shipped code are all already correct.
 
+**AMENDED IN THE SPEC 2026-09-08, AND THE ERRATUM HAD A THIRD SITE THIS ITEM MISSED.** §4.2's
+mechanism sentence is replaced (with the correction dated in place), and DoD 9 is struck with its
+number kept, so DoD 13's and §1506's references to its neighbours still resolve. The claim above that
+*"nothing else in the spec moves — §3.1 … already correct"* is **false**: §3.1's third-fact paragraph
+closed with *"A fill on an `isin` mask would be worse than redundant: on E5 it would flip a missing
+exposure from caught to ignored"*, which is the same false mechanism in the section §4.2 cites as its
+authority. Leaving it would have kept the self-disagreement this item exists to remove, so it is
+corrected too — to the no-op reading, with the reason for still not writing the fill kept. Re-verified
+on pandas 2.3.3 before editing: the mask is `[False, False, True, True]`, dtype `boolean`, no `<NA>`,
+identical after `.fillna(False)`; `eligibility.py:140-148` already said so.
+
+**Status: the edit is made; PI sign-off on the three amended passages is outstanding.** Nothing in the
+code moved and no test changed.
+
 ---
 
 ## Commit a `tests/fixture_cohort.xlsx` that reads into a both-armed cohort
@@ -579,7 +593,7 @@ same trigger.
 
 **Status: open**, narrowed twice — both halves measured, both consequences absent.
 
-## Make the pipeline resamplable: `propensity.fit` raises on 26.0% of stratified replicates
+## Make the pipeline resamplable: `propensity.fit` raises on 26.0% of stratified replicates — CLOSED
 
 **What.** `propensity._record_exclusion` (`propensity.py:400-432`) compares the number of **distinct**
 excluded `case_id`s against the number of excluded rows and raises `SchemaError` when they differ. Its
@@ -625,7 +639,7 @@ which the rename does not touch; see the item below.
 
 **Status: closed.**
 
-## Decide whether a constant outcome on a replicate is `SchemaError` or `FitError` (Stage 9 S8)
+## Decide whether a constant outcome on a replicate is `SchemaError` or `FitError` (Stage 9 S8) — CLOSED
 
 **What.** Stage 9 §4.4's precondition S8 raises `SchemaError` when a binary outcome is constant on its
 [§11] population. Stage 9 §16 item 3 calls this *"the sharpest open question the stage leaves"*.
@@ -650,7 +664,66 @@ neither fired in 2000 replicates.
 
 **Status: closed.**
 
-## Establish whether `death_90d`'s and `mrs_5_6_90d`'s `max|beta|` tail leaves their intervals usable (Stage 9 §9.6)
+## Establish whether `death_90d`'s and `mrs_5_6_90d`'s `max|beta|` tail leaves their intervals usable (Stage 9 §9.6) — CLOSED 2026-09-08
+
+**CLOSED 2026-09-08, AND IT DOES NOT CLOSE ON THE TRIGGER THIS ITEM NAMED.** Measured over the [§10]
+draw at `C.SEED`, pairing each replicate's `tau` with its own `max_abs_beta` inside
+`bootstrap._replicate`'s return value — the same loop, seed and stream `bootstrap.run` uses, so these
+are the reported draws and not a second bootstrap:
+
+| outcome | paired | max\|β\| median / max | >8 | Spearman (p) | Pearson (p) |
+|---|---|---|---|---|---|
+| `death_90d` | 1997 | 4.425 / 59.536 | 8.4% | **+0.158** (<0.001) | +0.050 (0.026) |
+| `mrs_5_6_90d` | 1998 | 4.990 / 52.698 | 11.6% | **+0.174** (<0.001) | +0.033 (0.136) |
+| `mrs_0_2_90d` | 1998 | 3.825 / 20.877 | 4.3% | −0.241 (<0.001) | −0.265 (<0.001) |
+| `mrs_0_1_90d` | 1998 | 2.482 / 33.832 | 1.9% | −0.128 (<0.001) | −0.082 (<0.001) |
+| `tici_2b_3` | 1995 | 2.597 / 9.614 | 0.2% | **−0.445** (<0.001) | −0.452 (<0.001) |
+
+**The trigger was "if `tau` is uncorrelated with `max_abs_beta`, close as theoretical", and `tau` is
+NOT uncorrelated — for any of the five.** Taken at face value that would leave the item open on every
+augmented outcome at once, which is the signal that the discriminator is wrong rather than that five
+estimators are contaminated. `tici_2b_3` is the proof: it has the **strongest** association of the
+five (Spearman −0.445) and **no separation tail at all** — its `max|β|` never exceeds 9.61 and 0.2% of
+replicates pass 8. A nuisance coefficient's magnitude and the correction term it drives co-move
+because the correction term is a function of it. That is arithmetic, not contamination.
+
+**What answers the item is the interval, and the answer is that the tail does not decide it.**
+Recomputing each percentile interval over the replicates whose `m_a(X)` is *not* separated:
+
+| outcome | interval, all draws | `max\|β\| <= 8` | width | `max\|β\| <= 14` | width |
+|---|---|---|---|---|---|
+| `death_90d` | −0.12827 to +0.32957 | −0.11681 to +0.32708 | ×0.970 | −0.12059 to +0.32841 | ×0.981 |
+| `mrs_5_6_90d` | −0.17127 to +0.29210 | −0.16644 to +0.28500 | ×0.974 | −0.16580 to +0.29170 | ×0.987 |
+| `mrs_0_2_90d` | −0.20743 to +0.36359 | −0.19864 to +0.36427 | ×0.986 | −0.20479 to +0.36359 | ×0.995 |
+| `mrs_0_1_90d` | −0.30469 to +0.20269 | −0.30332 to +0.19938 | ×0.991 | −0.30469 to +0.20032 | ×0.995 |
+| `tici_2b_3` | −0.11633 to +0.17038 | −0.11633 to +0.17038 | ×1.000 | −0.11633 to +0.17038 | ×1.000 |
+
+No limit moves by more than **0.012** on an interval **0.46** wide, and no width by more than **3%**.
+The direction is stated because it is the unfavourable one and it is real: on both safety outcomes the
+separated replicates carry a **larger** `tau` — `death_90d` median +0.1405 against +0.1123
+(Mann-Whitney p = 0.020), `mrs_5_6_90d` +0.0943 against +0.0692 (p = 0.003) — so the tail nudges the
+augmented safety estimates toward *more* apparent harm from bridging, by about a hundredth of a risk
+difference. **That is smaller than the reporting resolution of a descriptive [§10] estimate and cannot
+move a conclusion drawn from one.**
+
+**The exclusion above is a DIAGNOSTIC and is not a candidate estimator.** Dropping replicates on
+`max_abs_beta` is selection on an estimated quantity — the defect Stage 12's `hier.sigma` item and
+[§10]'s own p-value rule both exist to avoid — so the reported intervals stay the all-draws ones. What
+the recomputation establishes is a *bound* on how much the tail could be doing, not a better number.
+
+**Stage 9's structural argument is what this confirms**, and it is why no bound on `m_a(X)` is added:
+predictions enter `tau`, predictions are bounded in [0, 1], and so an unbounded nuisance coefficient
+cannot produce an `exp(β)`-style tail in the estimate. The measurement now says the residual effect is
+present, signed, and third-decimal.
+
+**Trigger, corrected and carried forward.** Not the correlation, which is nonzero by construction.
+**Either limit of an augmented outcome's interval moving by more than one reporting digit when the
+`max|β| <= 8` replicates are dropped** — measured at ≤0.012 today — or a workbook on which
+`death_90d`'s or `mrs_5_6_90d`'s share above 8 exceeds roughly a quarter, where a third-decimal shift
+would have room to become a second-decimal one.
+
+*Everything below is the item AS IT STOOD BEFORE this closure. Its status line is historical.*
+
 
 **What.** Stage 9 prescribes **no bound** on the `m_a(X)` coefficient, on two grounds: there is no empty
 band to calibrate one from — `sich`'s `max|β|` runs continuously from 0.8558 to 80.9825 across
@@ -681,7 +754,8 @@ over-fitted, so its correction term removes signal rather than residual confound
 per outcome, computable from draws Stage 10 already takes. If `death_90d`'s and `mrs_5_6_90d`'s `tau` is
 uncorrelated with their `max_abs_beta`, this closes as theoretical — and should be closed explicitly.
 
-**Status: open**, and now actionable: Stage 10 reports the distribution (Stage 10 §10.2).
+**Status (historical): open**, and now actionable: Stage 10 reports the distribution (Stage 10
+§10.2). Superseded by the closure at the head of this item.
 
 ## TICI's reduced `m_a(X)` is five parameters only while USZ contributes no records
 
@@ -847,7 +921,7 @@ stratum labels in the run summary beside the seed.
 
 **Status: open**, low consequence, stated so it is not rediscovered as a reproducibility failure.
 
-## Fix the stale `data.py:255` citation in `propensity.py` — CLOSES with Stage 11
+## Fix the stale `data.py:255` citation in `propensity.py` — CLOSES with Stage 11 — CLOSED
 
 **What.** `propensity.py:413`, inside `_record_exclusion`'s docstring, cites `data.py:255` for
 `Audit.record`'s identifier normalisation. That normalisation is at `data.py:271`. `data.py` is unchanged
@@ -909,6 +983,8 @@ every draw set (primary/secondary, subgroups, arm, [§14a], [§14b]) with a `den
 row, and every estimate row of T07/T10/T11/T13 carries its own [§11] denominator. The Stage 10 audit
 entry itself is unchanged, for §12.12's byte-identity reason.
 
+*Everything below is the item AS IT STOOD BEFORE that discharge. Its status line is historical.*
+
 **What.** `_diagnostics_table`'s block in the `bootstrap_replicates` audit entry renders four
 distributions and one per-outcome counter, over **three different denominators**, none of them labelled.
 
@@ -929,10 +1005,10 @@ row of the concatenated grid keeps the same cell count (§15.13).
 
 **Depends on / blocked by.** Stage 10 T9, the audit entry and its grid.
 
-**Status: open**, cheap, filed so the grid is not shipped ambiguous.
+**Status (historical): open** — superseded by the discharge at the head of this item.
 
 
-## A 12.5% bootstrap drop rate exists, and nothing prescribes what to do about it (Stage 11 §8.4, §16 item 1)
+## A 12.5% bootstrap drop rate exists, and nothing prescribes what to do about it (Stage 11 §8.4, §16 item 1) — CLOSED
 
 **What.** Stage 11's `unknown_onset` subgroup loses **250 of 2000** replicates: 9 to O6 rank deficiency
 when a replicate draws no treated patient at witnessed onset, 241 to G9 when the fit converges and
@@ -992,7 +1068,7 @@ onto `Primary`, and `Arm` should read it rather than assert it.
 
 **Status: open**, deferred with a named trigger.
 
-## The draws-to-intervals loop exists in two modules (Stage 11 §3.2, §16 item 7)
+## The draws-to-intervals loop exists in two modules (Stage 11 §3.2, §16 item 7) — CLOSED 2026-08-27
 
 **What.** `bootstrap.run` turns a `dict[str, Draws]` into a `dict[str, Interval]` at
 `bootstrap.py:1105-1111`, and `sensitivity._intervals` does the same for the [§13] arm and the [§13]
@@ -1093,7 +1169,20 @@ and put it to the PI.** Stage 12 §17.2 requires the boundary rate printed besid
 **Trigger.** Any reading of `hier.sigma`'s interval as a range for the between-centre SD, or a
 manuscript reviewer asking for a test of `σ²_C = 0`.
 
-**Status: open**, put to the PI, and it is a reporting decision before it is a code one.
+**Amended 2026-09-08 — the reporting half is built, and the rate is 18.4%.** T15 now carries the
+boundary rate beside the interval, computed from the retained `hier.sigma` draws by `report._floor_rate`
+(an exact equality against `POLR_RI_SIGMA_FLOOR`, which `model._ri_fit` snaps to for precisely this
+reason), together with the statement that a limit sitting AT the floor reports a collapsed variance and
+**is not a value for the between-centre SD**. Measured on the workbook at `C.SEED`: **368 of 1998
+surviving hierarchical replicates, 18.4%** — against the 22.0% this item recorded from 200 replicates.
+`report._floor_rate` is unit-tested on draws at and near the floor, and T15's clause is asserted to
+name the rate rather than only whether the point estimate is at the floor
+(`test_report.py` §12.4a).
+
+**Status: open** on the half that was never code — **the PI's decision on how, or whether, to report an
+interval for `sigma` at all.** Printing the rate stops the interval being misread; it does not decide
+that a boundary-affected interval belongs in the manuscript. The three literature options this item
+rejects are unchanged.
 
 ## `RD_5` and `RD_4` coincide in 4.15% of the [§14a] draws (Stage 12 §6.3, §21 item 8)
 
@@ -1113,7 +1202,7 @@ interval widths.
 
 **Status: open**, and it is a reporting caveat rather than a defect.
 
-## `polr_ri` ships without an independent implementation having agreed with it (Stage 12 §12.7, §26)
+## `polr_ri` ships without an independent implementation having agreed with it (Stage 12 §12.7, §26) — CLOSED 2026-08-27
 
 **CLOSED, 2026-08-27, AND IT CLOSES POSITIVELY.** The Stage 12 spec records this as the one estimator
 in the pipeline with no external agreement, because R segfaulted at startup on the machine the spec was
@@ -1130,7 +1219,12 @@ intercept. `as.numeric(NULL)` is `numeric(0)`, so `data.frame()` failed on a len
 oracle **failed for a reason unrelated to the estimator**. That is the failure mode a gated oracle is
 worst at surfacing, because a red test and a skipped test both read as "not verified".
 
-**Status: closed.** The gate stays in place for checkouts whose R is broken.
+**Status: closed.** The gate stays in place for checkouts whose R is broken. **Re-run green
+2026-09-08**: `tests/test_reference_r.py` passes 24 of 24 on this machine, both `clmm` tests included
+— the agreement is reproducible and not a one-off.
+
+*Everything below is the item AS IT STOOD BEFORE the closure above, kept as the record of what was
+open and why. Its status line is historical and does not describe the repository today.*
 
 **What.** `model.polr_ri` is a new maximiser and Stage 12 §12.7 specifies its `ordinal::clmm` oracle in
 full — the three-way sign asymmetry, `nAGQ = POLR_RI_NODES`, the separate tolerance on σ. **The oracle
@@ -1147,7 +1241,8 @@ handling. It is the only estimator in the pipeline in that position.
 **Trigger.** Stage 12's implementation step 7. Opening the gate is the deliverable, not a nice-to-have,
 and `_r_environment` is the fix the environment needs.
 
-**Status: open**, and it blocks calling the hierarchical arm verified.
+**Status (historical): open**, and it blocked calling the hierarchical arm verified — until the
+oracle ran. Superseded by the closure at the head of this item.
 
 ## The [§14a] transported population is 12 and not 14 (Stage 12 §4.1, §21 item 9)
 
@@ -1183,6 +1278,15 @@ different-populations statement.
 **Status: open**, and it is the PI's rather than a code change.
 
 ## Stage 12's spec is written against an unlanded Stage 11 (Stage 12 header, §21 item 11)
+
+**CLOSED 2026-09-08 — overtaken, exactly as this item predicted.** Stage 11 landed and all three
+named dependencies hold, checked rather than assumed: `bootstrap.bucket` (bootstrap.py:519),
+`bootstrap.collect` (bootstrap.py:733) and `bootstrap.intervals` (bootstrap.py:448) are public and are
+the ones `standardise` and `policy` call; the interval loop is not duplicated; and
+`outcome.estimation_population` exists and is still deliberately unused by [§14a]. Neither §13.2 nor
+§13.3 was made wrong.
+
+*Everything below is the item as it stood before Stage 11 landed.*
 
 **FIRED AT IMPLEMENTATION, 2026-08-27, and this is what it cost.** The trigger this item names is
 *"Stage 11 landing with `bucket`/`collect` private, or `intervals` not extracted"*. Stage 11 has not
@@ -1227,10 +1331,10 @@ dependencies are small and named. But they are assumptions about code that does 
 **Trigger.** Stage 11 landing with `bucket`/`collect` private, or with the interval loop left
 duplicated. Either makes Stage 12 §13.3 and §13.2 wrong rather than merely early.
 
-**Status: open**, and it closes when Stage 11 lands.
+**Status (historical): open**, and it closes when Stage 11 lands — which it now has.
 
 
-## Stage 12's implementation found two numerical defects in `polr_ri` that the spec could not have (Stage 12 §12.2, §12.4)
+## Stage 12's implementation found two numerical defects in `polr_ri` that the spec could not have (Stage 12 §12.2, §12.4) — CLOSED
 
 **What.** Both were found by running the estimator at `N_BOOT = 2000` rather than by reading it, both
 made the fit return the RIGHT ANSWER through a line search doing the wrong job, and both are now
@@ -1301,7 +1405,7 @@ cannot move a percentile interval materially; at a higher rate it could.
 1%; or a [§14] amendment prescribing a recovery path. **Status: open**, and it amends Stage 12 §13.4's
 "nothing fails" to "nothing fails in the pooled and support arms; the hierarchical arm drops 0.1%".
 
-## Stage 12 §25's step 0 is done, and three of the hierarchical arm's rates moved (Stage 12 §12.5, §12.8, §21 item 13)
+## Stage 12 §25's step 0 is done, and three of the hierarchical arm's rates moved (Stage 12 §12.5, §12.8, §21 item 13) — CLOSED
 
 **What.** Stage 12 §21 item 13 records that every hierarchical rate in the specification is a
 200-replicate measurement and that §25's step 0 must replace them with `N_BOOT` figures before the
@@ -1419,6 +1523,12 @@ for one sub-population. A [§14] amendment.
 than as a model prediction. **Status: closed 2026-08-29 — Stage 14 prints `Policy.label` and `Policy.measure`
 beside the model prediction (T18); the PI confirmed the model prediction stands and the plug-in is not built.**
 
+Put to the PI on 2026-08-29 after the engineering review's outside voice called the plug-in the
+natural estimator for the fourteen distribution keys. The PI confirmed the model prediction, which
+the SAP prescribes (*"predict every resampled patient under both regimes"*, *"model-based transported
+results"*); DECISION 10 stands unamended. Reopening requires a [§14b] amendment. *(Filed 2026-09-08
+from under the following heading, where it read as that item's status.)*
+
 ## The separated-indicator draw is benign, at 1 in 2000 (Stage 13 §9.1, §17 item 5)
 
 **What.** One stratified replicate drew every contraindicated patient at mRS 6; the indicator's
@@ -1429,8 +1539,6 @@ and U8 deliberately does not bind the indicator.
 **Trigger.** The rate exceeding 1%, or a workbook where a centre's contraindicated patients share one
 outcome — at which point the fit is slow rather than wrong, and the question is cost. **Status: open,
 low consequence.**
-
-**Status: CLOSED.** Put to the PI on 2026-08-29 after the engineering review's outside voice called the plug-in the natural estimator for the fourteen distribution keys. The PI confirmed the model prediction, which the SAP prescribes (*"predict every resampled patient under both regimes"*, *"model-based transported results"*); DECISION 10 stands unamended. Reopening requires a [§14b] amendment.
 
 ## Figures have no independent oracle (Stage 14 §13 item 1)
 

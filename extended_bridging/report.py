@@ -561,6 +561,20 @@ def _collapse_count(draws: dict[str, bootstrap.Draws], prefix: str) -> str:
     return f"{int(np.sum(a.draws == b.draws))} of {len(a.draws)}"
 
 
+def _floor_rate(draws: bootstrap.Draws | None) -> str:
+    """Replicates whose `hier.sigma` came back AT `POLR_RI_SIGMA_FLOOR`, over the surviving draws.
+
+    An EXACT equality and that is safe rather than fragile: `model._ri_fit` snaps `sigma` to the
+    constant at the boundary precisely so this comparison means "collapsed" (model.py:1471-1477), and
+    `standardise._replicates_table` counts it the same way. Computed from the retained draws for
+    `_collapse_count`'s reason — the rate is a property of the interval's own order statistics, so a
+    second field carrying it could disagree with them.
+    """
+    if draws is None:
+        return _DASH
+    return f"{int(np.sum(draws.draws == C.POLR_RI_SIGMA_FLOOR))} of {len(draws.draws)}"
+
+
 def _t15(run: Run) -> Table:
     header = ("population", "quantity", "estimate", "ci lo", "ci hi", "draws")
     blocks = ((run.std, ""), (run.std_support, "support."), (run.hier.standardisation, "hier."))
@@ -580,8 +594,12 @@ def _t15(run: Run) -> Table:
                f"Draws in which RD_5 equals RD_4 exactly (a lost mRS level): all eligible "
                f"{_collapse_count(run.std_boot.draws, '')}; support {_collapse_count(run.std_boot.draws, 'support.')}; "
                f"random intercept {_collapse_count(run.std_boot.draws, 'hier.')}.",
-               f"Random-intercept fit at the sigma floor on the point estimate: "
-               f"{'yes' if run.hier.at_floor else 'no'}.",
+               f"sigma is bounded below at POLR_RI_SIGMA_FLOOR = {C.POLR_RI_SIGMA_FLOOR:g}, and "
+               f"[§14a] names sigma^2_C = 0 a legitimate answer, so a limit sitting AT the floor "
+               f"reports a variance that collapsed and is not a value for the between-centre SD — "
+               f"an interval so limited is not a range for centre heterogeneity [Stage 12 §12.5]. "
+               f"Point estimate at the floor: {'yes' if run.hier.at_floor else 'no'}; "
+               f"replicates at the floor: {_floor_rate(run.std_boot.draws.get('hier.sigma'))}.",
                _interval_note(run.std_boot))
     return (header, *rows), clauses
 
