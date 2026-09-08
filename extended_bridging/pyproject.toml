@@ -39,6 +39,15 @@ dependencies = [
 [dependency-groups]
 dev = ["pytest>=8.0"]
 
+# The kernel the three notebooks in `notebooks/` run on, and nothing else. A group rather
+# than a base dependency because no shipped module imports it, so a plain `uv sync` stays
+# an analysis environment; `uv sync --group notebook` adds the kernel to the SAME `.venv`,
+# which is what makes the notebooks see the locked numpy and pandas.
+#
+# It has to live here rather than being pip-installed on the side: `uv sync` prunes what
+# the lock does not list, so a hand-installed ipykernel disappears at the next sync.
+notebook = ["ipykernel>=6.29"]
+
 # The one place in this repository where a dependency exists to DISAGREE with the code
 # rather than to run it [Stage 6 §2, §16b]. `firthlogist` is the only working Python
 # Firth implementation and it cannot be a runtime dependency: last released 2022-08-07,
