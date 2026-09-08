@@ -11,8 +11,9 @@ standardisation for the all-centre and feasible-policy analyses.
 
 ## Patient data availability
 
-**The patient data cannot be shared, and no version of it is in this repository.** `data/` is
-gitignored, as is `out/`, which carries the estimate. The workbook is verified by SHA-256 at load
+**The patient data cannot be shared. No version of it is in this repository, and none will
+accompany publication or any archive release.** `data/` is gitignored, as is `out/`, which carries the
+estimate. The workbook is verified by SHA-256 at load
 (`config.DATA_SHA256`), so the analysis either runs against the exact file the results were produced
 from or refuses to run.
 
@@ -25,7 +26,9 @@ from or refuses to run.
 | Estimator internals | Yes | Every fitter is exercised on synthetic data with known answers, and four R oracles (`logistf`, `PSweight`, `ordinal::clm`, `ordinal::clmm`) plus statsmodels' `OrderedModel` check them independently where those packages are available. |
 
 A committed both-arm fixture that would make the whole pipeline runnable from a checkout is filed in
-`../TODOS.md` and has not been built.
+`../TODOS.md` and has not been built. Because the data will not be released either, such a fixture is
+the **only** way any reader outside the study team could ever execute this pipeline; the tests above
+are otherwise the whole of what is externally runnable.
 
 ## Running it
 

@@ -182,6 +182,12 @@ roughly 1300 carry the data gate — about 10%.** A checkout with no `data/` the
 majority of the suite; what it cannot do is drive the pipeline from a `data.Source`, because both
 committed inputs stop at Stage 5's both-arms postcondition exactly as the table above shows.
 
+**Confirmed 2026-09-08: the data will not be available for an archive release either.** That
+removes the first reading entirely rather than settling it. No external party will ever run this
+pipeline against the real workbook, so the fixture is not a convenience next to a dataset that is
+merely awkward to obtain — it is the only executable path that will ever exist for a reader outside
+the study team, and the ~10% of tests that skip are the whole of what such a reader loses today.
+
 **Recommendation: build it, but not as a manuscript blocker.** It is worth having for the archive
 release and it is the honest support for a "code available" statement. It is NOT worth doing before
 drafting, and it is a Stage 1/Stage 2 amendment rather than a new file alone — `data.SOURCES` is pinned
