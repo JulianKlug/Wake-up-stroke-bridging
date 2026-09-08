@@ -170,6 +170,27 @@ engineering review. Every Stage 6 acceptance test runs on a frame or on syntheti
 `specs/stage6_propensity_and_weights.md` §12.0. **Stage 10 is the likelier trigger**: a resampling test
 wants a reproducible file rather than a frame built in Python. Re-evaluate there.
 
+**Status update, 2026-09-08 — the PI has decided the patient data CANNOT BE SHARED, and that cuts both
+ways rather than closing this item.** The reading that closes it: no reproducibility claim is made, so
+nothing needs to be runnable and the limitation is documented instead — which is now done, in
+`README.md`. The reading that sharpens it: the code is the *only* artifact that can be published, so a
+synthetic fixture is the only path by which any external reader executes this pipeline at all, and the
+gap between "code you can read" and "code you can run" is exactly what an unshareable dataset creates.
+
+**Measured, so the choice is made on a number rather than on a feeling:** **130 test functions of
+roughly 1300 carry the data gate — about 10%.** A checkout with no `data/` therefore runs the large
+majority of the suite; what it cannot do is drive the pipeline from a `data.Source`, because both
+committed inputs stop at Stage 5's both-arms postcondition exactly as the table above shows.
+
+**Recommendation: build it, but not as a manuscript blocker.** It is worth having for the archive
+release and it is the honest support for a "code available" statement. It is NOT worth doing before
+drafting, and it is a Stage 1/Stage 2 amendment rather than a new file alone — `data.SOURCES` is pinned
+to a literal of exactly two in `test_data.py:118-123` — so it wants explicit sign-off rather than being
+folded into unrelated work.
+
+**Status: open**, decided in part: the limitation is documented, and whether the fixture is built is a
+release-scope call the PI has not yet made.
+
 ---
 
 ## Extract a shared table row-builder from `data.absence_by_column` — CLOSED 2026-08-29 (in part)
