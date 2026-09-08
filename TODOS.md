@@ -263,7 +263,54 @@ copy must keep and the builder would enforce once.
 
 ---
 
-## Get the cross-model second opinion on the Stage 6 spec
+## Get the cross-model second opinion on the Stage 6 spec — CLOSED 2026-09-08, ALREADY DELIVERED
+
+**NOT WAIVED — DISCHARGED, ON 2026-08-14 AND 2026-08-16, AND THIS ITEM WAS NEVER RECONCILED WITH IT.**
+The item was filed at the moment the `codex exec` pass died on `401 Unauthorized` and records that *"no
+substitute was dispatched"*. A substitute was dispatched, twice, the same day. The Stage 6 spec's own
+§19 — the section this item cites as the outstanding ask — now reads: *"It has now had both, and §20 is
+the record. The engineering review is §20's rounds 1 and 2; **the independent second reader this
+section asked for is §20.1**, obtained on 2026-08-14 after a first attempt failed on authentication. A
+**second** independent reviewer ran after those corrections landed."*
+
+**What was actually delivered, from §20.1, §20.1a and §20.1b:**
+
+| round | what | findings |
+|---|---|---|
+| 3 (§20.1) | independent reviewer, no prior context, read the document and ran its code | **17**, none overlapping rounds 1-2, plus an 18th that retracted a round-2 conclusion |
+| 4 (§20.1a) | a **second** independent reviewer, no prior context, after round 3's corrections landed | **17**, again none overlapping — one in the statistics (finding 35, a non-concave penalised likelihood converging to a local maximum in 1 replicate of 2000), the rest the document disagreeing with itself |
+| 5 (§20.1b) | audit of the four findings round 4 left | **5**, two adding a runtime guard (D4; the reachable `FIRTH_WEIGHT_FLOOR`) |
+
+Fifty-two numbered findings across the document, and **four passes that all ran code produced four
+disjoint defect sets of the same size** — which is precisely the signal this item wanted ("two models
+disagreeing is a stronger signal than one model agreeing with itself") and a larger one than it
+predicted. Round 5 closes with the only honest summary available: no new defect in the estimator, the
+first round of five in which the document did not disagree with itself in a way nobody had already
+named, *"weak evidence of convergence"* and not to be read as more.
+
+**The one thing the record does NOT establish** is the literal wording of this item's title. §19, §18d
+and §20.1/§20.1a describe *"a reviewer with no prior context"* and *"a second reviewer with no prior
+context"*; they do not name which model each was, so "cross-model" is not documented even though
+independence and disjointness are. That is a gap in the provenance record, not in the review coverage,
+and it is not worth a third pass to fix.
+
+**Why a further review is not recommended.** The item's own cheapness argument was *"a second reader is
+cheapest now, before `model.py`, `propensity.py` and two test files are written against the spec"*, with
+the instruction to do it **before T2 of Stage 6 starts**. Stage 6 landed on 2026-08-16 and Stages 7-14
+are built on it, so that window shut three weeks ago: a finding now costs a code change, a test change
+and a re-run of every downstream interval. Set against that, rounds 3-5 already reviewed the *revised*
+document — which the item names as the point — and the marginal yield of a fourth independent reader
+over 52 acted-on findings is the unknown the item's own Cons paragraph flagged.
+
+**Independent evidence standing behind Stage 6's machinery, over and above the reviews:** the `logistf`
+oracle on the Firth kernel against the workbook design, four `PSweight` oracles on `e`, `w`, the ESS and
+its `ddof` convention, `test_propensity.py`'s 57 tests, `test_model.py`'s 148, and Definition of done
+items 6-12 as break-it-and-watch instructions. Those check that the code computes what the spec
+prescribes. **What no oracle can check is whether the spec prescribed the right thing** — that is the
+residual this closure accepts, and the reviews are the only instrument that ever addressed it.
+
+*Everything below is the item as filed on 2026-08-14, before the substitute reviews were dispatched.*
+
 
 **Surfaced by:** the engineering review of `specs/stage6_propensity_and_weights.md`, 2026-08-14 — as the
 one piece of that review's own scope it failed to deliver. Recorded in that spec's §19 and §20.
