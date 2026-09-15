@@ -44,6 +44,10 @@ import sensitivity  # noqa: E402
 import standardise  # noqa: E402
 from data import _fmt, _md_table  # noqa: E402
 
+# The manuscript layer formats numbers with the SAME function the tables do; it may not import
+# `data._fmt` itself, because its neighbour below is this module.
+fmt = _fmt
+
 Rows = tuple[tuple[str, ...], ...]
 Table = tuple[Rows, tuple[str, ...]]          # (header-first rows, clauses printed beneath)
 
@@ -95,6 +99,8 @@ ATO_DESCRIPTION: Final[str] = (
     "The weighted columns describe the [§7] overlap (ATO) population — patients whose treatment was "
     "genuinely in equipoise at the participating centres — not the cohort.")
 UNCORRECTED_PRIMARY: Final[str] = "The primary p-value is uncorrected [§13]."
+AGREEMENT_NOT_REASSURANCE: Final[str] = (
+    "Agreement with the primary must not be read as reassurance about unmeasured confounding [§13].")
 
 
 # --- what the stage returns ----------------------------------------------------------------------
@@ -193,8 +199,14 @@ def run(source: data.Source = data.WORKBOOK) -> Run:
 
 
 # --- the data-derived clauses --------------------------------------------------------------------
+#
+# `direction_clause`, `exceedance_clause`, `interval_note`, `pmf` and `render_csv` are PUBLIC for
+# `balance.levels`'s reason [Stage 7 §5.5]: `figures_and_tables/` builds the manuscript exhibits from
+# the same run, and a second copy of a [§16] sentence is a second definition of what the report says.
+# The manuscript figures draw themselves; only the statements and the per-category distribution are
+# shared, because those are the parts [§16] requires to be identical.
 
-def _direction_clause(rd: dict[int, float]) -> str:
+def direction_clause(rd: dict[int, float]) -> str:
     """Present iff the six RD_k do not share a sign — computed, never asserted [§16a]."""
     return DIRECTION if len({np.sign(v) for v in rd.values()}) > 1 else ""
 
@@ -208,7 +220,7 @@ def _thinning_clause(draws: dict[str, bootstrap.Draws]) -> str:
     return f"{THINNING} Surviving counts — {counts}."
 
 
-def _exceedance_clause(bal: balance.Balance) -> str:
+def exceedance_clause(bal: balance.Balance) -> str:
     """Names every covariate whose residual |SMD| reaches the threshold, with its magnitude [§9]."""
     over = bal.unbalanced()
     if not over:
@@ -267,7 +279,7 @@ def _weighted_mean(x: pd.Series, w: pd.Series) -> float:
     return float((x[ok] * w[ok]).sum() / w[ok].sum())
 
 
-def _pmf(cumulative: dict[int, dict[int, float]], arm: int) -> list[float]:
+def pmf(cumulative: dict[int, dict[int, float]], arm: int) -> list[float]:
     """P(Y=j) for every MRS level, from the cumulative table; the last level is the complement."""
     out, previous = [], 0.0
     for k in C.MRS_THRESHOLDS:
@@ -277,7 +289,7 @@ def _pmf(cumulative: dict[int, dict[int, float]], arm: int) -> list[float]:
     return out
 
 
-def _interval_note(boot: bootstrap.Bootstrap) -> str:
+def interval_note(boot: bootstrap.Bootstrap) -> str:
     return (f"Intervals: {_fmt(C.CI_LEVEL)} percentile ({C.PERCENTILE_METHOD}), {boot.n_boot} "
             f"replicates, seed {boot.seed}; the surviving draw count is printed beside each [§10].")
 
@@ -304,9 +316,15 @@ def _t01(run: Run) -> Table:
                          "populations are cohort, covariate-complete, outcome-present.",)
 
 
-def _t02(run: Run) -> Table:
-    df = run.cohort[run.ps.in_model]
-    w = run.ps.w[run.ps.in_model]
+def baseline_rows(cohort: pd.DataFrame, ps: propensity.Propensity) -> Rows:
+    """One row per DECLARED level of every [§9] balance covariate, unweighted and weighted by arm.
+
+    Public by extraction from `_t02`, which is still its only caller here: the manuscript's Table 1
+    merges these rows with `Balance.covariates`, and a second expansion of `C.BALANCE_SET` would be a
+    second definition of what a baseline row is — `balance.levels`' own argument, one layer up.
+    """
+    df = cohort[ps.in_model]
+    w = ps.w[ps.in_model]
     header = ("covariate", "n", *(f"unweighted {C.TREATMENT_LABELS[a]}" for a in _ARMS),
               *(f"weighted {C.TREATMENT_LABELS[a]}" for a in _ARMS))
     rows = []
@@ -316,9 +334,152 @@ def _t02(run: Run) -> Table:
             rows.append((label, _count(x.notna()),
                          *(_fmt(x[_arm_mask(df, a)].mean()) for a in _ARMS),
                          *(_fmt(_weighted_mean(x[_arm_mask(df, a)], w[_arm_mask(df, a)])) for a in _ARMS)))
-    rows.append(("effective sample size", _count(run.ps.in_model), *(_DASH,) * 2,
-                 *(_fmt(run.ps.ess[a]) for a in _ARMS)))
-    return (header, *rows), (ATO_DESCRIPTION,)
+    rows.append(("effective sample size", _count(ps.in_model), *(_DASH,) * 2,
+                 *(_fmt(ps.ess[a]) for a in _ARMS)))
+    return (header, *rows)
+
+
+# --- the clinical baseline, for the manuscript -----------------------------------------------------
+#
+# `baseline_rows` above stays as it is and T02 with it: its cells are the arm MEANS, which is what
+# [§9]'s standardised mean differences summarise, so a T02 of medians would leave T05's numbers with
+# no visible operand. A manuscript Table 1 answers a different question — who were these patients —
+# and medicine reads that as `n (%)` and `median (IQR)`. Both are built from `balance.levels`, so the
+# two tables cannot come to disagree about what a row IS; `tests/test_manuscript.py` pins that.
+
+_COUNTED: Final[str] = "n (%)"
+_SPREAD: Final[str] = "median (IQR)"
+
+
+def _clinical(value: float, places: int = 1) -> str:
+    """A number as a Table 1 prints it. NOT `fmt`, deliberately.
+
+    `fmt`'s six significant figures are right for a result a reader may recompute from; a baseline
+    table is read, not recomputed, and six significant figures in an age column are noise. The
+    unrounded values remain in T02 and T05, which is where anyone checking the arithmetic goes.
+    """
+    if value is None or not np.isfinite(value):
+        return "missing"
+    return f"{round(float(value), places):g}"
+
+
+def _weighted_quantile(x: np.ndarray, w: np.ndarray, q: float) -> float:
+    """The weighted q-quantile by the inverted-CDF rule -- `C.PERCENTILE_METHOD`, this project's one.
+
+    The same definition the [§10] percentile intervals use, so the project has one answer to "which
+    value is the quantile" rather than one per table.
+    """
+    ok = np.isfinite(x) & np.isfinite(w) & (w > 0)
+    if not ok.any():
+        return float("nan")
+
+    order = np.argsort(x[ok], kind="stable")
+    values, weights = x[ok][order], w[ok][order]
+    cumulative = np.cumsum(weights)
+    index = int(np.searchsorted(cumulative, q * cumulative[-1], side="left"))
+    return float(values[min(index, len(values) - 1)])
+
+
+def _median_iqr(x: pd.Series, w: pd.Series | None) -> str:
+    values = x.to_numpy(dtype=float)
+    weights = np.ones(len(values)) if w is None else w.to_numpy(dtype=float)
+    q1, median, q3 = (_weighted_quantile(values, weights, q) for q in (0.25, 0.5, 0.75))
+    return f"{_clinical(median)} ({_clinical(q1)}\u2013{_clinical(q3)})"
+
+
+def _percent(share: float) -> str:
+    """A share as a percentage, to ONE decimal always.
+
+    Not `_clinical`, which trims a trailing zero: a percentage column reading 43.4 beside 41 has two
+    precisions in it and the eye reads the shorter one as rounder. A median column is the opposite --
+    an NIHSS of 14 is not 14.0 -- which is why the two formatters differ.
+    """
+    return _DASH if not np.isfinite(share) else f"{100 * share:.1f}%"
+
+
+def _n_pct(x: pd.Series) -> str:
+    present = x.dropna()
+    if not len(present):
+        return _DASH
+    return f"{int(present.sum())} ({_percent(present.mean())})"
+
+
+def _weighted_pct(x: pd.Series, w: pd.Series) -> str:
+    """A weighted arm has no integer count -- its size is the ESS row -- so it carries the share only."""
+    return _percent(_weighted_mean(x, w))
+
+
+def baseline_summary(cohort: pd.DataFrame, ps: propensity.Propensity) -> Rows:
+    """The [§9] balance covariates as a manuscript Table 1: `n (%)` for counts, `median (IQR)` else.
+
+    Which rows are counted is DECLARED, not inferred from the values: a covariate is counted when it
+    is a [§6] factor, whose levels are indicators, or when `C.BINARY_COLUMNS` says every value is in
+    {0, 1}. Inferring it from the sample would format a covariate by what this cohort happens to
+    contain, and the next workbook would get a different Table 1 for the same variable.
+    """
+    df = cohort[ps.in_model]
+    w = ps.w[ps.in_model]
+    header = ("covariate", "summary", "n", *(C.TREATMENT_LABELS[a] for a in _ARMS),
+              *(f"weighted {C.TREATMENT_LABELS[a]}" for a in _ARMS))
+    rows = []
+
+    for name in C.BALANCE_SET:
+        counted = name in C.CATEGORICAL or name in C.BINARY_COLUMNS
+        for label, x in balance.levels(df, name):
+            x = x.astype(float)
+            arms = [x[_arm_mask(df, a)] for a in _ARMS]
+            unweighted = [_n_pct(a) if counted else _median_iqr(a, None) for a in arms]
+            weighted = [_weighted_pct(x[m], w[m]) if counted else _median_iqr(x[m], w[m])
+                        for m in (_arm_mask(df, a) for a in _ARMS)]
+            rows.append((label, _COUNTED if counted else _SPREAD, _count(x.notna()),
+                         *unweighted, *weighted))
+
+    rows.append(("effective sample size", "ESS", _count(ps.in_model), *(_DASH,) * 2,
+                 *(_clinical(ps.ess[a]) for a in _ARMS)))
+    return (header, *rows)
+
+
+def outcome_summary(run: Run) -> Rows:
+    """Every outcome by arm, observed and overlap-weighted — `baseline_summary`'s shape, for outcomes.
+
+    The observed columns are CRUDE event rates, and [§16b] governs how they are labelled wherever they
+    appear: treatment is nearly determined by centre here, so a pooled unweighted comparison can differ
+    from the within-centre one in DIRECTION. The caller carries `DESCRIPTIVE_CRUDE`; this builds rows.
+
+    Each outcome uses its own denominator [§11] — the mRS classes the primary estimation population,
+    each binary outcome its own — so the `n` column varies down the table and is not decoration.
+
+    The weighted columns come off the estimates, not off a second weighting: the mRS classes from
+    `pmf(primary.cumulative)`, which is what T08 and Figure 3 print, and each binary outcome from
+    `BinaryEstimate.proportion`. A weighted arm has no integer count, so it carries the share alone.
+    """
+    df = run.cohort
+    header = ("outcome", "summary", "n", *(C.TREATMENT_LABELS[a] for a in _ARMS),
+              *(f"weighted {C.TREATMENT_LABELS[a]}" for a in _ARMS))
+    rows = []
+
+    primary = df.loc[run.primary.in_estimate]
+    weighted = {a: pmf(run.primary.cumulative, a) for a in _ARMS}
+    for j in C.MRS_LEVELS:
+        indicator = (primary[C.PRIMARY_OUTCOME] == j).astype(float)
+        rows.append((f"mRS {j} at 90 days", _COUNTED, _count(run.primary.in_estimate),
+                     *(_n_pct(indicator[_arm_mask(primary, a)]) for a in _ARMS),
+                     *(_percent(weighted[a][j]) for a in _ARMS)))
+
+    for family, estimates in run.secondary.by_family().items():
+        for est in estimates:
+            at = df.loc[est.in_estimate]
+            observed = at[est.outcome].astype(float)
+            rows.append((f"{C.OUTCOMES[est.outcome].label} ({family})", _COUNTED,
+                         _count(est.in_estimate),
+                         *(_n_pct(observed[_arm_mask(at, a)]) for a in _ARMS),
+                         *(_percent(est.proportion[a]) for a in _ARMS)))
+
+    return (header, *rows)
+
+
+def _t02(run: Run) -> Table:
+    return baseline_rows(run.cohort, run.ps), (ATO_DESCRIPTION,)
 
 
 def _t03(run: Run) -> Table:
@@ -364,7 +525,7 @@ def _smd_rows(rows: Sequence[balance.CovariateBalance]) -> Rows:
 def _t05(run: Run) -> Table:
     return _smd_rows(run.balance.covariates), (
         f"Balance is judged against the full [§6] confounder set at |SMD| < {_fmt(C.SMD_THRESHOLD)}; "
-        f"roles are to {run.balance.spec.label}.", _exceedance_clause(run.balance))
+        f"roles are to {run.balance.spec.label}.", exceedance_clause(run.balance))
 
 
 def _overlap_rows(centres: Sequence[balance.CentreOverlap]) -> Rows:
@@ -396,8 +557,8 @@ def _t07(run: Run) -> Table:
              *_ci(run.boot.intervals, "beta", np.exp), n)]
     rows.extend((f"RD_{k}  P(mRS<=k) difference", _fmt(run.primary.rd[k]),
                  *_ci(run.boot.intervals, f"rd_{k}"), n) for k in C.MRS_THRESHOLDS)
-    clauses = (CONSTANT_SHIFT, _direction_clause(run.primary.rd), _exceedance_clause(run.balance),
-               _interval_note(run.boot),
+    clauses = (CONSTANT_SHIFT, direction_clause(run.primary.rd), exceedance_clause(run.balance),
+               interval_note(run.boot),
                "The p-value tests the proportional-odds treatment coefficient, not a risk-difference "
                "scale quantity [§10]; RD_k carry no p-value [§8].")
     return (header, *rows), tuple(c for c in clauses if c)
@@ -405,10 +566,10 @@ def _t07(run: Run) -> Table:
 
 def _distribution_rows(cumulative: dict[int, dict[int, float]], arms: Sequence[tuple[str, int]]) -> Rows:
     header = ("mRS", *(f"P(Y=j) {label}" for label, _ in arms), *(f"P(Y<=k) {label}" for label, _ in arms))
-    pmf = {arm: _pmf(cumulative, arm) for _, arm in arms}
+    by_arm = {arm: pmf(cumulative, arm) for _, arm in arms}
     rows = []
     for j in C.MRS_LEVELS:
-        rows.append((str(j), *(_fmt(pmf[arm][j]) for _, arm in arms),
+        rows.append((str(j), *(_fmt(by_arm[arm][j]) for _, arm in arms),
                      *(_fmt(cumulative[j][arm]) if j in cumulative else "1" for _, arm in arms)))
     return (header, *rows)
 
@@ -429,10 +590,18 @@ def _t09(run: Run) -> Table:
             ("limit nearest the null (beta scale)", _fmt(ev.limit)),
             ("E-value, limit", _fmt(ev.e_limit)), ("draws behind the limit", str(ev.n_draws)))
     return (header, *rows), (ev.approximation, E_VALUE_HEURISTIC,
-                             _e_value_range(run.primary.cumulative), _exceedance_clause(run.balance))
+                             _e_value_range(run.primary.cumulative), exceedance_clause(run.balance))
 
 
-def _binary_rows(run: Run, family: str) -> Table:
+def binary_rows(run: Run, family: str) -> Table:
+    """One family of binary outcomes, with the [§13] correction and [§10] labels its rows require.
+
+    Public by extraction from `_t10`/`_t11`, still its only callers here. The manuscript's Table 3 is
+    these two families in one table, and Figure 4 plots them: both must carry the sentences this
+    builds -- that the augmented estimate is model-assisted, that safety is descriptive, and which
+    correction ran over how many hypotheses. Composed at a second site they would be a second claim
+    about what was corrected.
+    """
     corr = run.multiplicity.families[family]
     header = ("outcome", "label", "denominator", "RD", "ci lo", "ci hi", "p raw", "p adjusted",
               "odds ratio", "ci lo", "ci hi", f"augmented ({MODEL_ASSISTED})", "ci lo", "ci hi",
@@ -456,7 +625,7 @@ def _binary_rows(run: Run, family: str) -> Table:
     for key, message in run.secondary.failures.items():
         rows.append((C.OUTCOMES[key].label, "not estimable", *(_DASH,) * 13, message))
     clauses = [f"Benjamini-Hochberg within the {family} family: m declared {corr.m_declared}, "
-               f"m used {corr.m_used} [§13]. {UNCORRECTED_PRIMARY}", _interval_note(run.boot)]
+               f"m used {corr.m_used} [§13]. {UNCORRECTED_PRIMARY}", interval_note(run.boot)]
     if family == "safety":
         clauses.insert(0, f"{DESCRIPTIVE_SAFETY.upper()} ONLY: safety outcomes resting on few events "
                           "are estimation, not testing, and every row carries the label [§10, §13].")
@@ -467,11 +636,25 @@ def _binary_rows(run: Run, family: str) -> Table:
 
 
 def _t10(run: Run) -> Table:
-    return _binary_rows(run, "secondary")
+    return binary_rows(run, "secondary")
 
 
 def _t11(run: Run) -> Table:
-    return _binary_rows(run, "safety")
+    return binary_rows(run, "safety")
+
+
+def arm_clauses(arm: sensitivity.Arm) -> tuple[str, ...]:
+    """What [§13] requires beside the full-covariate sensitivity arm, here and in the manuscript.
+
+    The first sentence is COMPUTED — whether the two specifications ran on the same patients is a
+    property of the two `in_model` masks, and on a workbook missing any of the four vascular risk
+    factors it would read "no". The second is the warning that makes the comparison legible at all.
+    """
+    _, undefined = arm.balance.worst()
+    return (f"The arm differs from the primary only in specification: "
+            f"{'yes' if arm.differs_only_in_specification else 'no'}. Undefined SMD rows: "
+            f"{', '.join(undefined) if undefined else 'none'}.",
+            AGREEMENT_NOT_REASSURANCE)
 
 
 def _t12(run: Run) -> Table:
@@ -490,12 +673,7 @@ def _t12(run: Run) -> Table:
          _ci(arm.intervals, "beta")[3], "reported; no p-value [§13]"),
         ("other [§13] sensitivity rows", _DASH, *(_DASH,) * 8, "deferred (DECISION 4)"),
     ]
-    clauses = (f"The arm differs from the primary only in specification: "
-               f"{'yes' if arm.differs_only_in_specification else 'no'}. Undefined SMD rows: "
-               f"{', '.join(undefined) if undefined else 'none'}.",
-               "Agreement with the primary must not be read as reassurance about unmeasured "
-               "confounding [§13].")
-    return (header, *rows), clauses
+    return (header, *rows), arm_clauses(arm)
 
 
 def _t13(run: Run) -> Table:
@@ -600,7 +778,7 @@ def _t15(run: Run) -> Table:
                f"an interval so limited is not a range for centre heterogeneity [Stage 12 §12.5]. "
                f"Point estimate at the floor: {'yes' if run.hier.at_floor else 'no'}; "
                f"replicates at the floor: {_floor_rate(run.std_boot.draws.get('hier.sigma'))}.",
-               _interval_note(run.std_boot))
+               interval_note(run.std_boot))
     return (header, *rows), clauses
 
 
@@ -657,7 +835,7 @@ def _t18(run: Run) -> Table:
                "the policy contrast and is a diagnostic; [§14a]'s RD_k is THE eligible-population "
                "estimate and is fitted on a different population. No p-value [§14b].",
                f"Draws in which rd_5 equals rd_4 exactly: {_collapse_count(run.pol_boot.draws, '')}.",
-               _interval_note(run.pol_boot)]
+               interval_note(run.pol_boot)]
     if pol.share_eligible == 1.0:
         clauses.append(policy.NO_CONTRAINDICATED)
     return (header, *rows), tuple(clauses)
@@ -759,7 +937,7 @@ _TABLES: Final[dict[str, Callable[[Run], Table]]] = {
 def _bars(ax, rows: Sequence[tuple[str, Sequence[float]]], title: str) -> None:
     left = np.zeros(len(rows))
     for j in C.MRS_LEVELS:
-        values = np.array([pmf[j] for _, pmf in rows])
+        values = np.array([shares[j] for _, shares in rows])
         ax.barh(range(len(rows)), values, left=left, label=f"mRS {j}", color=plt.cm.viridis(j / 6))
         left += values
     ax.set_yticks(range(len(rows)))
@@ -771,7 +949,7 @@ def _bars(ax, rows: Sequence[tuple[str, Sequence[float]]], title: str) -> None:
 
 def _f01(run: Run):
     fig, ax = plt.subplots(figsize=(8, 2.5))
-    _bars(ax, [(C.TREATMENT_LABELS[a], _pmf(run.primary.cumulative, a)) for a in _ARMS],
+    _bars(ax, [(C.TREATMENT_LABELS[a], pmf(run.primary.cumulative, a)) for a in _ARMS],
           "Weighted mRS distribution by arm, [§7] population")
     ax.legend(ncol=7, fontsize=7, loc="upper center", bbox_to_anchor=(0.5, -0.35))
     return fig, "Weighted per-category mRS distribution; the six RD_k are cumulative differences."
@@ -842,7 +1020,7 @@ def _f04(run: Run):
 
 def _f05(run: Run):
     fig, ax = plt.subplots(figsize=(8, 4))
-    rows = [(f"primary [§7] {C.TREATMENT_LABELS[a]}", _pmf(run.primary.cumulative, a)) for a in _ARMS]
+    rows = [(f"primary [§7] {C.TREATMENT_LABELS[a]}", pmf(run.primary.cumulative, a)) for a in _ARMS]
     rows += [(f"[§14a] {C.TREATMENT_LABELS[a]}", [run.std.distribution[a][j] for j in C.MRS_LEVELS]) for a in _ARMS]
     rows += [(f"[§14b] {regime}", [run.pol.distribution[regime][j] for j in C.MRS_LEVELS])
              for regime in run.pol.distribution]
@@ -862,7 +1040,7 @@ def _render_md(rows: Rows, clauses: Sequence[str]) -> str:
     return "\n".join([_md_table(rows), "", *(f"{c}\n" for c in clauses)])
 
 
-def _render_csv(rows: Rows, clauses: Sequence[str]) -> str:
+def render_csv(rows: Rows, clauses: Sequence[str]) -> str:
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
     writer.writerows(rows)
@@ -897,7 +1075,7 @@ def write(run: Run, out: Path = C.OUT) -> Manifest:
         if oid in _TABLES:
             rows, clauses = _TABLES[oid](run)
             put(f"tables/{oid}_{slug}.md", _render_md(rows, clauses).encode("utf-8"))
-            put(f"tables/{oid}_{slug}.csv", _render_csv(rows, clauses).encode("utf-8"))
+            put(f"tables/{oid}_{slug}.csv", render_csv(rows, clauses).encode("utf-8"))
             continue
         fig, caption = _FIGURES[oid](run)
         put(f"figures/{oid}_{slug}.svg", _render_svg(fig, caption))

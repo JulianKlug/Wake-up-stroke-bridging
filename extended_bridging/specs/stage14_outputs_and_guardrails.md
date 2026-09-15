@@ -8,6 +8,17 @@ Stage 13 §14 are written as handovers to this document; both are answered in §
 **Precondition.** Written against the landed Stages 1–13. This stage reads every result object they
 return and computes no estimate, interval or p-value of its own. It fits nothing.
 
+**Amendment, 2026-09-11 — eight names in this document are now public, and three are new.** The
+manuscript exhibits in `figures_and_tables/` are a second reporting surface, and a [§16] sentence they
+compose for themselves is a second definition of what the report says. So `_direction_clause`,
+`_exceedance_clause`, `_interval_note`, `_pmf` and `_render_csv` lost their underscore, `_t02`'s and `_binary_rows`'
+bodies were extracted as `baseline_rows` and `binary_rows`, `_t12`'s clause pair as
+`arm_clauses` beside a new `AGREEMENT_NOT_REASSURANCE` constant, and §12.1's pinned public surface
+grew from three names to eleven.
+Nothing else moved: the row builders, the figure builders and `_render_md` stay private, `OUTPUT_IDS`
+is unchanged, and `report.py` still knows nothing about the manuscript layer. Read every `_name` below
+as its promoted spelling where the two differ.
+
 **Status.** Written 2026-08-29; implemented the same day, and §16 records what was measured. Where
 the implementation departed from the first draft the section says so in a **Landed** note. No DECISION is taken:
 [§16]'s four amendments (a–d) already prescribe every statement this stage prints. DECISION 10's

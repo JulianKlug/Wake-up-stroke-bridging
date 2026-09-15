@@ -14,3 +14,10 @@ data/
 .venv/
 __pycache__/
 .pytest_cache/
+
+# The manuscript's own words. The estimates, the exhibits and the code that makes them are this
+# repository's; the paper's text is the authors' and is not version-controlled here. The notebook
+# that writes it sits beside the exhibit notebooks and runs the same way — it is simply untracked,
+# as is its output, which lands in the already-ignored out/.
+extended_bridging/figures_and_tables/manuscript_text.ipynb
+extended_bridging/figures_and_tables/supplement_tables.ipynb

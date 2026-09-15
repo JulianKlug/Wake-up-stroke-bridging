@@ -1123,9 +1123,16 @@ def test_NO_SHIPPED_MODULE_IMPORTS_THE_ORACLE(forbidden):
     """Stage 6 §12.7's scan, EXTENDED rather than duplicated. `pyproject.toml` declares statsmodels
     *"retained for unpenalised cross-checks in tests, not for any reported estimate"* — and an
     adjusted p-value IS a reported estimate, so importing `multipletests` into a shipped module to
-    produce one is the thing that policy exists to forbid (§6.4)."""
+    produce one is the thing that policy exists to forbid (§6.4).
+
+    The walk is RECURSIVE rather than `glob("*.py")`, because the shipped modules stopped being flat
+    when `figures_and_tables/` landed: a non-recursive scan would have exempted the manuscript layer
+    from the one invariant it is least obviously subject to and most easily breaks, since a plotting
+    module reaching for `scipy` to smooth something looks harmless at the call site."""
     root = Path(config.__file__).resolve().parent
-    for path in sorted(root.glob("*.py")):
+    shipped = [p for p in sorted(root.rglob("*.py"))
+               if not {"tests", ".venv", "__pycache__"} & set(p.relative_to(root).parts)]
+    for path in shipped:
         imported: set[str] = set()
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Import):

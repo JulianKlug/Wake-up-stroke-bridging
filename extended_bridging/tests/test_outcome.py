@@ -1612,6 +1612,12 @@ def test_only_the_TWO_STAGES_THAT_ESTIMATE_ON_IT_name_PRIMARY_OUTCOME():
     rather than as a membership test, so a FIFTH module naming it is still a failure. Stage 13
     widened it once more with `policy.py`, which fits [§14b]'s pooled model on the primary outcome.
 
+    Stage 14 widened it once more with `report.py`, and that entry is different in kind from the other
+    three: it does not ESTIMATE on the outcome, it COUNTS it. `outcome_summary` reports how many
+    patients are at each mRS class as observed, which is the one thing a result object cannot carry --
+    `Primary.cumulative` is weighted. The entry is safe for the reason a neighbouring test asserts
+    separately: `report.py` imports no fitter, so naming the column cannot become estimating on it.
+
     **The load-bearing half is unchanged and is the second assertion**: `model.py` must not name it.
     That module is outcome-agnostic by Stage 6 §0.1 — it takes a design and a response and does not
     know what either means — and Stage 12 added two estimators to it without changing that. An
@@ -1620,7 +1626,7 @@ def test_only_the_TWO_STAGES_THAT_ESTIMATE_ON_IT_name_PRIMARY_OUTCOME():
     shipped = sorted(p for p in MODULE_DIR.glob("*.py"))
     naming = [p.name for p in shipped
               if "PRIMARY_OUTCOME" in p.read_text(encoding="utf-8") and p.name != "config.py"]
-    assert naming == ["outcome.py", "policy.py", "sensitivity.py", "standardise.py"]
+    assert naming == ["outcome.py", "policy.py", "report.py", "sensitivity.py", "standardise.py"]
     assert "PRIMARY_OUTCOME" not in (MODULE_DIR / "model.py").read_text(encoding="utf-8")
     assert "PRIMARY_OUTCOME" not in (MODULE_DIR / "bootstrap.py").read_text(encoding="utf-8")
 

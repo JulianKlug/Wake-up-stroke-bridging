@@ -949,6 +949,12 @@ E_VALUE_PREVALENCE_FLOOR: Final[float] = 0.15
 # The one list of outputs. `report.write` iterates it, so an id not here is never written and an id
 # here is written exactly once; `CHECKLIST` may only name ids from it. T = table (.md and .csv),
 # F = figure (.svg). Slugs are file names, never titles.
+#
+# Scope, since `figures_and_tables/` landed: this is the one list of ids `report.write` produces under
+# `OUT/tables` and `OUT/figures`, and it stays that. The manuscript exhibits are a SECOND family with
+# its own registry in `figures_and_tables/manuscript.py`, written to `OUT/manuscript`, and no id of
+# theirs may appear here — `report.write` would raise KeyError on it and [§16]'s checklist would claim
+# a STROBE item was discharged by a file this stage never wrote.
 OUTPUT_IDS: Final[dict[str, str]] = {
     "T01": "cohort_flow", "T02": "baseline_by_arm", "T03": "crude_event_rates",
     "T04": "onset_to_groin_by_arm", "T05": "balance_smd", "T06": "overlap_by_centre",

@@ -39,7 +39,8 @@ dependencies = [
 [dependency-groups]
 dev = ["pytest>=8.0"]
 
-# The kernel the three notebooks in `notebooks/` run on, and nothing else. A group rather
+# The kernel the notebooks run on — three in `notebooks/`, eight in `figures_and_tables/` —
+# and nothing else. A group rather
 # than a base dependency because no shipped module imports it, so a plain `uv sync` stays
 # an analysis environment; `uv sync --group notebook` adds the kernel to the SAME `.venv`,
 # which is what makes the notebooks see the locked numpy and pandas.
@@ -117,4 +118,7 @@ testpaths = ["tests"]
 # `from test_data import run` — but NOT the shipped modules one level up. `pythonpath` is
 # relative to rootdir, so this puts the project root on the path and `import config`
 # resolves. Without it every test module fails at collection with ModuleNotFoundError.
-pythonpath = ["."]
+# `figures_and_tables` is on it for the same reason one level down: `tests/test_manuscript.py`
+# imports `manuscript`, and the manuscript layer is deliberately NOT flat at the root — it is a
+# reader of the shipped modules, not one of them.
+pythonpath = [".", "figures_and_tables"]

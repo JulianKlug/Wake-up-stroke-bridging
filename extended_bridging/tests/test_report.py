@@ -59,10 +59,27 @@ def figure(out: Path, oid: str) -> str:
 
 # --- 12.1  surface ---------------------------------------------------------------------------------
 
-def test_the_public_surface_is_THREE_NAMES_and_TWO_dataclasses_in_source_order():
+def test_the_public_surface_is_THIRTEEN_NAMES_and_TWO_dataclasses_in_source_order():
+    """`run`, `write` and `main` drive the stage; the other five are shared with the manuscript.
+
+    The five were private until `figures_and_tables/` needed them, and they are public for
+    `balance.levels`'s reason [Stage 7 §5.5]: a manuscript exhibit carrying a [§16] sentence it
+    composed itself is a second definition of what the report says, and the failure would be a
+    sentence that stops tracking the run. `baseline_rows` and `binary_rows` are promoted by
+    EXTRACTION and `_t02`, `_t10` and `_t11` are still their only callers here, so neither can rot
+    into a manuscript-only branch. `baseline_summary` and `outcome_summary` are the two names here this stage
+    does not itself call: T02 keeps the arm MEANS its [§9] standardised mean differences summarise, and the clinical
+    `n (%)` / `median (IQR)` presentation belongs to the manuscript. Both walk `C.BALANCE_SET` through
+    `balance.levels`, and `tests/test_manuscript.py` pins that they produce the same rows. Nothing else was
+    promoted — the row builders, the figure
+    builders and the renderers stay private, so the manuscript cannot reach past the statements.
+    """
     tree = ast.parse(SOURCE)
     functions = [n.name for n in tree.body if isinstance(n, ast.FunctionDef)]
-    assert [n for n in functions if not n.startswith("_")] == ["run", "write", "main"]
+    assert [n for n in functions if not n.startswith("_")] == [
+        "run", "direction_clause", "exceedance_clause", "pmf", "interval_note", "baseline_rows",
+        "baseline_summary", "outcome_summary", "binary_rows", "arm_clauses", "render_csv",
+        "write", "main"]
     assert [n.name for n in tree.body if isinstance(n, ast.ClassDef)] == ["Run", "Manifest"]
 
 
@@ -103,9 +120,9 @@ def test_the_direction_clause_is_ABSENT_when_every_RD_k_shares_a_sign_and_PRESEN
 
 
 def test_the_direction_clause_is_computed_from_rd_and_zero_is_its_own_sign():
-    assert report._direction_clause({0: 0.1, 1: 0.2}) == ""
-    assert report._direction_clause({0: 0.1, 1: -0.2}) == report.DIRECTION
-    assert report._direction_clause({0: 0.0, 1: 0.2}) == report.DIRECTION
+    assert report.direction_clause({0: 0.1, 1: 0.2}) == ""
+    assert report.direction_clause({0: 0.1, 1: -0.2}) == report.DIRECTION
+    assert report.direction_clause({0: 0.0, 1: 0.2}) == report.DIRECTION
 
 
 # --- 12.4  the thinning clause tracks the counters ------------------------------------------------
